@@ -320,6 +320,10 @@ export function createAppStore(api: TianApi) {
       safe(async () => {
         await api.doneTask(id, done);
       }),
+    memoryRevise: (seq: number, text: string, reason: string) =>
+      safe(() => api.memoryRevise(state.activeScopeId, seq, text, reason)),
+    memoryForget: (seq: number, reason: string) =>
+      safe(() => api.memoryForget(state.activeScopeId, seq, reason)),
     refreshRuns: () =>
       load(
         'runs',

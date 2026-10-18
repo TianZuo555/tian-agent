@@ -9,7 +9,9 @@ import {
   Layers,
   ListTodo,
   Loader2,
+  Pencil,
   RefreshCw,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs';
@@ -17,12 +19,23 @@ import { FileDiff } from '@pierre/diffs/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
 import { tian } from '../api';
 import { CountPulse } from './motion-primitives';
-import type { RunInfo } from '@/shared/types';
+import type { MemoryItem, RunInfo } from '@/shared/types';
 import { actions, useStore } from '../store';
 
 type PaneTab = 'tasks' | 'runs' | 'memory' | 'inbox';
@@ -419,35 +432,283 @@ function RunsPanel() {
 
 function MemoryPanel() {
   const memory = useStore((s) => s.memory);
+  const [showHistory, setShowHistory] = useState(false);
+  const [revising, setRevising] = useState<MemoryItem | null>(null);
+  const [forgetting, setForgetting] = useState<MemoryItem | null>(null);
+
+  const items = (memory?.items ?? []).filter(
+    (item) => showHistory || item.status === 'active',
+  );
+  const activeCount = (memory?.items ?? []).filter(
+    (item) => item.status === 'active',
+  ).length;
+
   return (
-    <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
-      <div className="p-2">
-        {memory && memory.pendingMerges > 0 && (
-          <Badge variant="warning" size="sm" className="mb-2 font-mono">
-            {memory.pendingMerges} merges pending
-          </Badge>
-        )}
-        {!memory || memory.lines.length === 0 ? (
-          <p className="px-1 py-6 text-center text-[11px] text-content-disabled">
-            Empty memory
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {memory.lines.map((l, i) => (
-              <div
-                key={`${i}-${l.slice(0, 12)}`}
-                className="flex gap-2 rounded-md px-2 py-1 hover:bg-secondary"
-              >
-                <span className="shrink-0 font-mono text-[10px] text-content-disabled tabular-nums">
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <span className="min-w-0 text-[12px] leading-snug">{l}</span>
-              </div>
-            ))}
-          </div>
-        )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-border border-b px-2 py-1">
+        <span className="font-mono text-[10px] text-content-disabled">
+          {activeCount} active
+          {memory && memory.pendingMerges > 0
+            ? ` · ${memory.pendingMerges} merges pending`
+            : ''}
+        </span>
+        <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-content-secondary">
+          <Checkbox
+            checked={showHistory}
+            onCheckedChange={(checked) => setShowHistory(checked === true)}
+            aria-label="Show superseded and deleted memories"
+          />
+          History
+        </label>
       </div>
-    </ScrollArea>
+      <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
+        <div className="flex flex-col gap-px p-1.5">
+          {items.length === 0 && (
+            <p className="px-2 py-6 text-center text-[11px] text-content-disabled">
+              {showHistory ? 'No memories at all' : 'No active memories yet'}
+            </p>
+          )}
+          {items.map((item) => (
+            <MemoryRow
+              key={item.seq}
+              item={item}
+              onRevise={() => setRevising(item)}
+              onForget={() => setForgetting(item)}
+            />
+          ))}
+        </div>
+      </ScrollArea>
+      <ReviseMemoryDialog item={revising} onClose={() => setRevising(null)} />
+      <ForgetMessageDialog
+        item={forgetting}
+        onClose={() => setForgetting(null)}
+      />
+    </div>
+  );
+}
+
+const trustVariant: Record<string, 'success' | 'secondary' | 'warning'> = {
+  user_confirmed: 'success',
+  agent_inferred: 'secondary',
+  third_party: 'warning',
+};
+
+function MemoryRow({
+  item,
+  onRevise,
+  onForget,
+}: {
+  item: MemoryItem;
+  onRevise: () => void;
+  onForget: () => void;
+}) {
+  const historical = item.status !== 'active';
+  return (
+    <div className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-secondary">
+      <span
+        aria-label={`Memory #${item.seq}`}
+        className={`mt-px shrink-0 font-mono text-[10px] tabular-nums ${
+          historical ? 'text-content-disabled' : 'text-content-secondary'
+        }`}
+      >
+        #{item.seq}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span
+          className={`block text-[12px] leading-snug ${
+            historical
+              ? 'text-content-disabled line-through'
+              : 'text-foreground'
+          }`}
+        >
+          {item.content}
+        </span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-1">
+          <Badge variant="outline" size="sm" className="font-mono">
+            {item.kind}
+          </Badge>
+          <Badge
+            variant={trustVariant[item.trustLevel] ?? 'secondary'}
+            size="sm"
+            className="font-mono"
+          >
+            {item.trustLevel}·{item.sourceType}
+          </Badge>
+          {historical && (
+            <Badge
+              variant={item.status === 'deleted' ? 'destructive' : 'secondary'}
+              size="sm"
+              className="font-mono"
+            >
+              {item.status}
+            </Badge>
+          )}
+          <span className="font-mono text-[10px] text-content-disabled">
+            {item.createdAt.slice(0, 10)}
+          </span>
+        </span>
+      </span>
+      {!historical && (
+        <span className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Revise memory #${item.seq}`}
+            onClick={onRevise}
+          >
+            <Pencil className="size-3" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="text-destructive-foreground"
+            aria-label={`Forget memory #${item.seq}`}
+            onClick={onForget}
+          >
+            <Trash2 className="size-3" />
+          </Button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ReviseMemoryDialog({
+  item,
+  onClose,
+}: {
+  item: MemoryItem | null;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (item) {
+      setText(item.content);
+      setReason('');
+    }
+  }, [item]);
+
+  const submit = async () => {
+    if (!item || !text.trim() || !reason.trim() || busy) return;
+    setBusy(true);
+    try {
+      await actions.memoryRevise(item.seq, text.trim(), reason.trim());
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={item !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogPopup className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Revise memory #{item?.seq}</DialogTitle>
+          <DialogDescription>
+            The old memory is kept as history but leaves Core Memory.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="grid gap-3">
+          <Field>
+            <FieldLabel>Memory</FieldLabel>
+            <Input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              maxLength={280}
+              aria-label="Revised memory text"
+            />
+          </Field>
+          <Field>
+            <FieldLabel>Reason</FieldLabel>
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Why is this being revised?"
+              aria-label="Revision reason"
+            />
+          </Field>
+        </DialogPanel>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" size="sm" />}>
+            Cancel
+          </DialogClose>
+          <Button
+            size="sm"
+            loading={busy}
+            disabled={!text.trim() || !reason.trim()}
+            onClick={() => void submit()}
+          >
+            Revise
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function ForgetMessageDialog({
+  item,
+  onClose,
+}: {
+  item: MemoryItem | null;
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (item) setReason('');
+  }, [item]);
+
+  const submit = async () => {
+    if (!item || !reason.trim() || busy) return;
+    setBusy(true);
+    try {
+      await actions.memoryForget(item.seq, reason.trim());
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={item !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogPopup className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Forget memory #{item?.seq}</DialogTitle>
+          <DialogDescription>
+            It is marked deleted and leaves Core Memory; the record is kept in
+            the version history.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="grid gap-3">
+          <Field>
+            <FieldLabel>Reason</FieldLabel>
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Why should this be forgotten?"
+              aria-label="Forget reason"
+            />
+          </Field>
+        </DialogPanel>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" size="sm" />}>
+            Cancel
+          </DialogClose>
+          <Button
+            size="sm"
+            variant="destructive"
+            loading={busy}
+            disabled={!reason.trim()}
+            onClick={() => void submit()}
+          >
+            Forget
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
@@ -498,10 +759,11 @@ export function ContextPane() {
   const [tab, setTab] = useState<PaneTab>('tasks');
 
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
+  const memory = useStore((s) => s.memory);
   const counts: Record<PaneTab, number> = {
     tasks: tasks.filter((t) => t.status === 'open').length,
     runs: runs.filter(isLive).length,
-    memory: 0,
+    memory: (memory?.items ?? []).filter((m) => m.status === 'active').length,
     inbox: inbox.filter((m) => !m.read).length,
   };
 
