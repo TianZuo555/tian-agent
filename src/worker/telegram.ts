@@ -434,7 +434,14 @@ export class TelegramAdapter {
   private statusCommand(chatId: string): string {
     const scopeId = this.chatScope(chatId) ?? GLOBAL_SCOPE;
     const lines = [`当前 scope：${this.scopeLabel(scopeId)}`];
-    const tasks = this.host.db.listTasks(scopeId, 'open');
+    // Tasks replaced the old open/done to-dos; show everything still actionable.
+    const tasks = this.host.db
+      .listTasks(scopeId)
+      .filter((task) =>
+        ['pending', 'running', 'waiting_approval', 'blocked'].includes(
+          task.status,
+        ),
+      );
     lines.push(
       tasks.length ? `待办任务 ${tasks.length} 项：` : '没有待办任务。',
     );
