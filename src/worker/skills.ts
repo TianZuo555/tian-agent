@@ -74,17 +74,17 @@ export function skillMatches(name: string, taskText: string): boolean {
   const haystack = normalize(taskText);
   const needle = normalize(name);
   if (!haystack || !needle) return false;
-  if (haystack.includes(needle)) return true;
   const tokens = needle.split(' ').filter((token) => token.length >= 2);
   if (tokens.length === 0) return false;
-  return tokens.every((token) =>
+  const present = (token: string) =>
     hasCJK(token)
       ? haystack.includes(token)
       : new RegExp(
           `(^|[^\\p{L}\\p{N}])${escapeRegex(token)}([^\\p{L}\\p{N}]|$)`,
           'u',
-        ).test(haystack),
-  );
+        ).test(haystack);
+  if (tokens.length === 1) return present(tokens[0]);
+  return haystack.includes(needle) || tokens.every(present);
 }
 
 interface StepSection {
