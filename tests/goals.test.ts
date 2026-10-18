@@ -15,7 +15,7 @@ import {
 import { goalsTools } from '../src/worker/tools-goals';
 
 /** Call a chief goal tool the way the harness would. */
-function toolRunner(f: Fixture) {
+function toolRunner(f: Fixture, completed: string[] = []) {
   let call = 0;
   const tools = new Map(
     goalsTools({
@@ -25,6 +25,7 @@ function toolRunner(f: Fixture) {
       resolveScope: () => 'global',
       emitUpdates: () => {},
       emitNotice: () => {},
+      onTaskCompleted: (scopeId) => completed.push(scopeId),
     }).map((tool) => [tool.name, tool]),
   );
   return async (
@@ -570,8 +571,9 @@ test('notify_user dedupes inside the window and replays safely', async (t) => {
 
 test('the task tools move a woken task to a recorded outcome', async (t) => {
   const f = fixture(t);
+  const completed: string[] = [];
   const goal = f.goals.insertGoal({ scopeId: 'global', objective: 'Check CI' });
-  const run = toolRunner(f);
+  const run = toolRunner(f, completed);
   dailySchedule(f, goal.id);
   const [task] = await f.scheduler.fireDue();
 
@@ -589,6 +591,8 @@ test('the task tools move a woken task to a recorded outcome', async (t) => {
   assert.equal(done.status, 'completed');
   assert.equal(done.outcome, 'no_change');
   assert.equal(done.summary, 'still green');
+  // Completing a task fires the memory-worker extraction trigger (F03).
+  assert.deepEqual(completed, ['global']);
 
   const failingId = f.db.addTask('global', 'second', null);
   assert.match(
