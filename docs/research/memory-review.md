@@ -1,6 +1,6 @@
 # 记忆系统调研：OpenClaw、Hermes 与 Tian Agent
 
-调研日期：2026-10-18。本文是研究与改进建议，不替代 ADR 0004，也不表示已经决定或完成架构迁移。
+调研日期：2026-10-18。本文是研究与改进建议，不替代 [D4](../decisions.md)，也不表示已经决定或完成架构迁移。
 
 ## 结论
 
@@ -167,7 +167,7 @@ Pi 原始 transcript 仍然存在，不能称为原始数据丢失。建议搜�
 - **confidence**：当前 Memory 路径存储该字段，但未看到赋值工具、选择、检索或决策消费它。没有校准与用途时可删除，保留离散 trustLevel。
 - **goalId**：可写入，但 Core 与 recall 没有按 Goal 优先选择。要么实现用途，要么先从 Agent 工具去掉参数，避免制造不存在的能力；不应因此删掉独立的 Goal 系统。
 - **旧文件迁移**：`migrateLegacy()` 可以在确认真实数据迁移完成后移到一次性升级脚本。此次没有检查用户数据库，不能直接断言可删。
-- **文档漂移**：PRD 仍写 OptMem 文件存储、96 行、正则 recall、无修改删除和 History 缺失。应同步事实状态，避免再次排期已完成工作；提案涉及的树替换需另行更新 ADR，不能悄悄改写既有决定。
+- **文档漂移**：PRD 仍写 OptMem 文件存储、96 行、正则 recall、无修改删除和 History 缺失。应同步事实状态，避免再次排期已完成工作；提案涉及的树替换需另行更新设计决策，不能悄悄改写既有决定。
 
 ## 建议的目标结构
 
@@ -231,5 +231,5 @@ Notes（Markdown 长文）──────────────────
 - [Hermes Persistent Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory)
 - [Hermes MemoryStore 源码](https://github.com/NousResearch/hermes-agent/blob/9e01b44dd23978f9ff40b7837467f3a9f1582130/tools/memory_tool_store.py)
 - [Hermes Session Search 源码](https://github.com/NousResearch/hermes-agent/blob/9e01b44dd23978f9ff40b7837467f3a9f1582130/tools/session_search_tool.py)
-- [本项目 ADR 0004](../adr/0004-sqlite-memory-with-summary-tree.md)
-- [本项目 ADR 0006](../adr/0006-history-derived-index-and-events.md)
+- [本项目 D4](../decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)
+- [本项目 D6](../decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)

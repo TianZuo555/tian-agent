@@ -4,7 +4,7 @@
 状态：Draft
 产品类型：Always-on Personal Agent
 平台：macOS 优先；Linux / Windows 后续
-技术方向：TypeScript 常驻服务（launchd）+ Pi Durable + Electron/React 客户端 + SQLite（见 [ADR 0003](adr/0003-keep-typescript-service.md)）
+技术方向：TypeScript 常驻服务（launchd）+ Pi Durable + Electron/React 客户端 + SQLite（见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)）
 
 术语以 [CONTEXT.md](../CONTEXT.md) 为准。每项需求标注现状：**【已有】** 已实现并有测试覆盖；**【部分】** 有基础但不满足需求；**【缺失】** 尚未开始。标注"建议"的是待确认的设计；标注"待验证"的是尚未在代码中确认的假设。
 
@@ -49,14 +49,14 @@
 
 ## 2. 核心对象
 
-| 对象                    | 定义                                | 生命周期   | 代码现状                                                                                     |
-| ----------------------- | ----------------------------------- | ---------- | -------------------------------------------------------------------------------------------- |
-| Goal                    | 用户希望长期达成或维持的结果        | 数天至数年 | 【缺失】                                                                                     |
-| Task                    | 为 Goal（或独立）完成的一件具体工作 | 分钟至数天 | 【部分】`tasks` 表只有 `open/done` 待办（[ADR 0005](adr/0005-task-evolves-run-executes.md)） |
-| Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                              |
-| Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                 |
-| Memory                  | 跨会话保留的事实与经验              | 长期       | 【部分】OptMem 文件，无来源/版本（[ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)）  |
-| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批（M5）                                                    |
+| 对象                    | 定义                                | 生命周期   | 代码现状                                                                                                               |
+| ----------------------- | ----------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Goal                    | 用户希望长期达成或维持的结果        | 数天至数年 | 【已有】`goals` + Goal 专属会话 + 调度                                                                                 |
+| Task                    | 为 Goal（或独立）完成的一件具体工作 | 分钟至数天 | 【已有】状态机、`owner`、`trigger`、`dedupe_key`（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)） |
+| Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                                                        |
+| Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                                           |
+| Memory                  | 跨会话保留的事实与经验              | 长期       | 【已有】SQLite、来源与版本、摘要树（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)）         |
+| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批；语义匹配与模型提取待做                                                            |
 
 约束：
 
@@ -73,10 +73,10 @@
 
 - **Host-owned State**：只有常驻服务写数据库；前端不是权威来源。【已有】
 - **Runtime-agnostic**：Pi 是默认执行器，通过 `WorkerRuntime` 接口接入。【已有】
-- **Event-driven**：状态变化写入 Event，并据此驱动通知与后台处理。【部分】现有通知 outbox；无统一 Event 表
+- **Event-driven**：状态变化写入 Event，并据此驱动通知与后台处理。【已有】`events` 表 + 通知 outbox（[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)）
 - **Local-first**：数据默认在 `~/Library/Application Support/Tian Agent/`。【已有】
-- **Recoverable**：重启、失败恢复、升级回滚。【已有】（Run、Review、升级）；Memory 回滚【缺失】
-- **Auditable**：关键决策与外部操作保留来源。【部分】幂等记录有；审计日志无
+- **Recoverable**：重启、失败恢复、升级回滚。【已有】Run、Review、升级；Memory 版本可查但不提供回滚操作
+- **Auditable**：关键决策与外部操作保留来源。【已有】`events` 审计、Memory 版本记录、幂等操作记录
 
 ### 3.2 进程
 
@@ -88,18 +88,18 @@
 
 ### 3.3 PRD 模块 ↔ 代码
 
-| PRD 模块              | 现有实现                                                     | 增量                                   |
-| --------------------- | ------------------------------------------------------------ | -------------------------------------- |
-| Agent Gateway         | `service/server.ts`、`openSession` 渠道绑定                  | Telegram adapter（M3）                 |
-| Agent Orchestrator    | `worker/service.ts`、`worker/runs.ts`                        | Task 生命周期、Goal Conversation（M2） |
-| Agent Runtime Adapter | `worker/agents.ts`                                           | —                                      |
-| Memory Service        | `worker/memory.ts`（文件）                                   | SQLite Memory、History 索引（M1）      |
-| Memory Worker         | `worker/memory-worker.ts`（候选提取，确定性启发式）          | 接入模型提取器待问题 6                 |
-| Goal Store            | `worker/db.ts` 的 `tasks`                                    | `goals`、Task 演进（M2）               |
-| Scheduler             | 60 秒 Inbox 扫描定时器                                       | `schedules` + 调度器（M2）             |
-| Skill Registry        | `worker/skills.ts`                                           | 按任务语义匹配、模型提取器（M5+）      |
-| Approval Service      | 仅 UI 手动 Land/Ship                                         | `approvals` + 受控操作（M3）           |
-| Frontend              | React 三栏 shell（[ADR 0001](adr/0001-three-pane-shell.md)） | Goal 管理、Task Board、审批（M2–M3）   |
+| PRD 模块              | 现有实现                                                                | 增量                                 |
+| --------------------- | ----------------------------------------------------------------------- | ------------------------------------ |
+| Agent Gateway         | `service/server.ts`、`openSession` 渠道绑定、Telegram 适配器            | 审批按钮（M3）                       |
+| Agent Orchestrator    | `worker/service.ts`、`worker/runs.ts`                                   | —                                    |
+| Agent Runtime Adapter | `worker/agents.ts`                                                      | —                                    |
+| Memory Service        | `worker/memory.ts`（SQLite、来源、版本、摘要树）                        | 向量检索（M4）                       |
+| Memory Worker         | `worker/memory-worker.ts`（候选提取，确定性启发式）                     | 接入模型提取器待问题 6               |
+| Goal Store            | `worker/goals.ts`、`worker/db.ts` 的 `tasks`                            | —                                    |
+| Scheduler             | `worker/scheduler.ts`（cron、单事务触发、每日预算）                     | —                                    |
+| Skill Registry        | `worker/skills.ts`                                                      | 按任务语义匹配、模型提取器（M5+）    |
+| Approval Service      | 仅 UI 手动 Land/Ship                                                    | `approvals` + 受控操作（M3）         |
+| Frontend              | React 三栏 shell（[D1](decisions.md#d1--三栏-shell导航--对话--上下文)） | Goal 管理、Task Board、审批（M2–M3） |
 
 ---
 
@@ -118,7 +118,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.2 F01 — Core Memory　P0　【部分】
 
-现状：每次请求注入 Global 与当前 Project 的 `wake()` 视图（最多 96 行）；Chief 是唯一写入者；`note`（≤280 字节）、`nap`（写摘要）、`recall`（正则）、`zoom`。无修改、删除、纠正；无 Goal 级记忆；预算按行数。
+现状：每次请求注入 Global 与当前 Project 的 `wake()` 视图，按 Token 预算（默认每 scope 1500）截断；Chief 用 `remember` / `revise` / `forget` / `recall`（FTS）/ `nap` / `zoom` 读写，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
 
 需求：
 
@@ -127,7 +127,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 - Token 预算可配置。建议默认：Global 1,500 tokens + Project 1,500 tokens；超出时由摘要树压缩，失效节点下探。
 - 同一 Conversation 内使用稳定的记忆快照，避免 Prompt 前缀缓存失效。
 
-设计要点（[ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)）：
+设计要点（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)）：
 
 - 工具改名并补齐：`remember`（替代 `note`，避免与 Markdown Note 混淆）、`revise`（取代）、`forget`（标记删除）、`recall`（改为 FTS）、`nap` / `zoom` 保留。
 - 快照：Core Memory 在 Conversation 内按"记忆版本号"缓存，只在版本变化后的下一次 Conversation 开始或压缩完成时刷新；会话中的新写入通过工具返回值告知模型。
@@ -139,9 +139,9 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 - 项目私有 Memory 不出现在其他项目的 Conversation 中。
 - 用户纠正后，新 Conversation 使用修订后的事实，被取代的内容不再出现在 Core Memory。
 
-### 4.3 F02 — History 与检索　P0　【缺失】
+### 4.3 F02 — History 与检索　P0　【已有】
 
-现状：Chief 只能 `recall` 记忆日志；已结束会话的内容无法检索。
+现状：`history_entries` + `history_fts` + `history_cursors` 按游标增量索引 Pi transcript 与 `events`；Chief 用 `search_history` / `read_history` 检索并展开上下文，结果带 `conv:<id>#<entry>` / `event:<id>` 引用。
 
 需求：可按时间、Scope、Conversation、关键词检索以下内容，并定位到原始记录：
 
@@ -175,9 +175,9 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。现有摘要树压缩是 Consolidate 的雏形，可由 Memory Worker 在后台接管 `nap`，不再占用 Chief 的对话回合。
 
-### 4.6 F05 — Provenance　P0　【缺失】
+### 4.6 F05 — Provenance　P0　【已有】
 
-每条 Memory 字段：
+每条 Memory 字段（`memories` 表；来源、可信度、版本与取代关系均已实现）：
 
 | 字段                        | 说明                                                                                |
 | --------------------------- | ----------------------------------------------------------------------------------- |
@@ -198,22 +198,22 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ## 5. 目标与任务（Goal Engine）
 
-### 5.1 F06 — Persistent Goals　P0　【缺失】
+### 5.1 F06 — Persistent Goals　P0　【已有】
 
-Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / Trigger、Current State、Next Action、Last Execution，以及 Scope、预算。
+Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / Trigger、Current State、Next Action、Last Execution，以及 Scope、每日预算，存于 `goals` 表。
 
-状态：`active / paused / blocked / completed / cancelled`。用户可在 Desktop 和 Telegram 中创建、暂停、恢复、取消、修改。
+状态：`active / paused / blocked / completed / cancelled`。用户可在 Desktop 的 Goals 视图创建、编辑、暂停、恢复、取消；Telegram 侧尚未提供 Goal 管理命令。
 
-设计要点（建议）：
+已实现的要点：
 
 - 每个 Goal 有一个专属 Chief Conversation，复用渠道绑定：`openSession({ channel: 'goal', externalId: goalId, scopeId })`。Goal 的长期上下文落在 Goal 字段与 Memory 中，而不是无限增长的会话。
 - Chief 每次执行后通过 `update_goal` 写回 Current State、Next Action、Last Execution（回答 v0.1 问题 7）；进度以 Success Criteria 清单衡量。
 
 ### 5.2 F07 — Task Orchestration　P0　【部分】
 
-现状：Run 已具备队列、Attempt、follow-up、超时、恢复、执行与验收分离、幂等派发；通用 Task 没有状态机。
+现状：Task 已有状态机、`owner`、`trigger` / `trigger_ref`、唯一 `dedupe_key`、`attempts` / `max_attempts` 与 `outcome`；Run 具备队列、Attempt、follow-up、超时、恢复、执行与验收分离、幂等派发。尚未实现：失败退避与有限次自动重试（`attempts` 有记录但没有重试调度）、用户的 Pause / Resume / Steer 入口（状态与 `paused` 转换已存在，UI 只提供勾选完成）。
 
-需求（[ADR 0005](adr/0005-task-evolves-run-executes.md)）：
+需求（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)）：
 
 - 状态：`pending → running → waiting_approval → completed`，以及 `paused / blocked / failed / cancelled`；`outcome` 单独记录（达成 / 未达成 / 无变化）。
 - 字段：`goal_id`、`owner`（user / agent）、`trigger`（manual / schedule / event）与 `trigger_ref`、唯一 `dedupe_key`、`attempts` / `max_attempts`、结果摘要。
@@ -222,7 +222,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 - 代码类 Task 派发 Run（`runs.task_id`）；Run 完成后由 Chief 判断 Task 是否达成。
 - MVP 单 Chief 串行处理调度 Task；Run 可并行。
 
-### 5.3 F08 — Scheduler　P0　【缺失】
+### 5.3 F08 — Scheduler　P0　【已有】
 
 | 触发     | 示例                 | MVP                                         |
 | -------- | -------------------- | ------------------------------------------- |
@@ -232,7 +232,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 原则：Scheduler 决定何时唤醒，Chief 决定做什么。
 
-设计要点（建议）：
+已实现的要点（[D7](decisions.md#d7--调度以一次触发一个事务推进唤醒内容只带-goal-状态与-task)）：
 
 - `schedules`：`goal_id`、cron、时区、`next_fire_at`、`last_fired_at`、`enabled`。
 - 到期时在一个事务中：按 `sched:<id>:<fire time>` 创建 Task、写入指向 Goal Conversation 的 Notification、推进 `next_fire_at`。复用现有通知投递与 Durable 去重。
@@ -258,7 +258,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 现状：`skills` 表按（scope、name、version）多版本并存，状态机 `candidate → approved → retired / superseded`；批准（approve）、停用（retire）、回滚（rollback）只能是用户经 IPC/UI 触发，记入 `events` 审计。dispatch 时按名称/关键词匹配 approved 版本，注入 Worker 指令（`promptPreamble` 同一注入点），并在 `runs.injected_skills` 留痕；渲染前再次校验状态，未批准的候选绝不进入任何 prompt。加载某版本且失败的 Run 会把该版本标记 `verification = failed`（用户决定是否回滚）；回滚把当前版本置 `retired + failed` 并恢复上一个被取代（superseded）的版本为 approved，版本历史完整保留。一次未经验证的成功不得变成全局规则。现有项目设置 `promptPreamble` 仍是最原始的 Procedural Memory，可作为 Skill 的过渡载体。
 
-待办：按任务语义匹配（当前是名称/关键词）、回滚后的自动重验证、与 Memory Worker 的 Dreaming 联动。设计与取舍见 [ADR 0009](adr/0009-skill-registry-human-approval-gate.md)。
+待办：按任务语义匹配（当前是名称/关键词）、回滚后的自动重验证、与 Memory Worker 的 Dreaming 联动。设计与取舍见 [D10](decisions.md#d10--skill-以人工审批为唯一注入闸门经验提取只产候选)。
 
 ---
 
@@ -266,7 +266,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 ### 7.1 F11 — 多入口 Gateway　P0　【部分】
 
-现状：`openSession({channel, externalId, scopeId})` 为渠道创建稳定 Conversation，绑定持久化，所有渠道共享 Scope Memory；外部输入可带 `requestId` 去重。无 Telegram adapter。
+现状：`openSession({channel, externalId, scopeId})` 为渠道创建稳定 Conversation，绑定持久化，所有渠道共享 Scope Memory；外部输入可带 `requestId` 去重。Telegram Bot 适配器已接入（long polling、白名单、`/scope` 切换、回复转发，见 [D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)）；Inbox 文件邮箱作为通用事件入口。
 
 需求（M3）：
 
@@ -274,9 +274,9 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 - Bot token 存于 `<dataDir>/service.env`（0600）；Keychain 后续。
 - Desktop 与 Telegram 共享 Goal、Task、Memory 与审批；同一 Task 只由常驻服务执行，渠道只提交输入（回答 v0.1 问题 4）。
 
-### 7.2 F12 — Task Board　P1　【缺失】
+### 7.2 F12 — Task Board　P1　【部分】
 
-替换现有 "Schedule" 视图（目前只是待办列表）。展示：待处理、运行中、待审批、最近完成、失败与阻塞；每个 Task 显示触发原因、所属 Goal、下一步。现有 Inbox（外部消息邮箱）保持原名与原功能。
+Goals 视图内已有 Task Board：按 pending / running / waiting_approval / blocked / failed / paused / completed 分组，带 Goal 徽标与 due 日期。尚未实现：每个 Task 显示触发原因与下一步、跨 Scope 的统一看板（当前跟随选中 Scope）。现有 Inbox（外部消息邮箱）保持原名与原功能。
 
 ### 7.3 F13 — 权限与审批　P0　【部分】
 
@@ -310,18 +310,21 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 `tian.db`（服务独占写入）：
 
-| 表                                              | 状态 | 说明                                                                                       |
-| ----------------------------------------------- | ---- | ------------------------------------------------------------------------------------------ |
-| `projects`、`conversations`、`channel_sessions` | 已有 | Scope、会话与渠道绑定                                                                      |
-| `tasks`                                         | 演进 | 增加 Goal、负责方、状态机、去重键                                                          |
-| `runs`、`run_attempts`、`agent_messages`        | 已有 | 增加 `runs.task_id`、`runs.injected_skills`                                                |
-| `inbox`、`notifications`、`operations`          | 已有 | 通知增加 Goal 目标与去重 fingerprint                                                       |
-| `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)                                    |
-| `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                                                           |
-| `events`                                        | 新增 | 业务事件与审计                                                                             |
-| `memory_worker_runs`                            | 新增 | Memory Worker 提取轮次审计（触发原因、候选计数）                                           |
-| `goals`、`schedules`、`approvals`               | 新增 |                                                                                            |
-| `skills`                                        | 已有 | M5：多版本、状态机与来源引用（[ADR 0009](adr/0009-skill-registry-human-approval-gate.md)） |
+| 表                                                                | 状态   | 说明                                                                                                                      |
+| ----------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `projects`、`conversations`、`channel_sessions`                   | 已有   | Scope、会话与渠道绑定（[D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)）            |
+| `tasks`                                                           | 已有   | Goal、负责方、状态机、去重键（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)）                        |
+| `runs`、`run_attempts`、`agent_messages`                          | 已有   | `runs.task_id`、`runs.injected_skills`、双向消息线程                                                                      |
+| `inbox`、`notifications`、`operations`                            | 已有   | 通知 outbox、Goal 提醒去重、幂等操作记录                                                                                  |
+| `memories`、`memory_versions`、`memory_nodes`                     | 已有   | [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)                                                  |
+| `memory_fts`、`history_entries`、`history_fts`、`history_cursors` | 已有   | 派生索引，可重建（[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)）                      |
+| `events`                                                          | 已有   | 业务事件与审计                                                                                                            |
+| `memory_worker_runs`                                              | 已有   | Memory Worker 提取轮次审计（触发原因、候选计数）                                                                          |
+| `goals`、`schedules`、`user_notices`                              | 已有   | Goal、cron 调度与去重提醒                                                                                                 |
+| `improvements`                                                    | 已有   | 改进日志（[D11](decisions.md#d11--改进日志用户与总管可写系统错误自动指纹化)）                                             |
+| `telegram_chats`、`telegram_state`、`telegram_forward_cursor`     | 已有   | 渠道映射、轮询 offset 与转发游标（[D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)） |
+| `skills`                                                          | 已有   | 多版本、状态机与来源引用（[D10](decisions.md#d10--skill-以人工审批为唯一注入闸门经验提取只产候选)）                       |
+| `approvals`                                                       | 未合并 | 受控操作审批（`m3-approvals` 分支）                                                                                       |
 
 `pi-session.sqlite`：Pi Durable 会话与 transcript，History 的唯一来源。
 
@@ -335,34 +338,35 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行；重启后可靠恢复目标、任务和待审批状态。
 
-### M1 — Memory Foundation
+### M1 — Memory Foundation　【已完成】
 
 - `memories` / `memory_versions` / `memory_nodes` + FTS；`LOG.txt` / `TREE/` 导入；单向导出。
 - Chief 工具：`remember` / `revise` / `forget` / `recall`（FTS）/ `nap` / `zoom`。
-- Core Memory 按 Token 预算渲染，Conversation 内使用快照；核实并修正 `state` section 的缓存影响。
+- Core Memory 按 Token 预算渲染，Conversation 内使用快照。
 - `events` 表；History 派生索引与 `search_history` / `read_history`。
-- Memory UI：显示来源、状态、版本，支持用户纠正和删除（当前为只读）。
+- Memory UI：显示来源、状态、版本，支持晋升、驳回与修订。
 
-### M2 — Persistent Agent
+遗留：`state` section 含精确到分钟的 `now`，尚未确认它是否落在可缓存的前缀内。
+
+### M2 — Persistent Agent　【已完成】
 
 - `goals`、`tasks` 演进、`runs.task_id`。
 - `schedules` 与调度器；Goal Conversation；`update_goal`、`notify_user` 及去重。
-- 预算、超时、并发与退避。
-- UI：Goal 列表与详情（创建、暂停、恢复、取消、编辑）。
+- 每日预算与超时已实现；失败退避与自动重试未实现。
+- UI：Goal 列表与详情（创建、暂停、恢复、取消、编辑）与 Task Board。
 
-### M3 — Always-on UX
+### M3 — Always-on UX　【部分】
 
-- `approvals` 与受控操作工具；Desktop 审批入口。
-- Task Board 替换 Schedule 视图。
-- Telegram adapter（消息、审批按钮）。
-- 场景 A–F 的自动化测试全部通过。
+- 已完成：Telegram 适配器（消息、`/scope`、`/status`、回复转发）；Task Board 位于 Goals 视图。
+- 待做：`approvals` 与受控操作工具（设计与实现已在 `m3-approvals` 分支）、Desktop 审批入口、Telegram 审批按钮。
+- 场景 A–F 的自动化测试：A、B、C、D、E 已有覆盖，F 待审批落地后补齐。
 
 ### M4 / M5（MVP 之后）
 
-- M4：Memory Worker、Dreaming、向量 + 全文混合检索。
-- M5：Experience Review、Skill、多 Agent 协作。
+- M4：Memory Worker（候选提取已实现，模型提取器待问题 6）、Dreaming、向量 + 全文混合检索。
+- M5：Experience Review、Skill（已实现）、多 Agent 协作。
 
-MVP 暂不实现：自动 Dreaming、向量检索、Skill、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
+MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
 
 ---
 
@@ -370,29 +374,29 @@ MVP 暂不实现：自动 Dreaming、向量检索、Skill、多 Agent 自主协�
 
 每个场景对应 `pnpm test` 中的自动化测试（临时数据库、真实临时 Git 仓库、可控 Worker，不调用模型）。
 
-| 场景 | 描述                         | 预期                                                   | 当前                    |
-| ---- | ---------------------------- | ------------------------------------------------------ | ----------------------- |
-| A    | 告知长期偏好，结束会话并重启 | 新 Conversation 的 Core Memory 包含该偏好              | 部分（无来源）          |
-| B    | 询问一周前的开发决定         | `search_history` 命中原始记录并返回引用                | 缺失                    |
-| C    | 每天自动检查 GitHub 项目     | 按 Schedule 生成 Task、记录结果；无变化不重复通知      | 缺失                    |
-| D    | 执行中应用崩溃               | 重启后恢复 Task 与 Run；已执行的外部操作不盲目重试     | Run 已有；Task 缺失     |
-| E    | 用户纠正旧偏好               | 旧 Memory 被取代并保留版本，Core Memory 不再包含旧内容 | 缺失                    |
-| F    | Agent 想推送代码             | 审批前不执行；审批持久化；拒绝后无法绕过               | 部分（仅 UI 手动 Ship） |
+| 场景 | 描述                         | 预期                                                   | 当前                                                              |
+| ---- | ---------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------- |
+| A    | 告知长期偏好，结束会话并重启 | 新 Conversation 的 Core Memory 包含该偏好              | 已有（`memory.test.ts`）                                          |
+| B    | 询问一周前的开发决定         | `search_history` 命中原始记录并返回引用                | 已有（`history.test.ts`）                                         |
+| C    | 每天自动检查 GitHub 项目     | 按 Schedule 生成 Task、记录结果；无变化不重复通知      | 已有（`goals.test.ts`：单事务触发、错过合并、每日预算与通知去重） |
+| D    | 执行中应用崩溃               | 重启后恢复 Task 与 Run；已执行的外部操作不盲目重试     | 已有（`goals.test.ts` 触发重放、`service.test.ts` Run 恢复）      |
+| E    | 用户纠正旧偏好               | 旧 Memory 被取代并保留版本，Core Memory 不再包含旧内容 | 已有（`memory.test.ts`）                                          |
+| F    | Agent 想推送代码             | 审批前不执行；审批持久化；拒绝后无法绕过               | 部分（仅 UI 手动 Ship；approvals 在 `m3-approvals` 分支）         |
 
 ---
 
 ## 11. 非功能需求
 
-| 维度     | 目标                                                                                                                   |
-| -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 持久性   | 已确认的写入在正常重启和升级后不丢失（WAL + 升级备份）【已有】                                                         |
-| 故障恢复 | 恢复未完成 Task，核对外部操作状态                                                                                      |
-| 检索     | 本地常规查询 p95 < 300ms，不含模型                                                                                     |
-| 性能     | 后台处理在常驻服务内，不阻塞 renderer【已有】                                                                          |
-| 成本     | Memory Worker 等后台调用可配置模型与预算；Magpie 不回传单价，成本按 Token 计（[ADR 0002](adr/0002-magpie-gateway.md)） |
-| 隐私     | 本地优先、按 Scope 隔离、明确外部数据传输边界                                                                          |
-| 安全     | 最小权限、来源追踪、审批、审计、Prompt Injection 防护                                                                  |
-| 可观测性 | 记录 Trigger、检索命中、Task 结果、Token 用量（已有按 Scope 的 Token 统计）                                            |
+| 维度     | 目标                                                                                                                              |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 持久性   | 已确认的写入在正常重启和升级后不丢失（WAL + 升级备份）【已有】                                                                    |
+| 故障恢复 | 恢复未完成 Task，核对外部操作状态                                                                                                 |
+| 检索     | 本地常规查询 p95 < 300ms，不含模型                                                                                                |
+| 性能     | 后台处理在常驻服务内，不阻塞 renderer【已有】                                                                                     |
+| 成本     | Memory Worker 等后台调用可配置模型与预算；Magpie 不回传单价，成本按 Token 计（[D2](decisions.md#d2--模型统一走本地-magpie-网关)） |
+| 隐私     | 本地优先、按 Scope 隔离、明确外部数据传输边界                                                                                     |
+| 安全     | 最小权限、来源追踪、审批、审计、Prompt Injection 防护                                                                             |
+| 可观测性 | 记录 Trigger、检索命中、Task 结果、Token 用量（已有按 Scope 的 Token 统计）                                                       |
 
 性能目标为初步指标，需在真实数据量与硬件上验证。
 
@@ -422,7 +426,7 @@ MVP 暂不实现：自动 Dreaming、向量检索、Skill、多 Agent 自主协�
 | 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量                                         |
 | 8   | Worker 的写权限如何真正受限        | **未决**：MVP 以 worktree + 审批 Land/Ship 为边界；沙箱或去除推送凭据另行评估                                                    |
 
-问题 2–5、7 应在 M2 结束前形成 ADR。
+问题 2–5、7 已分别落到 [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)、[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)、[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)、[D7](decisions.md#d7--调度以一次触发一个事务推进唤醒内容只带-goal-状态与-task)；问题 1 见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)。设计决策集中在 [decisions.md](decisions.md)。
 
 ---
 

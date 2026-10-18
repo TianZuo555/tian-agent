@@ -177,7 +177,7 @@ export class Db {
       this.db.exec(`
       UPDATE runs SET root_path = COALESCE((SELECT root_path FROM projects WHERE projects.id = runs.project_id), '') WHERE root_path = '';
       UPDATE runs SET current_prompt = prompt WHERE current_prompt = '';
-      -- ADR 0005: migrate the old todo statuses to the task state machine, idempotently.
+      -- D5: migrate the old todo statuses to the task state machine, idempotently.
       UPDATE tasks SET status = 'pending' WHERE status = 'open';
       UPDATE tasks SET status = 'completed' WHERE status = 'done';
       UPDATE tasks SET updated_at = COALESCE(updated_at, created_at);
@@ -382,7 +382,7 @@ export class Db {
     }).id;
   }
 
-  /** Allowed task status changes (ADR 0005). Everything else throws. */
+  /** Allowed task status changes (D5). Everything else throws. */
   static readonly TASK_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
     pending: [
       'running',

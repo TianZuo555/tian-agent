@@ -1,6 +1,6 @@
 # 记忆
 
-记忆存储在 SQLite（`tian.db`，只有常驻服务写入），带来源、可信度与版本；文件只是单向只读导出（[ADR-0004](adr/0004-sqlite-memory-with-summary-tree.md)）：
+记忆存储在 SQLite（`tian.db`，只有常驻服务写入），带来源、可信度与版本；文件只是单向只读导出（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)）：
 
 ```text
 <scope root>/memory/

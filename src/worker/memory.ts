@@ -17,7 +17,7 @@ import type {
 
 /**
  * SQLite-backed memory with provenance, versions, and the aligned dyadic
- * summary tree (ADR 0004). The database is the only source of truth; files in
+ * summary tree (D4). The database is the only source of truth; files in
  * the scope's memory directory are a one-way read-only export for workers and
  * humans, plus the legacy LOG.txt/TREE import source.
  *

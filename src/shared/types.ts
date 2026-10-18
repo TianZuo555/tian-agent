@@ -43,7 +43,7 @@ export interface ConversationInfo {
   createdAt: string;
 }
 
-/** ADR 0005: execution state and result (`outcome`) are recorded separately. */
+/** D5: execution state and result (`outcome`) are recorded separately. */
 export type TaskStatus =
   | 'pending'
   | 'running'

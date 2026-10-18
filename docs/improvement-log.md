@@ -1,6 +1,6 @@
 # 改进日志
 
-Log 视图和 `improvements` 表记录值得改进的产品问题、使用摩擦、想法与成功经验，与审计 Event、Memory 分开（[ADR-0010](adr/0010-improvement-log.md)）。
+Log 视图和 `improvements` 表记录值得改进的产品问题、使用摩擦、想法与成功经验，与审计 Event、Memory 分开（[D11](decisions.md#d11--改进日志用户与总管可写系统错误自动指纹化)）。
 
 - 一条条目带 `kind`（issue / friction / idea / win）、`status`（open / promoted / resolved / dismissed）、severity、来源（user / chief / system）和 scope；可选关联 Run、Conversation、Event。列表只取摘要，展开时才读取 detail。
 - 总管用 `log_improvement` 写入，用户可在 Log 视图新建；`list_improvements` 用于避免重复记录。

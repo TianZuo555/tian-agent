@@ -4,7 +4,7 @@
 
 总管运行在本机常驻 Node 服务中（launchd 管理，崩溃自动重启）；Electron App 是它的桌面客户端，Telegram Bot 是另一个聊天入口。会话可以结束，记忆、目标和责任不会消失。
 
-产品需求与路线图见 [docs/prd.md](docs/prd.md)，术语见 [CONTEXT.md](CONTEXT.md)，架构决策见 [docs/adr/](docs/adr/)。
+产品需求与路线图见 [docs/prd.md](docs/prd.md)，术语见 [CONTEXT.md](CONTEXT.md)，设计决策见 [docs/decisions.md](docs/decisions.md)。
 
 ## 功能一览
 
@@ -35,6 +35,7 @@ mise run verify   # typecheck + lint + react-doctor + test
 | 文档                                               | 内容                                          |
 | -------------------------------------------------- | --------------------------------------------- |
 | [docs/development.md](docs/development.md)         | 工具链、任务、环境变量、测试与 React 代码质量 |
+| [docs/decisions.md](docs/decisions.md)             | 设计决策 D1–D11：为什么这样搭                 |
 | [docs/architecture.md](docs/architecture.md)       | 进程模型、桌面客户端、模块地图、权限与 scope  |
 | [docs/service.md](docs/service.md)                 | 常驻服务：安装、操作、升级与回滚              |
 | [docs/channels.md](docs/channels.md)               | 渠道与会话绑定，Telegram 接入，Inbox          |
