@@ -15,6 +15,7 @@ import { DataService } from './data.js';
 import { AgentRuntime } from './agents.js';
 import { RunOrchestrator, type DispatchInput } from './runs.js';
 import { EventLog } from './events.js';
+import { SkillRegistry } from './skills.js';
 import { HistoryIndex } from './history.js';
 import { GoalStore } from './goals.js';
 import { GoalScheduler, parseCron } from './scheduler.js';
@@ -45,6 +46,7 @@ export class Service {
   readonly data: DataService;
   readonly runs: RunOrchestrator;
   readonly events: EventLog;
+  readonly skills: SkillRegistry;
   readonly history: HistoryIndex;
   readonly goals: GoalStore;
   readonly scheduler: GoalScheduler;
@@ -76,14 +78,18 @@ export class Service {
     this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
     this.scopes = new Scopes(this.globalDir, this.db);
     this.settings = new Settings(userDataDir);
+    this.events = new EventLog(this.db);
+    this.skills = new SkillRegistry(this.db, this.events, undefined, () =>
+      this.emit('skills', this.skills.list(null)),
+    );
     this.data = new DataService(this.db, this.scopes, emit);
     this.agents = new AgentRuntime(
       userDataDir,
       this.globalDir,
       this.settings,
       this.db,
+      this.skills,
     );
-    this.events = new EventLog(this.db);
     this.history = new HistoryIndex(
       this.db,
       this.agents,
@@ -98,6 +104,7 @@ export class Service {
       emit,
       () => this.deliverNotifications(),
       this.events,
+      this.skills,
     );
     this.goals = new GoalStore(this.db);
     this.scheduler = new GoalScheduler({
@@ -772,6 +779,21 @@ export class Service {
   }
   runList(scopeId: string | null) {
     return this.db.listRuns(scopeId);
+  }
+  skillList(scopeId: string | null) {
+    return this.skills.list(scopeId);
+  }
+  skillHistory(scopeId: string, name: string) {
+    return this.skills.history(scopeId, name);
+  }
+  skillApprove(id: string) {
+    return this.skills.approve(id);
+  }
+  skillRetire(id: string, reason: string | null) {
+    return this.skills.retire(id, reason);
+  }
+  skillRollback(id: string, reason: string | null) {
+    return this.skills.rollback(id, reason);
   }
   dispatchRun(input: DispatchInput) {
     return this.runs.dispatch(input);

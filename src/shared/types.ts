@@ -159,6 +159,12 @@ export type ReviewStatus =
   | 'discarding'
   | 'discarded';
 
+export interface RunInjection {
+  id: string;
+  name: string;
+  version: number;
+}
+
 export interface RunInfo {
   id: string;
   projectId: string;
@@ -179,11 +185,33 @@ export interface RunInfo {
   exitCode: number | null;
   /** Code tasks record the task they execute (PRD §5.2). */
   taskId?: number | null;
+  /** Approved skill versions injected into the worker prompt at dispatch (PRD §6.2). */
+  injectedSkills?: RunInjection[] | null;
   startedAt: string;
   finishedAt: string | null;
 }
 
 export type MemoryStatus = 'active' | 'superseded' | 'deleted';
+
+/** Experience ≠ Verified Skill: only the user moves a candidate to approved. */
+export type SkillStatus = 'candidate' | 'approved' | 'retired' | 'superseded';
+export type SkillVerification = 'unverified' | 'verified' | 'failed';
+
+export interface SkillItem {
+  id: string;
+  scopeId: string;
+  name: string;
+  description: string;
+  /** Markdown procedure the worker is expected to follow. */
+  body: string;
+  version: number;
+  status: SkillStatus;
+  verification: SkillVerification;
+  /** Run attempts this version was extracted from or loaded by, e.g. `run:<id>:attempt:1`. */
+  sourceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface MemoryItem {
   seq: number;
@@ -266,6 +294,7 @@ export interface AppEvents {
   runs: RunInfo[];
   inbox: string;
   memory: string;
+  skills: SkillItem[];
   scopes: ScopeInfo[];
   settings: SettingsInfo;
   runtime: {

@@ -1,11 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATABASE_VERSION } from '../shared/version.js';
 import type {
   ConversationInfo,
   InboxItem,
   RunInfo,
+  RunInjection,
   TaskItem,
   TaskStatus,
   SessionBinding,
@@ -74,8 +75,14 @@ export class Db {
       this.db.close();
       throw new Error('The database requires a newer service version');
     }
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
+    this.db.exec('PRAGMA journal_mode = WAL;');
+    // A real upgrade (not a fresh database, not a same-version reopen) gets a
+    // consistent snapshot first and runs inside one transaction: if any step
+    // throws, the schema rolls back and the backup file remains for recovery.
+    const upgrading = version > 0 && version < DATABASE_VERSION;
+    if (upgrading) this.backupDatabase(join(userDataDir, `tian.db_v${version}.backup`));
+    const migrate = () => {
+      this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL,
         auto_land INTEGER NOT NULL DEFAULT 0, allow_in_place INTEGER NOT NULL DEFAULT 0,
@@ -156,6 +163,7 @@ export class Db {
       error: 'TEXT',
       pr_url: 'TEXT',
       task_id: 'INTEGER',
+      injected_skills: 'TEXT',
       deadline_at: "TEXT NOT NULL DEFAULT ''",
     });
     this.db.exec(`
@@ -176,6 +184,15 @@ export class Db {
       UPDATE runs SET execution_mode = 'in-place' WHERE branch IS NULL;
       UPDATE runs SET status = 'interrupted', review_status = 'discarded' WHERE status = 'discarded';
     `);
+    };
+    if (upgrading) this.transaction(migrate);
+    else migrate();
+  }
+
+  /** Consistent pre-upgrade snapshot; a leftover from a failed attempt is stale. */
+  private backupDatabase(path: string): void {
+    rmSync(path, { force: true });
+    this.db.prepare('VACUUM INTO ?').run(path);
   }
 
   private ensureColumns(
@@ -541,7 +558,12 @@ export class Db {
 
   addRun(run: RunRow): void {
     this.transaction(() => {
-      this.insert('runs', run);
+      this.insert('runs', {
+        ...run,
+        injectedSkills: run.injectedSkills?.length
+          ? JSON.stringify(run.injectedSkills)
+          : null,
+      });
       this.recordAttempt(run);
     });
   }
@@ -553,7 +575,13 @@ export class Db {
           `UPDATE runs SET ${entries.map(([key]) => `${snake(key)} = ?`).join(',')} WHERE id = ?`,
         )
         .run(
-          ...entries.map(([, value]) => value as string | number | null),
+          ...entries.map(([key, value]) =>
+            key === 'injectedSkills'
+              ? value
+                ? JSON.stringify(value)
+                : null
+              : (value as string | number | null),
+          ),
           id,
         );
     const run = this.getRun(id);
@@ -592,35 +620,47 @@ export class Db {
       return run;
     });
   }
+  /** Runs keep injected skill versions as JSON; parse them at the boundary. */
+  private readRun(value: unknown): RunRow {
+    const run = row<RunRow>(value);
+    const raw = run.injectedSkills as unknown as string | null;
+    return {
+      ...run,
+      injectedSkills: raw ? (JSON.parse(raw) as RunInjection[]) : null,
+    };
+  }
   getRun(id: string): RunRow | undefined {
     const value = this.db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
-    return value ? row(value) : undefined;
+    return value ? this.readRun(value) : undefined;
   }
   listRuns(projectId: string | null): RunRow[] {
-    return rows(
+    return (
       this.db
         .prepare(
           'SELECT * FROM runs WHERE (? IS NULL OR project_id = ?) ORDER BY started_at DESC LIMIT 200',
         )
-        .all(projectId, projectId),
+        .all(projectId, projectId)
+        .map((value) => this.readRun(value))
     );
   }
   activeRuns(): RunRow[] {
-    return rows(
+    return (
       this.db
         .prepare(
           "SELECT * FROM runs WHERE status IN ('queued','running','collecting') AND review_status != 'discarded'",
         )
-        .all(),
+        .all()
+        .map((value) => this.readRun(value))
     );
   }
   unsettledReviews(): RunRow[] {
-    return rows(
+    return (
       this.db
         .prepare(
           "SELECT * FROM runs WHERE review_status IN ('landing','shipping','discarding')",
         )
-        .all(),
+        .all()
+        .map((value) => this.readRun(value))
     );
   }
   projectHasRuns(id: string): boolean {
@@ -644,7 +684,7 @@ export class Db {
     const value = this.db
       .prepare('SELECT * FROM runs WHERE conversation_id = ?')
       .get(conversationId);
-    return value ? row<RunRow>(value) : undefined;
+    return value ? this.readRun(value) : undefined;
   }
 
   addAgentMessage(

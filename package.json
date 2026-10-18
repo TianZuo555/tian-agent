@@ -20,6 +20,7 @@
     "lint": "oxlint && oxfmt --check",
     "lint:fix": "oxlint --fix && oxfmt --write",
     "typecheck": "tsc --noEmit",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test",
     "test": "pnpm build:service && tsx --test tests/*.test.ts",
     "test:runtime": "tsx scripts/e2e-runtime.mts",
     "test:launchd": "pnpm build:service && tsx scripts/e2e-service.mts",

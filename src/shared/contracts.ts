@@ -10,10 +10,12 @@ import type {
   MemoryDump,
   ProjectPatch,
   RunInfo,
+  RunInjection,
   ScopeInfo,
   SettingsInfo,
   ModelCatalog,
   NoticeItem,
+  SkillItem,
   TaskItem,
   SessionBinding,
   ServiceInfo,
@@ -82,6 +84,11 @@ export interface Commands {
   landRun: Command<[id: string], string>;
   discardRun: Command<[id: string], void>;
   shipRun: Command<[id: string], string>;
+  skillList: Command<[scopeId: string | null], SkillItem[]>;
+  skillHistory: Command<[scopeId: string, name: string], SkillItem[]>;
+  skillApprove: Command<[skillId: string], SkillItem>;
+  skillRetire: Command<[skillId: string, reason: string | null], SkillItem>;
+  skillRollback: Command<[skillId: string, reason: string | null], SkillItem>;
   getSettings: Command<[], SettingsInfo>;
   setModel: Command<[model: SettingsInfo['model']], void>;
   modelCatalog: Command<[], ModelCatalog>;
@@ -203,6 +210,17 @@ export const commandArgs = {
   landRun: Type.Tuple([id]),
   discardRun: Type.Tuple([id]),
   shipRun: Type.Tuple([id]),
+  skillList: Type.Tuple([nullableId]),
+  skillHistory: Type.Tuple([id, Type.String({ minLength: 1, maxLength: 256 })]),
+  skillApprove: Type.Tuple([id]),
+  skillRetire: Type.Tuple([
+    id,
+    Type.Union([Type.String({ maxLength: 2_000 }), Type.Null()]),
+  ]),
+  skillRollback: Type.Tuple([
+    id,
+    Type.Union([Type.String({ maxLength: 2_000 }), Type.Null()]),
+  ]),
   getSettings: Type.Tuple([]),
   setModel: Type.Tuple([
     Type.Object(

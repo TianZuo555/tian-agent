@@ -121,6 +121,17 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     memoryForget: async () => {},
     runReport: async () => '',
     runDiff: async () => '',
+    skillList: async () => [],
+    skillHistory: async () => [],
+    skillApprove: async () => {
+      throw new Error('Unused');
+    },
+    skillRetire: async () => {
+      throw new Error('Unused');
+    },
+    skillRollback: async () => {
+      throw new Error('Unused');
+    },
     followUpRun: async () => {
       throw new Error('Unused');
     },

@@ -12,6 +12,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { join } from 'node:path';
 import type { Db, RunRow } from './db.js';
 import type { Settings } from './settings.js';
+import type { SkillRegistry } from './skills.js';
 import type { WorkerConversation, WorkerRuntime } from './runs.js';
 
 /** The only adapter that knows Pi's conversation and submission APIs. */
@@ -25,6 +26,8 @@ export class AgentRuntime implements WorkerRuntime {
     private globalDir: string,
     private settings: Settings,
     private db: Db,
+    /** Renders approved skills into worker instructions; absent = none. */
+    private skills?: SkillRegistry,
   ) {}
 
   /**
@@ -117,6 +120,7 @@ export class AgentRuntime implements WorkerRuntime {
             `Shared memory is exported read-only to ${join(run.rootPath, 'memory', 'MEMORY.md')}; longer notes in ${join(run.rootPath, 'notes')}. Never modify the memory export, notes, or the project main checkout.`,
             'Write a report of at most one page to TIAN_REPORT.md in the working directory: changes, validation, key decisions, and limitations.',
             project?.promptPreamble ?? '',
+            this.skills?.promptBlock(run) ?? '',
           ]
             .filter(Boolean)
             .join('\n\n'),
