@@ -28,6 +28,7 @@ export interface ChiefDeps {
     projectRef: string;
     prompt: string;
     chiefConversationId: string | null;
+    taskId?: number;
     operationId: string;
   }) => Promise<RunRow>;
   /** Post a message into a run's mailbox — a reply or mid-run guidance. */
@@ -275,10 +276,20 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
 
   const listTasks = defineTool({
     name: 'list_tasks',
-    description: 'List tasks of a scope (open first).',
+    description:
+      'List tasks of a scope (incomplete first). Tasks may belong to a goal.',
     parameters: Type.Object({
       status: Type.Optional(
-        Type.Union([Type.Literal('open'), Type.Literal('done')]),
+        Type.Union([
+          Type.Literal('pending'),
+          Type.Literal('running'),
+          Type.Literal('waiting_approval'),
+          Type.Literal('completed'),
+          Type.Literal('paused'),
+          Type.Literal('blocked'),
+          Type.Literal('failed'),
+          Type.Literal('cancelled'),
+        ]),
       ),
       scope: ScopeParam,
     }),
@@ -290,7 +301,7 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
         tasks
           .map(
             (t) =>
-              `#${t.id} [${t.status}] ${t.title}${t.due ? ` due:${t.due}` : ''}`,
+              `#${t.id} [${t.status}] ${t.owner === 'agent' ? '(agent) ' : ''}${t.title}${t.due ? ` due:${t.due}` : ''}${t.goalId ? ` goal:${t.goalId}` : ''}`,
           )
           .join('\n'),
       );
@@ -300,7 +311,7 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
   const doneTask = defineTool({
     name: 'done_task',
     replay: 'safe',
-    description: 'Mark a task done by id.',
+    description: 'Mark a task completed by id (or reopen it as pending).',
     parameters: Type.Object({ id: Type.Number() }),
     execute: async (args, api) => {
       data.doneTask(args.id, true, `done-task:${api.taskId}:${api.callId}`);
@@ -439,6 +450,12 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
         description:
           'Full task briefing for the worker — it sees nothing else.',
       }),
+      task: Type.Optional(
+        Type.Number({
+          description:
+            'Task id this run advances (from list_tasks). The run is recorded on the task.',
+        }),
+      ),
     }),
     execute: async (args, api) => {
       const scope = resolveScope(
@@ -453,6 +470,7 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
           projectRef: scope,
           prompt: args.prompt,
           chiefConversationId: String(api.conversationId),
+          taskId: args.task,
           operationId: `dispatch:${api.taskId}:${api.callId}`,
         });
         return text(

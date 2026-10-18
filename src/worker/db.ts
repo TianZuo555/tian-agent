@@ -7,6 +7,7 @@ import type {
   InboxItem,
   RunInfo,
   TaskItem,
+  TaskStatus,
   SessionBinding,
 } from '../shared/types';
 
@@ -91,7 +92,10 @@ export class Db {
       );
       CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id TEXT NOT NULL, title TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'open', due TEXT, created_at TEXT NOT NULL, done_at TEXT
+        status TEXT NOT NULL DEFAULT 'pending', goal_id TEXT, owner TEXT NOT NULL DEFAULT 'user',
+        outcome TEXT, summary TEXT, trigger TEXT NOT NULL DEFAULT 'manual', trigger_ref TEXT,
+        dedupe_key TEXT UNIQUE, attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3,
+        due TEXT, started_at TEXT, created_at TEXT NOT NULL, done_at TEXT, updated_at TEXT
       );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, conversation_id TEXT, chief_conversation_id TEXT,
@@ -127,6 +131,21 @@ export class Db {
     this.ensureColumns('projects', {
       allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
     });
+    this.ensureColumns('tasks', {
+      goal_id: 'TEXT',
+      owner: "TEXT NOT NULL DEFAULT 'user'",
+      outcome: 'TEXT',
+      summary: 'TEXT',
+      trigger: "TEXT NOT NULL DEFAULT 'manual'",
+      trigger_ref: 'TEXT',
+      // ALTER TABLE cannot add a UNIQUE column; creation is guarded in the
+      // insert path (dedupe lookup inside one transaction) for these databases.
+      dedupe_key: 'TEXT',
+      attempts: 'INTEGER NOT NULL DEFAULT 0',
+      max_attempts: 'INTEGER NOT NULL DEFAULT 3',
+      started_at: 'TEXT',
+      updated_at: 'TEXT',
+    });
     this.ensureColumns('runs', {
       chief_conversation_id: 'TEXT',
       current_prompt: "TEXT NOT NULL DEFAULT ''",
@@ -137,11 +156,16 @@ export class Db {
       attempt: 'INTEGER NOT NULL DEFAULT 1',
       error: 'TEXT',
       pr_url: 'TEXT',
+      task_id: 'INTEGER',
       deadline_at: "TEXT NOT NULL DEFAULT ''",
     });
     this.db.exec(`
       UPDATE runs SET root_path = COALESCE((SELECT root_path FROM projects WHERE projects.id = runs.project_id), '') WHERE root_path = '';
       UPDATE runs SET current_prompt = prompt WHERE current_prompt = '';
+      -- ADR 0005: migrate the old todo statuses to the task state machine, idempotently.
+      UPDATE tasks SET status = 'pending' WHERE status = 'open';
+      UPDATE tasks SET status = 'completed' WHERE status = 'done';
+      UPDATE tasks SET updated_at = COALESCE(updated_at, created_at);
       PRAGMA user_version = ${DATABASE_VERSION};
       UPDATE runs SET execution_mode = 'in-place' WHERE branch IS NULL;
       UPDATE runs SET status = 'interrupted', review_status = 'discarded' WHERE status = 'discarded';
@@ -193,7 +217,9 @@ export class Db {
   }
 
   private insert(table: string, value: object): void {
-    const entries = Object.entries(value);
+    const entries = Object.entries(value).filter(
+      ([, item]) => item !== undefined,
+    );
     this.db
       .prepare(
         `INSERT INTO ${table} (${entries.map(([key]) => snake(key)).join(',')}) VALUES (${entries.map(() => '?').join(',')})`,
@@ -305,29 +331,179 @@ export class Db {
   }
 
   addTask(scopeId: string, title: string, due: string | null): number {
-    return Number(
+    return this.insertTask({
+      scopeId,
+      title,
+      due,
+    }).id;
+  }
+
+  /** Allowed task status changes (ADR 0005). Everything else throws. */
+  static readonly TASK_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
+    pending: [
+      'running',
+      'waiting_approval',
+      'completed',
+      'paused',
+      'blocked',
+      'failed',
+      'cancelled',
+    ],
+    running: [
+      'waiting_approval',
+      'completed',
+      'failed',
+      'paused',
+      'blocked',
+      'cancelled',
+    ],
+    waiting_approval: [
+      'running',
+      'completed',
+      'failed',
+      'paused',
+      'blocked',
+      'cancelled',
+    ],
+    paused: ['pending', 'running', 'completed', 'failed', 'cancelled'],
+    blocked: ['pending', 'running', 'completed', 'failed', 'cancelled'],
+    failed: ['pending', 'running', 'completed', 'cancelled'],
+    // A completed to-do can be unchecked again; cancelled is final.
+    completed: ['pending'],
+    cancelled: [],
+  };
+
+  private assertTransition(from: TaskStatus, to: TaskStatus): void {
+    if (from === to) return; // idempotent repeats are no-ops
+    if (!Db.TASK_TRANSITIONS[from].includes(to))
+      throw new Error(`Illegal task transition: ${from} → ${to}`);
+  }
+
+  /** The single place that applies a task status change, with transition guard. */
+  updateTaskStatus(
+    id: number,
+    status: TaskStatus,
+    patch: {
+      outcome?: TaskItem['outcome'];
+      summary?: string | null;
+      countAttempt?: boolean;
+    } = {},
+  ): TaskRow {
+    return this.transaction(() => {
+      const task = this.getTask(id);
+      if (!task) throw new Error(`Unknown task: ${id}`);
+      this.assertTransition(task.status, status);
+      if (task.status === status && Object.keys(patch).length === 0)
+        return task;
+      const now = new Date().toISOString();
       this.db
         .prepare(
-          'INSERT INTO tasks (scope_id,title,due,created_at) VALUES (?,?,?,?)',
+          `UPDATE tasks SET status = ?, outcome = COALESCE(?, outcome), summary = COALESCE(?, summary),
+          attempts = attempts + ?, started_at = COALESCE(started_at, ?),
+          done_at = ${status === 'completed' ? '?' : 'NULL'}, updated_at = ? WHERE id = ?`,
         )
-        .run(scopeId, title, due, new Date().toISOString()).lastInsertRowid,
-    );
+        .run(
+          status,
+          patch.outcome ?? null,
+          patch.summary ?? null,
+          patch.countAttempt ? 1 : 0,
+          status === 'running' ? now : null,
+          status === 'completed' ? now : null,
+          now,
+          id,
+        );
+      return this.getTask(id)!;
+    });
   }
+
+  getTask(id: number): TaskRow | undefined {
+    const value = this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    return value ? row<TaskRow>(value) : undefined;
+  }
+  taskByDedupeKey(key: string): TaskRow | undefined {
+    const value = this.db
+      .prepare('SELECT * FROM tasks WHERE dedupe_key = ?')
+      .get(key);
+    return value ? row<TaskRow>(value) : undefined;
+  }
+
+  /** Insert a task row; every field except scope and title is optional. */
+  insertTask(
+    task: Partial<Omit<TaskRow, 'id' | 'updatedAt'>> & {
+      scopeId: string;
+      title: string;
+    },
+  ): TaskRow {
+    const now = new Date().toISOString();
+    const value = {
+      status: 'pending' as TaskStatus,
+      goalId: null,
+      owner: 'user' as const,
+      outcome: null,
+      summary: null,
+      trigger: 'manual' as const,
+      triggerRef: null,
+      dedupeKey: null,
+      attempts: 0,
+      maxAttempts: 3,
+      due: null,
+      startedAt: null,
+      doneAt: null,
+      ...task,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const statement = this.db.prepare(
+      `INSERT INTO tasks (scope_id,title,status,goal_id,owner,outcome,summary,trigger,trigger_ref,dedupe_key,attempts,max_attempts,due,started_at,created_at,done_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+    );
+    const info = statement.run(
+      value.scopeId,
+      value.title,
+      value.status,
+      value.goalId,
+      value.owner,
+      value.outcome,
+      value.summary,
+      value.trigger,
+      value.triggerRef,
+      value.dedupeKey,
+      value.attempts,
+      value.maxAttempts,
+      value.due,
+      value.startedAt,
+      value.createdAt,
+      value.doneAt,
+      value.updatedAt,
+    );
+    const id =
+      Number(info.changes) > 0
+        ? Number(info.lastInsertRowid)
+        : this.taskByDedupeKey(value.dedupeKey!)!.id;
+    return this.getTask(id)!;
+  }
+
+  /** Tasks created for a goal since `since` (daily budget accounting). */
+  countGoalTasks(goalId: string, since: string): number {
+    const value = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM tasks WHERE goal_id = ? AND status != 'blocked' AND created_at >= ?",
+      )
+      .get(goalId, since) as { n: number };
+    return Number(value.n);
+  }
+
   doneTask(id: number): void {
-    this.db
-      .prepare("UPDATE tasks SET status = 'done', done_at = ? WHERE id = ?")
-      .run(new Date().toISOString(), id);
+    this.updateTaskStatus(id, 'completed');
   }
   reopenTask(id: number): void {
-    this.db
-      .prepare("UPDATE tasks SET status = 'open', done_at = NULL WHERE id = ?")
-      .run(id);
+    this.updateTaskStatus(id, 'pending');
   }
   listTasks(scopeId: string | null, status?: string): TaskRow[] {
     return rows(
       this.db
         .prepare(
-          `SELECT * FROM tasks WHERE (? IS NULL OR scope_id = ?) AND (? IS NULL OR status = ?) ORDER BY status = 'done', created_at DESC`,
+          `SELECT * FROM tasks WHERE (? IS NULL OR scope_id = ?) AND (? IS NULL OR status = ?) ORDER BY status = 'completed', created_at DESC`,
         )
         .all(scopeId, scopeId, status ?? null, status ?? null),
     );

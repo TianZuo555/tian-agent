@@ -43,15 +43,95 @@ export interface ConversationInfo {
   createdAt: string;
 }
 
+/** ADR 0005: execution state and result (`outcome`) are recorded separately. */
+export type TaskStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting_approval'
+  | 'completed'
+  | 'paused'
+  | 'blocked'
+  | 'failed'
+  | 'cancelled';
+export type TaskOutcome = 'achieved' | 'not_achieved' | 'no_change';
+export type TaskOwner = 'user' | 'agent';
+export type TaskTrigger = 'manual' | 'schedule' | 'event';
+
 export interface TaskItem {
   id: number;
   scopeId: string;
   title: string;
-  status: 'open' | 'done';
+  status: TaskStatus;
   due: string | null;
   createdAt: string;
   doneAt: string | null;
+  /** Set when the task advances a goal; plain to-dos have none. */
+  goalId: string | null;
+  owner: TaskOwner;
+  outcome: TaskOutcome | null;
+  summary: string | null;
+  trigger: TaskTrigger;
+  triggerRef: string | null;
+  /** Unique creation key (e.g. `sched:<id>:<fireAt>`); restarts never duplicate a task. */
+  dedupeKey: string | null;
+  attempts: number;
+  maxAttempts: number;
+  startedAt: string | null;
+  updatedAt: string;
 }
+
+export type GoalStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'completed'
+  | 'cancelled';
+
+export interface ScheduleItem {
+  id: string;
+  goalId: string;
+  cron: string;
+  timezone: string;
+  enabled: boolean;
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+}
+
+export interface GoalItem {
+  id: string;
+  scopeId: string;
+  objective: string;
+  successCriteria: string;
+  constraints: string;
+  status: GoalStatus;
+  currentState: string;
+  nextAction: string;
+  lastExecution: string | null;
+  /** The goal's dedicated chief conversation (channel binding `goal`). */
+  conversationId: string | null;
+  maxRunsPerDay: number;
+  schedules: ScheduleItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoticeItem {
+  id: number;
+  goalId: string;
+  scopeId: string;
+  fingerprint: string;
+  text: string;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
+/** Fields the UI may edit on a goal; state fields belong to the chief. */
+export type GoalPatch = Partial<
+  Pick<
+    GoalItem,
+    'objective' | 'successCriteria' | 'constraints' | 'maxRunsPerDay'
+  >
+>;
 
 export interface InboxItem {
   id: string;
@@ -97,6 +177,8 @@ export interface RunInfo {
   prUrl: string | null;
   reportPath: string | null;
   exitCode: number | null;
+  /** Code tasks record the task they execute (PRD §5.2). */
+  taskId?: number | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -179,6 +261,8 @@ export interface AppEvents {
   view: ViewPayload;
   conversations: ConversationInfo[];
   tasks: TaskItem[];
+  goals: GoalItem[];
+  notices: NoticeItem[];
   runs: RunInfo[];
   inbox: string;
   memory: string;

@@ -16,10 +16,21 @@ function task(scopeId: string, id: number): TaskItem {
     id,
     scopeId,
     title: `${scopeId} task`,
-    status: 'open',
+    status: 'pending',
     due: null,
     doneAt: null,
     createdAt: new Date().toISOString(),
+    goalId: null,
+    owner: 'user',
+    outcome: null,
+    summary: null,
+    trigger: 'manual',
+    triggerRef: null,
+    dedupeKey: null,
+    attempts: 0,
+    maxAttempts: 3,
+    startedAt: null,
+    updatedAt: new Date().toISOString(),
   };
 }
 function mockApi(overrides: Partial<CommandApi> = {}) {

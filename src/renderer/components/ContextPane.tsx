@@ -337,14 +337,14 @@ function TasksPanel() {
             >
               <Checkbox
                 className="mt-0.5"
-                checked={t.status === 'done'}
+                checked={t.status === 'completed'}
                 onCheckedChange={(checked) =>
                   void actions.toggleTask(t.id, checked === true)
                 }
               />
               <span
                 className={`min-w-0 text-[12px] leading-snug ${
-                  t.status === 'done'
+                  t.status === 'completed'
                     ? 'text-content-disabled line-through'
                     : 'text-foreground'
                 }`}
@@ -761,7 +761,7 @@ export function ContextPane() {
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
   const memory = useStore((s) => s.memory);
   const counts: Record<PaneTab, number> = {
-    tasks: tasks.filter((t) => t.status === 'open').length,
+    tasks: tasks.filter((t) => t.status === 'pending').length,
     runs: runs.filter(isLive).length,
     memory: (memory?.items ?? []).filter((m) => m.status === 'active').length,
     inbox: inbox.filter((m) => !m.read).length,

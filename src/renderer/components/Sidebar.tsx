@@ -236,7 +236,7 @@ export function Sidebar() {
           icon={CalendarClock}
           label="Schedule"
           active={nav === 'schedule'}
-          badge={tasks.filter((t) => t.status === 'open').length}
+          badge={tasks.filter((t) => t.status === 'pending').length}
           onClick={() => actions.setNav('schedule')}
         />
         <NavItem

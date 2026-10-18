@@ -25,6 +25,8 @@ export interface DispatchInput {
   projectRef: string;
   prompt: string;
   chiefConversationId: string | null;
+  /** Code tasks record the task this run executes. */
+  taskId?: number;
   operationId?: string;
 }
 
@@ -76,6 +78,8 @@ export class RunOrchestrator {
         this.db.getProject(input.projectRef) ??
         this.db.projectByName(input.projectRef);
       if (!project) throw new Error(`Unknown project: ${input.projectRef}`);
+      if (input.taskId != null && !this.db.getTask(input.taskId))
+        throw new Error(`Unknown task: ${input.taskId}`);
       if (project.agentKind !== 'durable-worker')
         throw new Error(`Unsupported agent kind: ${project.agentKind}`);
       const isGit = await Git.isGitRepo(project.rootPath);
@@ -104,6 +108,7 @@ export class RunOrchestrator {
         prUrl: null,
         reportPath: join(this.scopes.runsDir(project.id), `${id}.md`),
         exitCode: null,
+        taskId: input.taskId ?? null,
         startedAt,
         finishedAt: null,
         deadlineAt: new Date(

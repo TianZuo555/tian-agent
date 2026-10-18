@@ -56,7 +56,7 @@ function groupTasks(tasks: TaskItem[]): TaskGroup[] {
   const done: TaskItem[] = [];
 
   for (const t of tasks) {
-    if (t.status === 'done') {
+    if (t.status === 'completed') {
       done.push(t);
       continue;
     }
@@ -83,7 +83,7 @@ export function ScheduleView() {
   const tasks = useStore((s) => s.tasks);
   const [draft, setDraft] = useState('');
   const groups = useMemo(() => groupTasks(tasks), [tasks]);
-  const open = tasks.filter((t) => t.status === 'open').length;
+  const open = tasks.filter((t) => t.status === 'pending').length;
   const reduce = useReducedMotion();
 
   return (
@@ -173,7 +173,7 @@ export function ScheduleView() {
                       >
                         <Checkbox
                           className="mt-0.5"
-                          checked={t.status === 'done'}
+                          checked={t.status === 'completed'}
                           onCheckedChange={(checked) =>
                             void actions.toggleTask(t.id, checked === true)
                           }
@@ -182,7 +182,7 @@ export function ScheduleView() {
                         <span className="min-w-0 flex-1">
                           <span
                             className={`block text-[13px] leading-snug ${
-                              t.status === 'done'
+                              t.status === 'completed'
                                 ? 'text-content-disabled line-through'
                                 : 'text-foreground'
                             }`}
@@ -198,7 +198,7 @@ export function ScheduleView() {
                             )}
                           </span>
                         </span>
-                        {t.status === 'done' && (
+                        {t.status === 'completed' && (
                           <Check className="mt-1 size-3.5 shrink-0 text-success-foreground" />
                         )}
                       </motion.li>
