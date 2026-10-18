@@ -1,0 +1,12 @@
+nodeLinker: hoisted
+allowBuilds:
+  '@google/genai': false
+  electron-winstaller: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - electron@44.9.0
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
+  - protobufjs
+  - fsevents
