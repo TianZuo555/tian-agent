@@ -94,25 +94,28 @@ Settings 中的“服务与升级”在服务离线时也可访问，支持查�
 - **Main**：管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库。
 - **常驻服务**：唯一持有应用数据库和 Pi storage，执行模型、工具、Inbox、通知和 Run。客户端重连后重新获取快照及订阅。
 
-| 模块                     | 职责                                              |
-| ------------------------ | ------------------------------------------------- |
-| `service/server.ts`      | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
-| `service/client.ts`      | 请求、事件、自动重连；关闭客户端不停止服务        |
-| `service/launchd.ts`     | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理 |
-| `desktop/controller.ts`  | App 连接偏好、服务控制及本地升级入口              |
-| `desktop/app-update.ts`  | App 校验、独立替换、启动检查与失败恢复            |
-| `shared/contracts.ts`    | IPC / socket 参数 schema、返回类型和消息合约      |
-| `shared/messages.ts`     | Pi transcript 转换为聊天快照                      |
-| `worker/service.ts`      | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
-| `worker/commands.ts`     | 各 transport 共用的业务命令                       |
-| `worker/agents.ts`       | Pi API 适配和总管／工兵能力配置                   |
-| `worker/worker-tools.ts` | 工兵消息工具：ask_chief、tell_chief、check_msgs   |
-| `worker/runs.ts`         | Run 状态、attempt、收集、恢复及验收               |
-| `worker/data.ts`         | task、memory、Inbox 操作和更新事件                |
-| `worker/db.ts`           | 业务数据、渠道绑定、通知 outbox、幂等记录         |
-| `worker/scopes.ts`       | scope 目录、notes 和 Inbox 文件导入               |
-| `worker/memory.ts`       | SQLite 记忆、来源与版本、摘要树                   |
-| `worker/dispatch.ts`     | worktree、commit、diff、merge 和 PR 命令          |
+| 模块                      | 职责                                              |
+| ------------------------- | ------------------------------------------------- |
+| `service/server.ts`       | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
+| `service/client.ts`       | 请求、事件、自动重连；关闭客户端不停止服务        |
+| `service/launchd.ts`      | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理 |
+| `desktop/controller.ts`   | App 连接偏好、服务控制及本地升级入口              |
+| `desktop/app-update.ts`   | App 校验、独立替换、启动检查与失败恢复            |
+| `shared/contracts.ts`     | IPC / socket 参数 schema、返回类型和消息合约      |
+| `shared/messages.ts`      | Pi transcript 转换为聊天快照                      |
+| `worker/service.ts`       | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
+| `worker/commands.ts`      | 各 transport 共用的业务命令                       |
+| `worker/agents.ts`        | Pi API 适配和总管／工兵能力配置                   |
+| `worker/worker-tools.ts`  | 工兵消息工具：ask_chief、tell_chief、check_msgs   |
+| `worker/runs.ts`          | Run 状态、attempt、收集、恢复及验收               |
+| `worker/data.ts`          | task、memory、Inbox 操作和更新事件                |
+| `worker/db.ts`            | 业务数据、渠道绑定、通知 outbox、幂等记录         |
+| `worker/scopes.ts`        | scope 目录、notes 和 Inbox 文件导入               |
+| `worker/memory.ts`        | SQLite 记忆、来源与版本、摘要树                   |
+| `worker/events.ts`        | 业务事件与审计日志（`events` 表）                 |
+| `worker/history.ts`       | transcript 与事件的派生全文索引、增量同步与检索   |
+| `worker/tools-history.ts` | 总管检索工具：search_history、read_history        |
+| `worker/dispatch.ts`      | worktree、commit、diff、merge 和 PR 命令          |
 
 总管和工兵共用常驻服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵当前是 Durable 会话，生命周期与桌面客户端独立。
 
@@ -191,13 +194,25 @@ dispatch → queued → running → collecting → done / failed
 
 ## 持久化、恢复与通知
 
-- `tian.db`：项目、会话、渠道绑定、tasks、runs、attempts、Inbox 及已读状态、通知和幂等记录。
+- `tian.db`：项目、会话、渠道绑定、tasks、runs、attempts、Inbox 及已读状态、通知、幂等记录、`events`，以及可重建的 `history_entries` / `history_fts` / `history_cursors`。
 - `pi-session.sqlite`：Pi Durable 会话、任务及 transcript。
 - 文件：memory、notes、Inbox 输入和报告。
 
 只有常驻服务写数据库，前端不是权威来源。服务收到 SIGTERM 后有序关闭；下次启动恢复会话、collector 和原截止时间。恢复遵循工具自己的 replay 策略，不保证任意外部操作恰好一次。
 
 Run 结果与完成通知在同一个业务数据库事务中记录。通知用稳定 `requestId` 提交给总管，再标记 delivered；崩溃后可重投并由 Durable 去重。总管忙时进入 follow-up 队列。两个数据库通过操作 ID 与启动核对衔接，没有跨库原子事务。
+
+## History 与 Event
+
+Pi transcript 是会话内容的唯一来源；`tian.db` 里只有可丢弃重建的派生索引。业务事实（Run 状态变化、Inbox 导入、通知送达等）写入 `events` 表，并索引进同一份全文检索。
+
+- `events`：`id`（尽量由调用派生，重放幂等）、`at`、`type`、`actor`、`scope_id`、`goal_id`、`task_id`、`run_id`、`conversation_id`、`summary`、`payload`。API 只有 `record(event)`（INSERT OR IGNORE）、`get(id)`、`list(filter)`；其他功能直接调用 `record`。
+- `history_entries`：`(conversation_id, entry_id)` 为主键，保存 scope、kind、role、时间与文本。用户输入、助手文本、工具调用（名称 + 截断参数）、工具结果（截断到 2000 字符）都入索引；空内容与 thinking 跳过。事件以 `conversation_id = ''` 存储，引用为 `event:<id>`。
+- `history_fts`：FTS5 `trigram` 分词，中文可直接检索。少于 3 字符的词无法用 trigram 匹配，回退到 `LIKE`；多词查询按 AND 组合。
+- `history_cursors`：每个会话的同步游标（事件用单独的游标），按 entry id 升序分页补齐，因此重启只补新增部分，重复同步不会产生重复行。
+- 同步时机：启动后后台补齐（不阻塞启动）；会话有新输入、watch 推送变化或空闲后延迟补同步；每次检索前对目标 scope 惰性补齐。维护模式下后台同步暂停。
+- 结果按 FTS rank、再按时间倒序排列，去重后按约 1500 token（`ceil(utf8Bytes/3)` 估算）截断。
+- 总管工具：`search_history(query, scope?, since?, until?, limit?)` 默认本会话 scope，`scope: "all"` 检索全部，返回 `[2026-10-11 14:02] conv:12#345 user: …片段…`，无命中返回 `(no matches)`；`read_history(ref, around?)` 展开相邻条目或显示事件。
 
 ## Inbox
 
