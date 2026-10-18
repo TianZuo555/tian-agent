@@ -87,27 +87,27 @@ const goalBadge: Record<
 };
 
 const goalStatusText: Record<GoalStatus, string> = {
-  active: '进行中',
-  paused: '已暂停',
-  blocked: '受阻',
-  completed: '已完成',
-  cancelled: '已取消',
+  active: 'Active',
+  paused: 'Paused',
+  blocked: 'Blocked',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
 };
 
 const taskStatusText: Record<TaskStatus, string> = {
-  pending: '待处理',
-  running: '运行中',
-  waiting_approval: '待审批',
-  blocked: '受阻',
-  failed: '失败',
-  paused: '已暂停',
-  completed: '已完成',
-  cancelled: '已取消',
+  pending: 'Pending',
+  running: 'Running',
+  waiting_approval: 'Waiting approval',
+  blocked: 'Blocked',
+  failed: 'Failed',
+  paused: 'Paused',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
 };
 
 function scheduleLine(nextFireAt: string | null): string {
   if (!nextFireAt) return '';
-  return `下次 ${nextFireAt.slice(5, 16).replace('T', ' ')}`;
+  return `next ${nextFireAt.slice(5, 16).replace('T', ' ')}`;
 }
 
 function GoalForm(props: {
@@ -153,38 +153,39 @@ function GoalForm(props: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{goal ? '编辑目标' : '新目标'}</DialogTitle>
+          <DialogTitle>{goal ? 'Edit goal' : 'New goal'}</DialogTitle>
           <DialogDescription>
-            目标是需要长期达成或维持的结果；总管负责把它拆成任务并汇报进展。
+            A goal is an outcome to reach or keep over time. The chief splits it
+            into tasks and reports progress.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-3">
           <Input
-            placeholder="目标：例如 每天检查 tian-agent 的 CI 状态"
-            aria-label="目标"
+            placeholder="Objective: e.g. check tian-agent CI every morning"
+            aria-label="Objective"
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
             autoFocus
           />
           <Input
-            placeholder="完成标准（可选）：例如 连续 7 天全绿"
-            aria-label="完成标准"
+            placeholder="Success criteria (optional): e.g. green for 7 days"
+            aria-label="Success criteria"
             value={criteria}
             onChange={(e) => setCriteria(e.target.value)}
           />
           <Input
-            placeholder="约束（可选）：例如 只读，不创建 Issue"
-            aria-label="约束"
+            placeholder="Constraints (optional): e.g. read-only, no issues"
+            aria-label="Constraints"
             value={constraints}
             onChange={(e) => setConstraints(e.target.value)}
           />
           <label className="flex items-center gap-2 font-mono text-[10px] text-content-secondary">
-            每日执行上限
+            Daily run budget
             <Input
               type="number"
               min={1}
               max={48}
-              aria-label="每日执行上限"
+              aria-label="Daily run budget"
               value={budget}
               onChange={(e) => setBudget(e.target.value)}
               size="sm"
@@ -193,9 +194,9 @@ function GoalForm(props: {
           </label>
         </DialogPanel>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
           <Button onClick={submit} disabled={!objective.trim()}>
-            {goal ? '保存' : '创建'}
+            {goal ? 'Save' : 'Create'}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -222,7 +223,7 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="删除调度"
+            aria-label="Remove schedule"
             onClick={() => void actions.removeSchedule(s.id)}
           >
             <Trash2 className="size-3" />
@@ -243,13 +244,13 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
           <Input
             value={cron}
             onChange={(e) => setCron(e.target.value)}
-            placeholder="cron 表达式，如 30 9 * * *"
-            aria-label="Cron 表达式"
+            placeholder="cron expression, e.g. 30 9 * * *"
+            aria-label="Cron expression"
             size="sm"
             autoFocus
           />
           <Button type="submit" size="sm" variant="outline">
-            添加
+            Add
           </Button>
           <Button
             type="button"
@@ -257,7 +258,7 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
             variant="ghost"
             onClick={() => setAdding(false)}
           >
-            取消
+            Cancel
           </Button>
         </form>
       ) : (
@@ -267,7 +268,7 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
           className="self-start font-mono text-[10px] text-content-secondary"
           onClick={() => setAdding(true)}
         >
-          <Plus className="size-3" /> 定时唤醒
+          <Plus className="size-3" /> Schedule
         </Button>
       )}
     </div>
@@ -326,8 +327,8 @@ function GoalCard({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="立即执行"
-              title="立即执行"
+              aria-label="Run now"
+              title="Run now"
               onClick={() => void actions.runGoalNow(goal.id)}
             >
               <Play className="size-3.5" />
@@ -335,8 +336,10 @@ function GoalCard({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={goal.status === 'paused' ? '恢复目标' : '暂停目标'}
-              title={goal.status === 'paused' ? '恢复' : '暂停'}
+              aria-label={
+                goal.status === 'paused' ? 'Resume goal' : 'Pause goal'
+              }
+              title={goal.status === 'paused' ? 'Resume' : 'Pause'}
               onClick={() =>
                 void actions.setGoalStatus(
                   goal.id,
@@ -353,8 +356,8 @@ function GoalCard({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="编辑目标"
-              title="编辑"
+              aria-label="Edit goal"
+              title="Edit"
               onClick={() => onEdit(goal)}
             >
               <Pencil className="size-3.5" />
@@ -362,8 +365,8 @@ function GoalCard({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="取消目标"
-              title="取消"
+              aria-label="Cancel goal"
+              title="Cancel"
               onClick={() => void actions.setGoalStatus(goal.id, 'cancelled')}
             >
               <X className="size-3.5" />
@@ -399,7 +402,9 @@ function TaskList({ tasks }: { tasks: TaskItem[] }) {
     items: tasks.filter((t) => t.status === group.key),
   })).filter((g) => g.items.length > 0);
   if (groups.length === 0)
-    return <p className="py-2 text-[12px] text-content-disabled">暂无任务。</p>;
+    return (
+      <p className="py-2 text-[12px] text-content-disabled">No tasks yet.</p>
+    );
   return (
     <div className="flex flex-col gap-5">
       {groups.map((group) => (
@@ -445,7 +450,7 @@ function TaskList({ tasks }: { tasks: TaskItem[] }) {
                           size="sm"
                           className="shrink-0 font-mono"
                         >
-                          目标
+                          Goal
                         </Badge>
                       )}
                     </span>
@@ -504,7 +509,7 @@ export function GoalsView() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="新目标"
+              aria-label="New goal"
               onClick={() => {
                 setEditing(null);
                 setDialogOpen(true);
@@ -541,7 +546,7 @@ export function GoalsView() {
             <Input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="添加待办…"
+              placeholder="Add a task…"
               aria-label="New task"
               size="sm"
             />
@@ -559,7 +564,7 @@ export function GoalsView() {
             <div className="flex flex-col items-center gap-2 py-14 text-center">
               <Target className="size-5 text-content-disabled" />
               <p className="text-[12px] text-content-secondary">
-                还没有目标。创建一个，让总管为你长期跟进。
+                No goals yet. Create one and the chief keeps it moving.
               </p>
               <Button
                 variant="outline"
@@ -569,14 +574,14 @@ export function GoalsView() {
                   setDialogOpen(true);
                 }}
               >
-                新目标
+                New goal
               </Button>
             </div>
           )}
 
           {openGoals.length > 0 && (
-            <section aria-label="进行中的目标" className="mb-8">
-              <SectionLabel label="目标" count={openGoals.length} />
+            <section aria-label="Open goals" className="mb-8">
+              <SectionLabel label="Goals" count={openGoals.length} />
               <ul className="flex flex-col gap-2">
                 <AnimatePresence initial={false}>
                   {openGoals.map((goal) => (
@@ -596,8 +601,8 @@ export function GoalsView() {
           )}
 
           {notices.length > 0 && (
-            <section aria-label="提醒" className="mb-8">
-              <SectionLabel label="提醒" count={notices.length} />
+            <section aria-label="Notices" className="mb-8">
+              <SectionLabel label="Notices" count={notices.length} />
               <ul className="flex flex-col gap-1.5">
                 {notices.slice(0, 10).map((n) => (
                   <li
@@ -631,8 +636,8 @@ export function GoalsView() {
           )}
 
           {closedGoals.length > 0 && (
-            <section aria-label="已结束的目标" className="mb-8">
-              <SectionLabel label="已结束" count={closedGoals.length} />
+            <section aria-label="Closed goals" className="mb-8">
+              <SectionLabel label="Closed" count={closedGoals.length} />
               <ul className="flex flex-col gap-1">
                 {closedGoals.map((goal) => (
                   <li
@@ -652,8 +657,8 @@ export function GoalsView() {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="恢复目标"
-                      title="恢复"
+                      aria-label="Resume goal"
+                      title="Resume"
                       onClick={() =>
                         void actions.setGoalStatus(goal.id, 'active')
                       }

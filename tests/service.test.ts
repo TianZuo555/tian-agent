@@ -353,6 +353,53 @@ test('goal commands round-trip over the socket, including their events', async (
   assert.equal((await app.invoke('listScopes', []))[0].id, 'global');
 });
 
+test('a refused maintenance request leaves the scheduler firing', async (t) => {
+  const f = await fixture(t);
+  const service = f.server.service;
+  const goal = await service.createGoal('global', 'Keep firing', '', '', 3);
+  const due = new Date(Date.now() - 60_000).toISOString();
+  service.goals.insertSchedule({
+    goalId: goal.id,
+    cron: '* * * * *',
+    timezone: 'UTC',
+    nextFireAt: due,
+  });
+  // A running run makes the service refuse to stop for an update.
+  service.db.addRun({
+    id: 'r-busy',
+    projectId: 'p-none',
+    conversationId: null,
+    chiefConversationId: null,
+    agentKind: 'durable-worker',
+    prompt: 'busy',
+    currentPrompt: 'busy',
+    rootPath: '/tmp',
+    baseBranch: 'main',
+    executionMode: 'in-place',
+    worktreePath: null,
+    branch: null,
+    status: 'running',
+    reviewStatus: 'pending',
+    attempt: 1,
+    error: null,
+    prUrl: null,
+    reportPath: null,
+    exitCode: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  assert.equal(service.scheduler.running, true);
+  await assert.rejects(service.beginMaintenance(), /still running/);
+  // The refusal must not silently stop schedules until the next activate().
+  assert.equal(service.scheduler.running, true);
+  assert.equal((await service.activity()).maintenance, false);
+  service.db.patchRun('r-busy', { status: 'done', reviewStatus: 'discarded' });
+  const fired = await service.scheduler.fireDue();
+  assert.equal(fired.length, 1);
+  assert.equal(fired[0].goalId, goal.id);
+});
+
 test(
   'LaunchAgent runs Node from a stable release and automatically restarts at login',
   { skip: process.platform !== 'darwin' },

@@ -237,6 +237,9 @@ export class Service {
     } catch (error) {
       this.maintenanceMode = false;
       await this.startTelegram();
+      // Maintenance was refused (work still running): schedules must keep
+      // firing instead of staying stopped until the next activate().
+      this.scheduler.start();
       throw error;
     }
   }

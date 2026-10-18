@@ -315,12 +315,73 @@ test('the daily cap blocks extra runs and leaves a deduped user notice', async (
   assert.match(notices[0].text, /Watch the deploy/);
   // The blocked task itself does not consume the budget.
   assert.equal(f.db.countGoalTasks(goal.id, '2026-10-05T00:00:00.000Z'), 1);
+  // An over-cap fire must not wake the chief: only the first run has a wake.
+  assert.equal(f.db.pendingNotifications().length, 1);
+  assert.equal(
+    f.db.pendingNotifications().some((n) => n.id === `task:${second.id}`),
+    false,
+  );
 
   // A third fire the same day reuses the one blocked task and stays deduped.
   f.clock.now = new Date(f.clock.now.getTime() + 30 * MINUTE);
   const third = (await f.scheduler.fireDue())[0];
   assert.equal(third.id, second.id);
   assert.equal(f.goals.listNotices(null).length, 1);
+  assert.equal(f.db.pendingNotifications().length, 1);
+});
+
+test('a migrated database still dedupes blocked tasks to one per day', (t) => {
+  // The real user database is a migrated one: dedupe_key arrived by ALTER
+  // TABLE, so uniqueness must come from the index, not the column.
+  const dir = mkdtempSync(join(tmpdir(), 'tian-goals-migrated-'));
+  const legacy = new DatabaseSync(join(dir, 'tian.db'));
+  legacy.exec(`
+    CREATE TABLE tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id TEXT NOT NULL, title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open', due TEXT, created_at TEXT NOT NULL, done_at TEXT
+    );
+  `);
+  legacy.close();
+  const db = new Db(dir);
+  const clock = { now: new Date('2026-10-05T10:00:00.000Z') };
+  const goals = new GoalStore(db);
+  const scheduler = new GoalScheduler({
+    db,
+    goals,
+    ensureGoalConversation: (goalId) => Promise.resolve(`conv-${goalId}`),
+    notify: async () => {},
+    now: () => clock.now,
+  });
+  t.after(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const goal = goals.insertGoal({
+    scopeId: 'global',
+    objective: 'Watch the deploy',
+    maxRunsPerDay: 1,
+  });
+  goals.insertSchedule({
+    goalId: goal.id,
+    cron: '* * * * *',
+    timezone: 'UTC',
+    nextFireAt: clock.now.toISOString(),
+  });
+  return (async () => {
+    await scheduler.fireDue();
+    // Three over-cap fires in a row on a minute cron.
+    for (let i = 0; i < 3; i += 1) {
+      clock.now = new Date(clock.now.getTime() + MINUTE);
+      await scheduler.fireDue();
+    }
+    const blocked = db
+      .listTasks(null)
+      .filter((task) => task.status === 'blocked');
+    assert.equal(blocked.length, 1);
+    assert.equal(db.listTasks(null).length, 2);
+    assert.equal(goals.listNotices(null).length, 1);
+  })();
 });
 
 test('the goal conversation is stable across restarts', async (t) => {
@@ -427,12 +488,17 @@ test('runGoalNow creates a manual agent task and respects pause and the cap', as
   assert.equal(notification.conversationId, `conv-${goal.id}`);
   assert.match(notification.content, /Summarize the week/);
 
-  // A second press the same day hits the cap: blocked, with one notice.
+  // A second press the same day hits the cap: blocked, with one notice and no
+  // wake — the budget must not be bypassed by the very wake it blocks.
   const blocked = await f.scheduler.runGoalNow(goal.id);
   assert.equal(blocked.status, 'blocked');
   assert.equal(blocked.dedupeKey, `cap:${goal.id}:2026-10-05`);
+  const notifications = f.db.pendingNotifications();
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].id, `task:${task.id}`);
   const again = await f.scheduler.runGoalNow(goal.id);
   assert.equal(again.id, blocked.id);
+  assert.equal(f.db.pendingNotifications().length, 1);
   assert.equal(f.goals.listNotices(null).length, 1);
 
   // Paused goals refuse manual runs.
@@ -548,6 +614,43 @@ test('the task tools move a woken task to a recorded outcome', async (t) => {
     await run('complete_task', { task: 999, outcome: 'achieved' }),
     /Unknown task/,
   );
+});
+
+test('the budget day follows the local calendar, not UTC', async (t) => {
+  const f = fixture(t);
+  // 01:00 local on 2026-10-06 — the UTC date is still 2026-10-05 for UTC+X.
+  const local = new Date(2026, 9, 6, 1, 0, 0, 0);
+  f.clock.now = local;
+  const goal = f.goals.insertGoal({
+    scopeId: 'global',
+    objective: 'Early bird check',
+    maxRunsPerDay: 1,
+  });
+  const schedule = f.goals.insertSchedule({
+    goalId: goal.id,
+    cron: '* * * * *',
+    timezone: 'UTC',
+    nextFireAt: local.toISOString(),
+  });
+  await f.scheduler.fireDue();
+  f.clock.now = new Date(local.getTime() + MINUTE);
+  const blocked = (await f.scheduler.fireDue())[0];
+  assert.equal(blocked.status, 'blocked');
+  const localKey = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+  assert.equal(blocked.dedupeKey, `cap:${goal.id}:${localKey}`);
+  assert.equal(
+    f.goals.listNotices(null)[0].fingerprint,
+    `daily-cap:${localKey}`,
+  );
+  // The budget window itself is local midnight, so the first run counted.
+  assert.equal(
+    f.db.countGoalTasks(
+      goal.id,
+      new Date(2026, 9, 6, 0, 0, 0, 0).toISOString(),
+    ),
+    1,
+  );
+  assert.ok(f.goals.getSchedule(schedule.id)!.nextFireAt);
 });
 
 test('schedule parsing validates expressions and computes the first fire', () => {

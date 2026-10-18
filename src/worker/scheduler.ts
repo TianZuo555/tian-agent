@@ -63,6 +63,11 @@ export class GoalScheduler {
     return this.deps.now?.() ?? new Date();
   }
 
+  /** Whether the timer loop is active (started and not stopped). */
+  get running(): boolean {
+    return !this.stopped;
+  }
+
   /** Start (or restart) the timer loop. Safe to call repeatedly. */
   start(): void {
     this.stopped = false;
@@ -166,7 +171,9 @@ export class GoalScheduler {
           now,
         });
       }
-      if (task)
+      if (task && task.status !== 'blocked')
+        // A blocked (over budget) task must not wake the chief: the wake would
+        // bypass the budget and cost a model turn for nothing.
         db.queueNotification({
           id: `task:${task.id}`,
           scopeId: current.scopeId,
@@ -202,12 +209,15 @@ export class GoalScheduler {
         dedupeKey: null,
         now,
       });
-      this.deps.db.queueNotification({
-        id: `task:${created.id}`,
-        scopeId: current.scopeId,
-        conversationId: current.conversationId,
-        content: wakeContent(current, created),
-      });
+      // Over the daily budget the task is blocked: report it in the UI and via
+      // the notice, but do not wake the chief.
+      if (created.status !== 'blocked')
+        this.deps.db.queueNotification({
+          id: `task:${created.id}`,
+          scopeId: current.scopeId,
+          conversationId: current.conversationId,
+          content: wakeContent(current, created),
+        });
       return created;
     });
     this.deps.emitUpdates?.();
@@ -249,7 +259,7 @@ export class GoalScheduler {
       const notice = goals.addNotice(
         goal.id,
         `daily-cap:${dayKey(now)}`,
-        `目标「${goal.objective}」今天的执行次数已达上限（${goal.maxRunsPerDay}），这次唤醒被拦下，明天再继续。`,
+        `Goal "${goal.objective}" already used its ${goal.maxRunsPerDay} run(s) today; this wake was blocked. It resumes tomorrow, or raise the daily budget.`,
         now,
       );
       if (notice.delivered) this.deps.emitNotice?.(notice.notice.scopeId);
@@ -278,8 +288,15 @@ function startOfDay(now: Date): string {
   return day.toISOString();
 }
 
+/**
+ * The local calendar date, matching `startOfDay`'s budget window. Using the
+ * UTC date here would point at yesterday's blocked task between local
+ * midnight and the UTC offset.
+ */
 function dayKey(now: Date): string {
-  return now.toISOString().slice(0, 10);
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
 }
 
 /** The wake text: goal state + this task — never the full history. */

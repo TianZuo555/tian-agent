@@ -138,8 +138,7 @@ export class Db {
       summary: 'TEXT',
       trigger: "TEXT NOT NULL DEFAULT 'manual'",
       trigger_ref: 'TEXT',
-      // ALTER TABLE cannot add a UNIQUE column; creation is guarded in the
-      // insert path (dedupe lookup inside one transaction) for these databases.
+      // UNIQUE comes from the tasks_dedupe_key index created after this call.
       dedupe_key: 'TEXT',
       attempts: 'INTEGER NOT NULL DEFAULT 0',
       max_attempts: 'INTEGER NOT NULL DEFAULT 3',
@@ -159,6 +158,13 @@ export class Db {
       task_id: 'INTEGER',
       deadline_at: "TEXT NOT NULL DEFAULT ''",
     });
+    this.db.exec(`
+      -- A fresh tasks table declares dedupe_key UNIQUE, but migrated databases
+      -- got it through ALTER TABLE, where UNIQUE is not allowed. The index makes
+      -- task creation dedupe work on both shapes (NULLs stay allowed, so plain
+      -- to-dos are unaffected). It must run after ensureColumns added the column.
+      CREATE UNIQUE INDEX IF NOT EXISTS tasks_dedupe_key ON tasks(dedupe_key);
+    `);
     this.db.exec(`
       UPDATE runs SET root_path = COALESCE((SELECT root_path FROM projects WHERE projects.id = runs.project_id), '') WHERE root_path = '';
       UPDATE runs SET current_prompt = prompt WHERE current_prompt = '';
@@ -496,11 +502,15 @@ export class Db {
       value.doneAt,
       value.updatedAt,
     );
-    const id =
-      Number(info.changes) > 0
-        ? Number(info.lastInsertRowid)
-        : this.taskByDedupeKey(value.dedupeKey!)!.id;
-    return this.getTask(id)!;
+    if (Number(info.changes) > 0)
+      return this.getTask(Number(info.lastInsertRowid))!;
+    // The dedupe key already exists: reuse that task instead of creating one.
+    const existing = value.dedupeKey
+      ? this.taskByDedupeKey(value.dedupeKey)
+      : undefined;
+    if (!existing)
+      throw new Error(`Task insert was ignored without a dedupe match`);
+    return existing;
   }
 
   /** Tasks created for a goal since `since` (daily budget accounting). */
