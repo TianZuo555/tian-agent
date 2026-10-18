@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CaretRight,
   ChatCircleDots,
@@ -392,7 +392,10 @@ function ServiceStatus({
         )}
         <span className={`relative size-2 rounded-full ${dot}`} />
       </span>
-      <span className="truncate font-mono text-[10px] text-content-disabled">
+      <span
+        role="status"
+        className="truncate font-mono text-[10px] text-content-disabled"
+      >
         {label}
       </span>
       <Sparkle
@@ -414,6 +417,12 @@ function AddProjectDialog({
 }) {
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
+  const nameRef = useRef<HTMLInputElement>(null);
+  // Move focus once the dialog is inserted; unlike the autoFocus attribute
+  // this also works for content added after first paint.
+  useEffect(() => {
+    if (open) nameRef.current?.focus();
+  }, [open]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="sm:max-w-md">
@@ -441,11 +450,11 @@ function AddProjectDialog({
         >
           <DialogPanel className="grid gap-3">
             <Input
+              ref={nameRef}
               placeholder="Name"
               aria-label="Project name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              autoFocus
             />
             <div className="flex gap-2">
               <Input

@@ -119,10 +119,13 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
               />
               Allow execution in the original directory for non-Git projects
             </label>
-            <label className="grid gap-1.5 text-xs text-muted-foreground">
+            <label
+              className="grid gap-1.5 text-xs text-muted-foreground"
+              htmlFor={`${id}-timeout`}
+            >
               Run timeout (minutes)
               <Input
-                aria-label="Run timeout minutes"
+                id={`${id}-timeout`}
                 type="number"
                 min={1}
                 max={1440}
@@ -131,19 +134,25 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 onChange={(event) => setTimeoutMin(event.target.value)}
               />
             </label>
-            <label className="grid gap-1.5 text-xs text-muted-foreground">
+            <label
+              className="grid gap-1.5 text-xs text-muted-foreground"
+              htmlFor={`${id}-base-branch`}
+            >
               Base branch
               <Input
-                aria-label="Base branch"
+                id={`${id}-base-branch`}
                 required
                 value={baseBranch}
                 onChange={(event) => setBaseBranch(event.target.value)}
               />
             </label>
-            <label className="grid gap-1.5 text-xs text-muted-foreground">
+            <label
+              className="grid gap-1.5 text-xs text-muted-foreground"
+              htmlFor={`${id}-preamble`}
+            >
               Worker instructions
               <Input
-                aria-label="Worker instructions"
+                id={`${id}-preamble`}
                 value={preamble}
                 onChange={(event) => setPreamble(event.target.value)}
               />

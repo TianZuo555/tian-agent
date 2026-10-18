@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import {
   ArrowClockwise,
   ArrowRight,
@@ -429,6 +429,7 @@ function NewEntryDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const id = useId();
   const scopes = useStore((s) => s.scopes);
   const activeScopeId = useStore((s) => s.activeScopeId);
   const [kind, setKind] = useState<ImprovementKind>('issue');
@@ -481,23 +482,24 @@ function NewEntryDialog({
               })}
             </div>
           </fieldset>
-          <label className="flex flex-col gap-1.5">
+          <label className="flex flex-col gap-1.5" htmlFor={`${id}-summary`}>
             <span className="font-medium text-[11px] text-content-secondary">
               Summary
             </span>
             <Input
+              id={`${id}-summary`}
               value={summary}
               maxLength={300}
-              autoFocus
               placeholder="What could be better?"
               onChange={(event) => setSummary(event.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-1.5">
+          <label className="flex flex-col gap-1.5" htmlFor={`${id}-detail`}>
             <span className="font-medium text-[11px] text-content-secondary">
               Detail
             </span>
             <Textarea
+              id={`${id}-detail`}
               value={detail}
               maxLength={20_000}
               placeholder="Reproduction, evidence, or the concrete proposal…"

@@ -53,6 +53,8 @@ export default function MermaidDiagram({
 
   return (
     <div
+      role="img"
+      aria-label="Mermaid diagram"
       className={cn(
         'pele-theme my-3 overflow-hidden rounded-md border border-border bg-code',
         className,

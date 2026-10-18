@@ -282,8 +282,9 @@ export function Shell({
   onContextDraggingChange: (dragging: boolean) => void;
 }) {
   return (
+    // No role="application": it would suppress the screen reader's own
+    // navigation shortcuts for the whole app.
     <div
-      role="application"
       aria-label="Tian Agent"
       className="flex h-screen overflow-hidden bg-background text-foreground"
     >
