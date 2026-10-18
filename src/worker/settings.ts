@@ -43,7 +43,10 @@ export class Settings {
         const saved = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<
           SettingsInfo & { catalog?: MagpieModelInfo[] }
         >;
-        if (typeof saved.model?.modelId === 'string' && saved.model.modelId.trim())
+        if (
+          typeof saved.model?.modelId === 'string' &&
+          saved.model.modelId.trim()
+        )
           this.value = {
             model: {
               provider: MAGPIE_PROVIDER,
@@ -67,7 +70,9 @@ export class Settings {
 
   setModel(model: SettingsInfo['model']): void {
     if (!model.modelId.trim()) throw new Error('Invalid model');
-    this.value = { model: { provider: MAGPIE_PROVIDER, modelId: model.modelId } };
+    this.value = {
+      model: { provider: MAGPIE_PROVIDER, modelId: model.modelId },
+    };
     this.persist();
   }
 
@@ -75,7 +80,8 @@ export class Settings {
   async refreshCatalog(): Promise<ModelCatalog> {
     try {
       const models = await fetchMagpieCatalog();
-      if (models.length === 0) throw new Error('gateway returned no chat models');
+      if (models.length === 0)
+        throw new Error('gateway returned no chat models');
       this.catalog = models;
       if (!models.some((model) => model.id === this.value.model.modelId))
         this.value.model.modelId = models[0].id;
