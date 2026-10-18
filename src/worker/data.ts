@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentMessageRow, Db } from './db.js';
+import type { MemoryActor, MemoryKind, MemoryRow, MergeDue } from './memory.js';
 import type { Scopes } from './scopes.js';
 import type { Emit } from '../shared/types.js';
 
@@ -35,10 +36,51 @@ export class DataService {
     this.emit('tasks', this.db.listTasks(null));
   }
 
-  note(scopeId: string, text: string) {
-    const merge = this.scopes.memory(scopeId).note(text);
+  /** Record a memory; `source: 'user'` means Tian stated it explicitly. */
+  remember(
+    scopeId: string,
+    text: string,
+    options?: {
+      kind?: MemoryKind;
+      source?: 'user' | 'agent';
+      goalId?: string | null;
+      sourceRef?: string | null;
+    },
+  ): { memory: MemoryRow; merge: MergeDue | null } {
+    const source = options?.source ?? 'agent';
+    const result = this.scopes.memory(scopeId).remember({
+      text,
+      kind: options?.kind,
+      sourceType: source,
+      sourceRef: options?.sourceRef ?? null,
+      trustLevel: source === 'user' ? 'user_confirmed' : 'agent_inferred',
+      goalId: options?.goalId ?? null,
+    });
     this.emit('memory', scopeId);
-    return merge;
+    return result;
+  }
+
+  revise(
+    scopeId: string,
+    seq: number,
+    text: string,
+    reason: string,
+    actor: MemoryActor,
+  ) {
+    const result = this.scopes.memory(scopeId).revise(seq, text, reason, actor);
+    this.emit('memory', scopeId);
+    return result;
+  }
+
+  forget(
+    scopeId: string,
+    seq: number,
+    reason: string,
+    actor: MemoryActor,
+  ): MemoryRow {
+    const memory = this.scopes.memory(scopeId).forget(seq, reason, actor);
+    this.emit('memory', scopeId);
+    return memory;
   }
 
   nap(scopeId: string, lo: number, hi: number, summary: string) {

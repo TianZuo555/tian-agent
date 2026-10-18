@@ -17,7 +17,7 @@ export const GLOBAL_SCOPE = 'global';
 /**
  * Scope directory layout (global scope root = <userData>/scopes/global,
  * project scope root = the project's rootPath):
- *   memory/        OptMem-format memory
+ *   memory/        SQLite-backed memory (tian.db) + read-only MEMORY.md export + legacy/
  *   notes/         user-facing markdown
  *   .tian/inbox/   one .md file per message
  *   .tian/runs/    dispatch reports
@@ -67,7 +67,11 @@ export class Scopes {
   memory(scopeId: string): MemoryStore {
     let m = this.memories.get(scopeId);
     if (!m) {
-      m = new MemoryStore(join(this.ensureDirs(scopeId), 'memory'));
+      m = new MemoryStore(
+        this.db,
+        scopeId,
+        join(this.ensureDirs(scopeId), 'memory'),
+      );
       this.memories.set(scopeId, m);
     }
     return m;
