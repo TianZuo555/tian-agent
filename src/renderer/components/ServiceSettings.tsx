@@ -6,7 +6,6 @@ import {
   Power,
   ShieldCheck,
   Stop,
-  Wrench,
 } from '@phosphor-icons/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -66,13 +65,9 @@ function StatusRow({
 
 export function ServiceSettings({ active }: { active: boolean }) {
   const service = useServiceStatus(active);
-  const { status, error, busy } = service;
+  const { status, error } = service;
   return (
-    <section
-      className="grid gap-3 border-border border-t pt-4"
-      aria-label="服务与升级"
-    >
-      <SectionHeader busy={busy} onRefresh={() => void service.run('status')} />
+    <section className="grid gap-3" aria-label="服务与升级">
       <StatusCard status={status} />
       {status?.legacyService && (
         <p className="rounded-lg border border-border-warning/40 bg-warning/8 px-2.5 py-2 text-[11px] text-muted-foreground leading-relaxed">
@@ -104,37 +99,6 @@ export function ServiceSettings({ active }: { active: boolean }) {
 }
 
 type Service = ReturnType<typeof useServiceStatus>;
-
-function SectionHeader({
-  busy,
-  onRefresh,
-}: {
-  busy: boolean;
-  onRefresh: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="flex size-5 items-center justify-center rounded-md bg-secondary text-content-secondary">
-        <Wrench size={11} />
-      </span>
-      <h3 className="font-medium text-[12px]">服务与升级</h3>
-      <Button
-        type="button"
-        size="xs"
-        variant="ghost"
-        className="ml-auto text-content-secondary"
-        disabled={busy}
-        onClick={onRefresh}
-      >
-        <ArrowsClockwise
-          size={11}
-          className={busy ? 'animate-spin' : undefined}
-        />
-        刷新状态
-      </Button>
-    </div>
-  );
-}
 
 function StatusCard({ status }: { status: DesktopStatus | null }) {
   return (
@@ -199,6 +163,20 @@ function ConnectionActions({ service }: { service: Service }) {
   const { status, busy } = service;
   return (
     <div className="flex flex-wrap gap-1.5">
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="text-content-secondary"
+        disabled={busy}
+        onClick={() => void service.run('status')}
+      >
+        <ArrowsClockwise
+          size={12}
+          className={busy ? 'animate-spin' : undefined}
+        />
+        刷新状态
+      </Button>
       <Button
         type="button"
         size="sm"

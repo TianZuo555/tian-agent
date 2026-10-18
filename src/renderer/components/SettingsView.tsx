@@ -310,7 +310,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
   const reduce = useReducedMotion();
   const meta = useMemo(
     () =>
-      `local service · ${catalog?.ok ? 'online' : 'offline'}${
+      `magpie ${catalog?.ok ? 'online' : 'offline'}${
         openImprovements ? ` · ${openImprovements} open` : ''
       }`,
     [catalog?.ok, openImprovements],
@@ -345,10 +345,10 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
         )}
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="@container flex min-h-0 flex-1">
         <nav
           aria-label="Settings sections"
-          className="hidden w-40 shrink-0 flex-col gap-0.5 border-border border-r px-2 py-3 sm:flex"
+          className="hidden w-40 shrink-0 flex-col gap-0.5 border-border border-r px-2 py-3 @[44rem]:flex"
         >
           {SECTIONS.map(({ id, label, icon: SectionIcon }) => (
             <button
@@ -368,7 +368,11 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
           ))}
         </nav>
 
-        <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
+        <ScrollArea
+          className="min-h-0 min-w-0 flex-1"
+          scrollbarGutter
+          scrollFade
+        >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-7 px-5 py-6">
             <ModelSection />
             <UsageSection />
