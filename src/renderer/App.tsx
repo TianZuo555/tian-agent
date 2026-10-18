@@ -113,8 +113,9 @@ const SHORTCUTS: Record<string, () => void> = {
   ',': () => actions.setSettingsOpen(true),
   '1': () => actions.setNav('chat'),
   '2': () => actions.setNav('goals'),
-  '3': () => actions.setNav('inbox'),
-  '4': () => actions.setNav('log'),
+  '3': () => actions.setNav('skills'),
+  '4': () => actions.setNav('inbox'),
+  '5': () => actions.setNav('log'),
 };
 
 /** Global navigation shortcuts; they work from every pane. */

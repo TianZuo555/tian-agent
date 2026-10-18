@@ -21,6 +21,9 @@ const InboxView = lazy(() =>
 const GoalsView = lazy(() =>
   import('./NavViews').then((m) => ({ default: m.GoalsView })),
 );
+const SkillsView = lazy(() =>
+  import('./NavViews').then((m) => ({ default: m.SkillsView })),
+);
 const LogView = lazy(() =>
   import('./LogView').then((m) => ({ default: m.LogView })),
 );
@@ -174,6 +177,10 @@ function MainPane() {
           ) : nav === 'goals' ? (
             <Suspense fallback={null}>
               <GoalsView />
+            </Suspense>
+          ) : nav === 'skills' ? (
+            <Suspense fallback={null}>
+              <SkillsView />
             </Suspense>
           ) : nav === 'log' ? (
             <Suspense fallback={null}>

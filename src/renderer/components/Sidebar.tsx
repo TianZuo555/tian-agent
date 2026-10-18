@@ -4,6 +4,7 @@ import {
   ChatCircleDots,
   ChatCircleText,
   FolderPlus,
+  Lightning,
   MagnifyingGlass,
   Notebook,
   Plus,
@@ -282,15 +283,17 @@ function SidebarBrand() {
   );
 }
 
-/** Chat / Goals / Inbox / Log destinations with their unread and pending badges. */
+/** Chat / Goals / Skills / Inbox / Log destinations with their badges. */
 function PrimaryNav({
   nav,
   pendingTasks,
+  candidates,
   unread,
   openImprovements,
 }: {
-  nav: 'chat' | 'goals' | 'inbox' | 'log';
+  nav: 'chat' | 'goals' | 'skills' | 'inbox' | 'log';
   pendingTasks: number;
+  candidates: number;
   unread: number;
   openImprovements: number;
 }) {
@@ -308,6 +311,13 @@ function PrimaryNav({
         active={nav === 'goals'}
         badge={pendingTasks}
         onClick={() => actions.setNav('goals')}
+      />
+      <NavItem
+        icon={Lightning}
+        label="Skills"
+        active={nav === 'skills'}
+        badge={candidates}
+        onClick={() => actions.setNav('skills')}
       />
       <NavItem
         icon={Tray}
@@ -501,6 +511,7 @@ export function Sidebar() {
   const inbox = useStore((s) => s.inbox);
   const tasks = useStore((s) => s.tasks);
   const improvements = useStore((s) => s.improvements);
+  const skills = useStore((s) => s.skills);
   const runtimeStatus = useStore((s) => s.runtimeStatus);
   const [query, setQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -553,6 +564,7 @@ export function Sidebar() {
       <PrimaryNav
         nav={nav}
         pendingTasks={pendingTasks}
+        candidates={skills.filter((s) => s.status === 'candidate').length}
         unread={unread}
         openImprovements={openImprovements}
       />

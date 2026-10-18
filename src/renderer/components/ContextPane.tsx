@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import {
   ArrowsClockwise,
+  ArrowCounterClockwise,
   CaretDoubleRight,
   CaretRight,
   CheckCircle,
@@ -8,6 +9,7 @@ import {
   CircleNotch,
   FileCode,
   GitMerge,
+  Lightning,
   ListChecks,
   PencilSimple,
   Plus,
@@ -325,6 +327,48 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
             No git branch for this run.
           </div>
         )}
+        <details className="group border-border border-t">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 font-medium font-mono text-[9.5px] text-content-secondary uppercase tracking-[0.1em] transition-colors hover:text-foreground">
+            <CaretRight
+              size={9}
+              className="transition-transform duration-200 group-open:rotate-90"
+            />
+            Skills ({run.injectedSkills?.length ?? 0})
+          </summary>
+          <div className="flex flex-col gap-1 px-3 pb-3">
+            {(run.injectedSkills ?? []).map((ref) => (
+              <div
+                key={ref.id}
+                className="flex items-center gap-2 rounded-md bg-secondary/40 px-2 py-1"
+              >
+                <Lightning
+                  size={10}
+                  weight="fill"
+                  className="shrink-0 text-content-disabled"
+                />
+                <span className="truncate font-mono text-[10px] text-content-secondary">
+                  {ref.name} v{ref.version}
+                </span>
+                {run.status === 'failed' && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    loading={busy === `skill-${ref.id}`}
+                    className="ml-auto h-5 gap-1 px-1.5 font-mono text-[10px] text-content-secondary hover:text-destructive-foreground"
+                    onClick={() =>
+                      act(`skill-${ref.id}`, () =>
+                        actions.skillRollback(ref.id),
+                      )
+                    }
+                  >
+                    <ArrowCounterClockwise size={10} />
+                    Roll back
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
         <details className="group border-border border-t">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 font-medium font-mono text-[9.5px] text-content-secondary uppercase tracking-[0.1em] transition-colors hover:text-foreground">
             <CaretRight

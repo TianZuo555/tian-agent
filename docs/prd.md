@@ -56,7 +56,7 @@
 | Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                              |
 | Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                 |
 | Memory                  | 跨会话保留的事实与经验              | 长期       | 【部分】OptMem 文件，无来源/版本（[ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)）  |
-| Skill                   | 可复用、可验证的工作流程            | 长期       | 【缺失】（M5）                                                                               |
+| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批（M5）                                                    |
 
 约束：
 
@@ -97,7 +97,7 @@
 | Memory Worker         | `worker/memory-worker.ts`（候选提取，确定性启发式）          | 接入模型提取器待问题 6                 |
 | Goal Store            | `worker/db.ts` 的 `tasks`                                    | `goals`、Task 演进（M2）               |
 | Scheduler             | 60 秒 Inbox 扫描定时器                                       | `schedules` + 调度器（M2）             |
-| Skill Registry        | —                                                            | M5                                     |
+| Skill Registry        | `worker/skills.ts`                                           | 按任务语义匹配、模型提取器（M5+）      |
 | Approval Service      | 仅 UI 手动 Land/Ship                                         | `approvals` + 受控操作（M3）           |
 | Frontend              | React 三栏 shell（[ADR 0001](adr/0001-three-pane-shell.md)） | Goal 管理、Task Board、审批（M2–M3）   |
 
@@ -248,13 +248,17 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 ## 6. 自我学习（M5）
 
-### 6.1 F09 — Experience Extraction　P1　【缺失】
+### 6.1 F09 — Experience Extraction　P1　【部分】
+
+现状：Run 完成时由 `SkillRegistry.review` 审查执行轨迹（Run 状态、报告、Attempt、Agent 消息）。默认提取器是确定性规则（`RuleBasedExtractor`）：只有成功完成的 Run 且报告含明确的步骤段落（steps/procedure/workflow 标题，或 ≥3 条连续列表项）才产生候选，并带 `run:<id>:attempt:<n>` 来源引用；失败 Run 不产生候选；重复提取同名同文合并来源而不加版本。提取器是可注入接口，模型提取器留待后续接入。
 
 任务完成后审查执行轨迹（Run 报告、Attempt、Agent 消息），提取成功步骤、失败做法、环境限制、可复用命令。普通 History 不等于经验；证据充分的流程才进入 Skill 候选。
 
-### 6.2 F10 — Self-improving Skills　P2　【缺失】
+### 6.2 F10 — Self-improving Skills　P2　【部分】
 
-Skill 候选、更新、版本、人工审批、按任务匹配加载、测试失败回滚。一次未经验证的成功不得变成全局规则。现有项目设置 `promptPreamble` 是最原始的 Procedural Memory，可作为 Skill 的过渡载体。
+现状：`skills` 表按（scope、name、version）多版本并存，状态机 `candidate → approved → retired / superseded`；批准（approve）、停用（retire）、回滚（rollback）只能是用户经 IPC/UI 触发，记入 `events` 审计。dispatch 时按名称/关键词匹配 approved 版本，注入 Worker 指令（`promptPreamble` 同一注入点），并在 `runs.injected_skills` 留痕；渲染前再次校验状态，未批准的候选绝不进入任何 prompt。加载某版本且失败的 Run 会把该版本标记 `verification = failed`（用户决定是否回滚）；回滚把当前版本置 `retired + failed` 并恢复上一个被取代（superseded）的版本为 approved，版本历史完整保留。一次未经验证的成功不得变成全局规则。现有项目设置 `promptPreamble` 仍是最原始的 Procedural Memory，可作为 Skill 的过渡载体。
+
+待办：按任务语义匹配（当前是名称/关键词）、回滚后的自动重验证、与 Memory Worker 的 Dreaming 联动。设计与取舍见 [ADR 0009](adr/0009-skill-registry-human-approval-gate.md)。
 
 ---
 
@@ -306,18 +310,18 @@ Skill 候选、更新、版本、人工审批、按任务匹配加载、测试�
 
 `tian.db`（服务独占写入）：
 
-| 表                                              | 状态 | 说明                                                    |
-| ----------------------------------------------- | ---- | ------------------------------------------------------- |
-| `projects`、`conversations`、`channel_sessions` | 已有 | Scope、会话与渠道绑定                                   |
-| `tasks`                                         | 演进 | 增加 Goal、负责方、状态机、去重键                       |
-| `runs`、`run_attempts`、`agent_messages`        | 已有 | 增加 `runs.task_id`                                     |
-| `inbox`、`notifications`、`operations`          | 已有 | 通知增加 Goal 目标与去重 fingerprint                    |
-| `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md) |
-| `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                        |
-| `events`                                        | 新增 | 业务事件与审计                                          |
-| `memory_worker_runs`                            | 新增 | Memory Worker 提取轮次审计（触发原因、候选计数）        |
-| `goals`、`schedules`、`approvals`               | 新增 |                                                         |
-| `skills`                                        | M5   |                                                         |
+| 表                                              | 状态 | 说明                                                                                       |
+| ----------------------------------------------- | ---- | ------------------------------------------------------------------------------------------ |
+| `projects`、`conversations`、`channel_sessions` | 已有 | Scope、会话与渠道绑定                                                                      |
+| `tasks`                                         | 演进 | 增加 Goal、负责方、状态机、去重键                                                          |
+| `runs`、`run_attempts`、`agent_messages`        | 已有 | 增加 `runs.task_id`、`runs.injected_skills`                                                |
+| `inbox`、`notifications`、`operations`          | 已有 | 通知增加 Goal 目标与去重 fingerprint                                                       |
+| `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)                                    |
+| `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                                                           |
+| `events`                                        | 新增 | 业务事件与审计                                                                             |
+| `memory_worker_runs`                            | 新增 | Memory Worker 提取轮次审计（触发原因、候选计数）                                           |
+| `goals`、`schedules`、`approvals`               | 新增 |                                                                                            |
+| `skills`                                        | 已有 | M5：多版本、状态机与来源引用（[ADR 0009](adr/0009-skill-registry-human-approval-gate.md)） |
 
 `pi-session.sqlite`：Pi Durable 会话与 transcript，History 的唯一来源。
 

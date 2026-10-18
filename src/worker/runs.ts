@@ -31,6 +31,18 @@ export interface DispatchInput {
   operationId?: string;
 }
 
+/**
+ * Skill matching and experience review (PRD §6.1–6.2), provided by the Skill
+ * Registry; absent = runs carry no skills and are never reviewed.
+ */
+export interface SkillProvider {
+  matchApproved(
+    scopeId: string,
+    taskText: string,
+  ): { id: string; name: string; version: number }[];
+  review(run: RunRow, report: string): void;
+}
+
 /** Owns execution, attempts, review transitions, and recovery of external work. */
 export class RunOrchestrator {
   private locks = new Map<string, Promise<unknown>>();
@@ -48,6 +60,8 @@ export class RunOrchestrator {
     private events?: EventLog,
     /** Automatic issue sink for failures that otherwise only reach the console. */
     private onIssue?: IssueReporter,
+    /** Skill registry; absent = no skill matching, injection, or review. */
+    private skills?: SkillProvider,
   ) {}
 
   private async locked<T>(key: string, action: () => Promise<T>): Promise<T> {
@@ -91,6 +105,10 @@ export class RunOrchestrator {
           'This project is not a Git repository. Explicitly enable in-place execution in project settings first.',
         );
       const startedAt = new Date().toISOString();
+      // Match approved skills once, at dispatch; the run row records exactly
+      // which versions the worker was given (PRD §6.2).
+      const matches =
+        this.skills?.matchApproved(project.id, input.prompt) ?? [];
       const run: RunRow = {
         id,
         projectId: project.id,
@@ -112,6 +130,11 @@ export class RunOrchestrator {
         reportPath: join(this.scopes.runsDir(project.id), `${id}.md`),
         exitCode: null,
         taskId: input.taskId ?? null,
+        injectedSkills: matches.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          version: skill.version,
+        })),
         startedAt,
         finishedAt: null,
         deadlineAt: new Date(
@@ -370,7 +393,18 @@ export class RunOrchestrator {
         eventId: `run:${run.id}:attempt:${run.attempt}:finished`,
       });
     this.changed();
+    this.reviewExperience(this.db.getRun(run.id) ?? run, report);
     await this.notify();
+  }
+
+  /** Experience review is best-effort: it must never fail the run. */
+  private reviewExperience(run: RunRow, report: string): void {
+    if (!this.skills) return;
+    try {
+      this.skills.review(run, report);
+    } catch (error) {
+      console.error(`Experience review ${run.id}:`, error);
+    }
   }
 
   private async fail(run: RunRow, error: unknown): Promise<void> {

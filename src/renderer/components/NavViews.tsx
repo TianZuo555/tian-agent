@@ -1,10 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
+  ArrowCounterClockwise,
   ArrowRight,
   CalendarCheck,
+  CaretRight,
   CheckCircle,
   ChatCircleText,
   Clock,
+  Lightning,
   Pause,
   PencilSimple,
   Play,
@@ -37,6 +40,8 @@ import type {
   GoalItem,
   GoalStatus,
   InboxItem,
+  SkillItem,
+  SkillStatus,
   TaskItem,
   TaskStatus,
 } from '@/shared/types';
@@ -992,6 +997,365 @@ export function InboxView() {
           ) : (
             <InboxList inbox={inbox} reduce={Boolean(reduce)} />
           )}
+        </div>
+      </ScrollArea>
+    </main>
+  );
+}
+
+const skillStatusText: Record<SkillStatus, string> = {
+  candidate: 'Candidate',
+  approved: 'Approved',
+  retired: 'Retired',
+  superseded: 'Superseded',
+};
+
+const skillStatusBadge: Record<
+  SkillStatus,
+  'warning' | 'success' | 'outline' | 'secondary'
+> = {
+  candidate: 'warning',
+  approved: 'success',
+  retired: 'outline',
+  superseded: 'secondary',
+};
+
+/** Experience ≠ Verified Skill: verification is execution evidence, shown as-is. */
+function VerificationBadge({ skill }: { skill: SkillItem }) {
+  if (skill.verification === 'unverified') return null;
+  return (
+    <Badge
+      variant={skill.verification === 'failed' ? 'error' : 'success'}
+      size="sm"
+      className="shrink-0 font-mono"
+    >
+      {skill.verification === 'failed' ? 'failed run' : 'verified'}
+    </Badge>
+  );
+}
+
+interface SkillGroup {
+  scopeId: string;
+  name: string;
+  versions: SkillItem[];
+  latest: SkillItem;
+}
+
+function groupSkills(skills: SkillItem[]): SkillGroup[] {
+  const groups = new Map<string, SkillGroup>();
+  for (const skill of skills) {
+    const key = `${skill.scopeId}\u0000${skill.name}`;
+    const group = groups.get(key) ?? {
+      scopeId: skill.scopeId,
+      name: skill.name,
+      versions: [],
+      latest: skill,
+    };
+    group.versions.push(skill);
+    if (skill.version > group.latest.version) group.latest = skill;
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function SkillVersionRow({ skill }: { skill: SkillItem }) {
+  return (
+    <div className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-secondary">
+      <span className="shrink-0 font-mono text-[10px] text-content-disabled tabular-nums">
+        v{skill.version}
+      </span>
+      <Badge
+        variant={skillStatusBadge[skill.status]}
+        size="sm"
+        className="shrink-0 font-mono"
+      >
+        {skillStatusText[skill.status]}
+      </Badge>
+      <VerificationBadge skill={skill} />
+      <span className="ml-auto shrink-0 truncate font-mono text-[9.5px] text-content-disabled">
+        {skill.sourceRefs.join(' · ')}
+      </span>
+      {skill.status === 'approved' && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Roll back ${skill.name} to the previous version`}
+                className="text-content-secondary hover:text-destructive-foreground"
+                onClick={() => void actions.skillRollback(skill.id)}
+              />
+            }
+          >
+            <ArrowCounterClockwise size={12} />
+          </TooltipTrigger>
+          <TooltipPopup>Roll back</TooltipPopup>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
+function SkillCard({
+  group,
+  scopeName,
+  index,
+  reduce,
+}: {
+  group: SkillGroup;
+  scopeName: string;
+  index: number;
+  reduce: boolean | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const latest = group.latest;
+  return (
+    <motion.li
+      layout={!reduce}
+      initial={reduce ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={reduce ? undefined : { opacity: 0, height: 0 }}
+      transition={{
+        duration: 0.24,
+        ease: EASE,
+        delay: reduce ? 0 : Math.min(index, 8) * 0.03,
+      }}
+      className="card-hover relative overflow-hidden rounded-xl border border-border bg-card px-3.5 py-3"
+    >
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-lg bg-brand/12 text-brand">
+          <Lightning size={12} weight="fill" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-[13px] leading-snug">
+              {group.name}
+            </span>
+            <Badge variant="outline" size="sm" className="shrink-0 font-mono">
+              v{latest.version}
+            </Badge>
+            <Badge
+              variant={skillStatusBadge[latest.status]}
+              size="sm"
+              className="shrink-0 font-mono"
+            >
+              {skillStatusText[latest.status]}
+            </Badge>
+            <VerificationBadge skill={latest} />
+          </div>
+          <p className="mt-1 break-words text-[12px] text-content-secondary leading-snug">
+            {latest.description}
+          </p>
+          <p className="mt-1 truncate font-mono text-[9.5px] text-content-disabled">
+            {scopeName} · updated{' '}
+            {latest.updatedAt.slice(0, 16).replace('T', ' ')}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {latest.status === 'candidate' && (
+            <>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Approve ${group.name}`}
+                      onClick={() => void actions.skillApprove(latest.id)}
+                    />
+                  }
+                >
+                  <CheckCircle
+                    size={14}
+                    weight="fill"
+                    className="text-content-secondary"
+                  />
+                </TooltipTrigger>
+                <TooltipPopup>Approve</TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Dismiss ${group.name}`}
+                      className="hover:text-destructive-foreground"
+                      onClick={() => void actions.skillRetire(latest.id)}
+                    />
+                  }
+                >
+                  <X size={14} />
+                </TooltipTrigger>
+                <TooltipPopup>Dismiss</TooltipPopup>
+              </Tooltip>
+            </>
+          )}
+          {latest.status === 'approved' && (
+            <>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Roll back ${group.name}`}
+                      className="hover:text-destructive-foreground"
+                      onClick={() => void actions.skillRollback(latest.id)}
+                    />
+                  }
+                >
+                  <ArrowCounterClockwise size={14} />
+                </TooltipTrigger>
+                <TooltipPopup>Roll back to the previous version</TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Retire ${group.name}`}
+                      className="hover:text-destructive-foreground"
+                      onClick={() => void actions.skillRetire(latest.id)}
+                    />
+                  }
+                >
+                  <X size={14} />
+                </TooltipTrigger>
+                <TooltipPopup>Retire</TooltipPopup>
+              </Tooltip>
+            </>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="mt-2 flex cursor-pointer items-center gap-1 font-medium font-mono text-[10px] text-content-disabled uppercase tracking-[0.1em] transition-colors hover:text-content-secondary"
+      >
+        <CaretRight
+          size={9}
+          weight="bold"
+          className={`transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+        />
+        History ({group.versions.length})
+      </button>
+      {open && (
+        <div className="mt-1 flex flex-col border-border border-l pl-2">
+          {[...group.versions].reverse().map((skill) => (
+            <SkillVersionRow key={skill.id} skill={skill} />
+          ))}
+        </div>
+      )}
+    </motion.li>
+  );
+}
+
+function SkillSection({
+  label,
+  tone,
+  groups,
+  scopeName,
+  reduce,
+  hint,
+}: {
+  label: string;
+  tone: 'brand' | 'warning' | 'neutral';
+  groups: SkillGroup[];
+  scopeName: (id: string) => string;
+  reduce: boolean | null;
+  hint: string;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <section aria-label={label} className="mb-8">
+      <SectionLabel label={label} count={groups.length} tone={tone} />
+      <p className="mb-2 text-[11.5px] text-content-secondary">{hint}</p>
+      <ul className="flex flex-col gap-2">
+        <AnimatePresence initial={false}>
+          {groups.map((group, i) => (
+            <SkillCard
+              key={`${group.scopeId}\u0000${group.name}`}
+              group={group}
+              scopeName={scopeName(group.scopeId)}
+              index={i}
+              reduce={reduce}
+            />
+          ))}
+        </AnimatePresence>
+      </ul>
+    </section>
+  );
+}
+
+export function SkillsView() {
+  const skills = useStore((s) => s.skills);
+  const scopes = useStore((s) => s.scopes);
+  const reduce = useReducedMotion();
+  const scopeName = (id: string) =>
+    scopes.find((scope) => scope.id === id)?.name ?? id;
+  const groups = useMemo(() => groupSkills(skills), [skills]);
+  const candidates = groups.filter((g) => g.latest.status === 'candidate');
+  const approved = groups.filter((g) => g.latest.status === 'approved');
+  const inactive = groups.filter((g) =>
+    ['retired', 'superseded'].includes(g.latest.status),
+  );
+
+  return (
+    <main
+      aria-label="Skills"
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+    >
+      <Header
+        icon={Lightning}
+        title="Skills"
+        meta={`${approved.length} approved · ${candidates.length} candidates`}
+      />
+      <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
+        <div className="mx-auto w-full max-w-2xl px-5 py-6">
+          {groups.length === 0 && (
+            <div className="relative mx-auto flex max-w-md flex-col items-center gap-4 overflow-hidden rounded-2xl border border-dashed border-border px-6 py-16 text-center">
+              <div className="ambient-glow pointer-events-none absolute inset-0 opacity-50" />
+              <span className="relative flex size-11 items-center justify-center rounded-2xl border border-border bg-card text-content-disabled">
+                <Lightning size={19} weight="duotone" />
+              </span>
+              <div className="relative flex flex-col items-center gap-1">
+                <p className="text-[13px] text-foreground">No skills yet.</p>
+                <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
+                  When a run succeeds with clear steps, the procedure lands here
+                  as a candidate. Nothing reaches a worker before you approve
+                  it.
+                </p>
+              </div>
+            </div>
+          )}
+          <SkillSection
+            label="Candidates"
+            tone="warning"
+            groups={candidates}
+            scopeName={scopeName}
+            reduce={reduce}
+            hint="Extracted from successful runs. Approve to let workers load them, or dismiss."
+          />
+          <SkillSection
+            label="Approved"
+            tone="brand"
+            groups={approved}
+            scopeName={scopeName}
+            reduce={reduce}
+            hint="Injected into matching worker briefs at dispatch. Roll back if a run using a version fails."
+          />
+          <SkillSection
+            label="Retired"
+            tone="neutral"
+            groups={inactive}
+            scopeName={scopeName}
+            reduce={reduce}
+            hint="Kept for the record; retired and superseded versions are never injected."
+          />
         </div>
       </ScrollArea>
     </main>

@@ -17,12 +17,13 @@ import type {
   RunInfo,
   ScopeInfo,
   SettingsInfo,
+  SkillItem,
   TaskItem,
 } from '../shared/types';
 
 export type Tab = 'tasks' | 'memory' | 'inbox' | 'runs';
 /** Primary destination chosen in the left rail. */
-export type Nav = 'chat' | 'goals' | 'inbox' | 'log';
+export type Nav = 'chat' | 'goals' | 'skills' | 'inbox' | 'log';
 export interface State {
   scopes: ScopeInfo[];
   conversations: ConversationInfo[];
@@ -37,6 +38,7 @@ export interface State {
   memory: MemoryDump | null;
   inbox: InboxItem[];
   runs: RunInfo[];
+  skills: SkillItem[];
   settings: SettingsInfo | null;
   catalog: ModelCatalog | null;
   tab: Tab;
@@ -66,6 +68,7 @@ export function createAppStore(api: TianApi) {
     memory: null,
     inbox: [],
     runs: [],
+    skills: [],
     settings: null,
     catalog: null,
     tab: 'tasks',
@@ -109,7 +112,8 @@ export function createAppStore(api: TianApi) {
       | 'improvements'
       | 'memory'
       | 'inbox'
-      | 'runs',
+      | 'runs'
+      | 'skills',
   >(key: K, fetch: () => Promise<State[K]>, scopeId?: string): Promise<void> {
     const version = next(key);
     const generation = lifetime;
@@ -134,6 +138,7 @@ export function createAppStore(api: TianApi) {
         () => api.runList(scopeId === 'global' ? null : scopeId),
         scopeId,
       ),
+      load('skills', () => api.skillList(null)),
     ]);
   }
   async function syncWatch(): Promise<void> {
@@ -282,6 +287,10 @@ export function createAppStore(api: TianApi) {
               load('memory', () => api.memoryDump(scopeId), scopeId),
             );
         }),
+        api.on('skills', (skills) => {
+          next('skills');
+          set({ skills });
+        }),
         api.on('inbox', (scopeId) => {
           if (scopeId === state.activeScopeId)
             void safe(() =>
@@ -417,6 +426,9 @@ export function createAppStore(api: TianApi) {
       safe(() => api.memoryPromote(state.activeScopeId, seq)),
     memoryDismiss: (seq: number) =>
       safe(() => api.memoryDismiss(state.activeScopeId, seq)),
+    skillApprove: (id: string) => safe(() => api.skillApprove(id)),
+    skillRetire: (id: string) => safe(() => api.skillRetire(id, null)),
+    skillRollback: (id: string) => safe(() => api.skillRollback(id, null)),
     createGoal: (
       objective: string,
       successCriteria: string,
