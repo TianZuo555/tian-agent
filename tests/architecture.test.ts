@@ -17,6 +17,7 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { MemoryStore } from '../src/worker/memory';
 import { Db, type RunRow } from '../src/worker/db';
 import { Scopes } from '../src/worker/scopes';
+import { GoalStore } from '../src/worker/goals';
 import { DataService } from '../src/worker/data';
 import { AgentRuntime } from '../src/worker/agents';
 import { Settings } from '../src/worker/settings';
@@ -276,6 +277,10 @@ test('chief and worker capabilities remain separate, including previously contam
     data,
     latestUserEntry: async () => null,
     history: { db: f.db, events, history },
+    goals: new GoalStore(f.db),
+    openGoalConversation: (goalId) => Promise.resolve(`goal-conv-${goalId}`),
+    emitUpdates: () => {},
+    emitNotices: () => {},
     dispatch: (input) => f.runs.dispatch(input),
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),

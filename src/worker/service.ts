@@ -16,6 +16,8 @@ import { AgentRuntime } from './agents.js';
 import { RunOrchestrator, type DispatchInput } from './runs.js';
 import { EventLog } from './events.js';
 import { HistoryIndex } from './history.js';
+import { GoalStore } from './goals.js';
+import { GoalScheduler, parseCron } from './scheduler.js';
 import { chiefExtension } from './tools.js';
 import { workerExtension } from './worker-tools.js';
 import {
@@ -26,11 +28,14 @@ import {
 import { toRows, type ConversationView } from '../shared/messages.js';
 import type {
   Emit,
+  GoalPatch,
+  GoalStatus,
   ProjectPatch,
   ScopeInfo,
   SettingsInfo,
   SessionBinding,
   ConversationInfo,
+  TaskItem,
 } from '../shared/types.js';
 
 /** Application composition and conversation/project operations; owned by one resident service. */
@@ -41,6 +46,8 @@ export class Service {
   readonly runs: RunOrchestrator;
   readonly events: EventLog;
   readonly history: HistoryIndex;
+  readonly goals: GoalStore;
+  readonly scheduler: GoalScheduler;
   private telegram: TelegramAdapter | null = null;
   private agents: AgentRuntime;
   private settings: Settings;
@@ -92,6 +99,18 @@ export class Service {
       () => this.deliverNotifications(),
       this.events,
     );
+    this.goals = new GoalStore(this.db);
+    this.scheduler = new GoalScheduler({
+      db: this.db,
+      goals: this.goals,
+      ensureGoalConversation: (goalId, scopeId) =>
+        this.ensureGoalConversation(goalId, scopeId),
+      notify: () => this.deliverNotifications(),
+      isPaused: () => this.closing || this.maintenanceMode,
+      emitUpdates: () => this.emitUpdates(),
+      emitNotice: (scopeId) =>
+        this.emit('notices', this.goals.listNotices(scopeId)),
+    });
   }
 
   async init(maintenance = false): Promise<void> {
@@ -103,6 +122,12 @@ export class Service {
         data: this.data,
         latestUserEntry: (conversationId) =>
           this.latestUserEntry(conversationId),
+        goals: this.goals,
+        openGoalConversation: (goalId, scopeId) =>
+          this.ensureGoalConversation(goalId, scopeId),
+        emitUpdates: () => this.emitUpdates(),
+        emitNotices: (scopeId) =>
+          this.emit('notices', this.goals.listNotices(scopeId)),
         dispatch: (input) => this.runs.dispatch(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
@@ -146,6 +171,7 @@ export class Service {
     this.historyBackfill = this.history
       .syncAll()
       .catch((error) => console.error('History backfill:', error));
+    this.scheduler.start();
     for (const scope of this.listScopes()) {
       this.watchInbox(scope.id);
       this.scanInbox(scope.id);
@@ -190,6 +216,7 @@ export class Service {
   }
   async beginMaintenance() {
     this.maintenanceMode = true;
+    this.scheduler.stop();
     try {
       // Stop the gateway before the idle check: its internal submits bypass the
       // server's maintenance gate, so a message accepted after the check would
@@ -223,6 +250,7 @@ export class Service {
     if (this.closing) return;
     this.closing = true;
     this.runs.pause();
+    this.scheduler.stop();
     clearInterval(this.maintenance);
     await this.telegram?.stop();
     for (const timer of this.inboxTimers.values()) clearTimeout(timer);
@@ -621,6 +649,85 @@ export class Service {
   }
   taskList(scopeId: string | null) {
     return this.db.listTasks(scopeId);
+  }
+
+  /** The goal's dedicated chief conversation, created once per goal. */
+  private async ensureGoalConversation(
+    goalId: string,
+    scopeId: string,
+  ): Promise<string> {
+    const conversation = await this.openSession({
+      channel: 'goal',
+      externalId: goalId,
+      scopeId,
+    });
+    this.goals.setGoalConversation(goalId, conversation.conversationId);
+    return conversation.conversationId;
+  }
+
+  private emitUpdates(): void {
+    this.emit('tasks', this.db.listTasks(null));
+    this.emit('goals', this.goals.listGoals(null));
+  }
+
+  goalList(scopeId: string | null) {
+    return this.goals.listGoals(scopeId);
+  }
+  noticeList(scopeId: string | null) {
+    return this.goals.listNotices(scopeId);
+  }
+  async createGoal(
+    scopeId: string,
+    objective: string,
+    successCriteria: string,
+    constraints: string,
+    maxRunsPerDay: number,
+  ) {
+    this.scopes.root(scopeId);
+    if (!objective.trim()) throw new Error('Goal objective cannot be empty');
+    const goal = this.goals.insertGoal({
+      scopeId,
+      objective,
+      successCriteria,
+      constraints,
+      maxRunsPerDay,
+    });
+    await this.ensureGoalConversation(goal.id, scopeId);
+    this.emitUpdates();
+    return this.goals.getGoal(goal.id)!;
+  }
+  updateGoal(id: string, patch: GoalPatch) {
+    const goal = this.goals.updateGoal(id, patch);
+    this.emitUpdates();
+    return goal;
+  }
+  setGoalStatus(id: string, status: GoalStatus) {
+    const goal = this.goals.setGoalStatus(id, status);
+    this.emitUpdates();
+    return goal;
+  }
+  runGoalNow(id: string): Promise<TaskItem> {
+    return this.scheduler.runGoalNow(id);
+  }
+  addSchedule(goalId: string, cron: string, timezone: string | null) {
+    if (!this.goals.getGoal(goalId)) throw new Error(`Unknown goal: ${goalId}`);
+    const tz = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const { nextFireAt } = parseCron(cron, tz, new Date());
+    this.goals.insertSchedule({
+      goalId,
+      cron: cron.trim(),
+      timezone: tz,
+      nextFireAt: nextFireAt?.toISOString() ?? null,
+    });
+    this.emitUpdates();
+    return this.goals.getGoal(goalId)!;
+  }
+  removeSchedule(scheduleId: string) {
+    const schedule = this.goals.getSchedule(scheduleId);
+    if (!schedule) throw new Error(`Unknown schedule: ${scheduleId}`);
+    this.goals.removeSchedule(scheduleId);
+    this.emitUpdates();
+    return this.goals.getGoal(schedule.goalId)!;
   }
   addTaskItem(scopeId: string, title: string, due: string | null) {
     return this.data.addTask(scopeId, title, due);

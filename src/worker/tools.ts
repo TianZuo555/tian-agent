@@ -16,11 +16,20 @@ import {
   toolText as text,
 } from './tools-memory.js';
 import { historyTools, type HistoryDeps } from './tools-history.js';
+import type { GoalStore } from './goals.js';
+import { goalsTools } from './tools-goals.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
   db: Db;
   data: DataService;
+  goals: GoalStore;
+  /** Open (or reuse) a goal's dedicated chief conversation. */
+  openGoalConversation: (goalId: string, scopeId: string) => Promise<string>;
+  /** Push task/goal updates to clients after chief tool writes. */
+  emitUpdates: () => void;
+  /** Push the notices panel update for a scope. */
+  emitNotices: (scopeId: string) => void;
   runReport: (id: string) => string;
   runDiff: (id: string) => Promise<string>;
   /** Dispatch a headless worker run; resolves once the run is queued. */
@@ -51,6 +60,15 @@ export interface ChiefDeps {
  */
 export function chiefExtension(deps: ChiefDeps) {
   const { scopes, db, data } = deps;
+  const goalTools = goalsTools({
+    db,
+    goals: deps.goals,
+    openGoalConversation: deps.openGoalConversation,
+    resolveScope: (conversationId, param) =>
+      resolveScope(deps, conversationId, param),
+    emitUpdates: deps.emitUpdates,
+    emitNotice: deps.emitNotices,
+  });
 
   const preamble = section(
     'preamble',
@@ -65,7 +83,7 @@ MEMORY. Your memory outlives every session — without it you do not know who Ti
 - If a compression is due, do it immediately: call nap with the range and a one-line summary before anything else.
 - You are the only writer of memory. Dispatched workers read only the exported memory/MEMORY.md and never write memory.
 
-WORLD. <state> shows unread inbox, open tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox.
+WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each belongs to a scope with success criteria, constraints, a current state and a next action, and gets its own conversation (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. dispatch(project, prompt, task) records code work on a task id from <state>.
 
 DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to check progress; Tian can also follow up, land, ship or discard a run from the UI.
 
@@ -139,11 +157,31 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
             `  [${m.ts}] ${m.from}: ${m.body.split('\n')[0].slice(0, 140)}`,
           );
       }
-      const tasks = db.listTasks(scope, 'open');
+      const goals = deps.goals
+        .listGoals(scope)
+        .filter((g) => g.status === 'active');
+      if (goals.length > 0) {
+        lines.push(`active goals (${goals.length}):`);
+        for (const g of goals.slice(0, 10)) {
+          const schedule = g.schedules[0];
+          lines.push(
+            `  ${g.id} ${g.objective}${g.nextAction ? ` — next: ${g.nextAction}` : ''}${schedule?.enabled ? ` (cron ${schedule.cron})` : ''}`,
+          );
+        }
+      }
+      const tasks = db
+        .listTasks(scope)
+        .filter((t) =>
+          ['pending', 'running', 'waiting_approval', 'blocked'].includes(
+            t.status,
+          ),
+        );
       if (tasks.length > 0) {
-        lines.push(`open tasks (${tasks.length}):`);
+        lines.push(`tasks (${tasks.length}):`);
         for (const t of tasks.slice(0, 10))
-          lines.push(`  #${t.id} ${t.title}${t.due ? ` (due ${t.due})` : ''}`);
+          lines.push(
+            `  #${t.id} [${t.status}] ${t.title}${t.due ? ` (due ${t.due})` : ''}${t.goalId ? ` [goal ${t.goalId}]` : ''}`,
+          );
       }
       const running = db
         .listRuns(scope)
@@ -593,6 +631,7 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
       sendRunMsg,
       listRunMsgs,
       ...historyTools(deps.history),
+      ...goalTools,
     ],
   });
 }

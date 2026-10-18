@@ -25,6 +25,7 @@ import { AgentRuntime } from '../src/worker/agents';
 import { EventLog } from '../src/worker/events';
 import { HistoryIndex, type HistoryRow } from '../src/worker/history';
 import { chiefExtension } from '../src/worker/tools';
+import { GoalStore } from '../src/worker/goals';
 import { workerExtension } from '../src/worker/worker-tools';
 import { ResidentServer } from '../src/service/server';
 import { ServiceClient } from '../src/service/client';
@@ -128,6 +129,10 @@ async function harness(t: TestContext): Promise<Harness> {
     data,
     latestUserEntry: async () => null,
     history: { db, events, history },
+    goals: new GoalStore(db),
+    openGoalConversation: (goalId) => Promise.resolve(`goal-conv-${goalId}`),
+    emitUpdates: () => {},
+    emitNotices: () => {},
     dispatch: () => Promise.reject(new Error('not used here')),
     runReport: () => '',
     runDiff: () => Promise.resolve(''),

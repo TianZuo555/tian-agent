@@ -3,7 +3,6 @@ import type { Db } from './db.js';
 import type { GoalStore } from './goals.js';
 import type {
   GoalItem,
-  NoticeItem,
   ScheduleItem,
   TaskItem,
 } from '../shared/types.js';
@@ -48,7 +47,8 @@ export interface SchedulerDeps {
   isPaused?: () => boolean;
   /** Push task/goal/notice updates to clients. */
   emitUpdates?: () => void;
-  emitNotice?: (notice: NoticeItem) => void;
+  /** Refresh the notices panel of the scope a new notice belongs to. */
+  emitNotice?: (scopeId: string) => void;
 }
 
 /**
@@ -252,7 +252,7 @@ export class GoalScheduler {
         `目标「${goal.objective}」今天的执行次数已达上限（${goal.maxRunsPerDay}），这次唤醒被拦下，明天再继续。`,
         now,
       );
-      if (notice.delivered) this.deps.emitNotice?.(notice.notice);
+      if (notice.delivered) this.deps.emitNotice?.(notice.notice.scopeId);
       return task;
     }
     return db.insertTask({
