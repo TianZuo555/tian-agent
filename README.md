@@ -65,23 +65,23 @@ LaunchAgent 保存安装时 Node 的绝对路径与 PATH。更换或删除该 No
 - **Main**：管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库。
 - **常驻服务**：唯一持有应用数据库和 Pi storage，执行模型、工具、Inbox、通知和 Run。客户端重连后重新获取快照及订阅。
 
-| 模块                  | 职责                                              |
-| --------------------- | ------------------------------------------------- |
-| `service/server.ts`   | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
-| `service/client.ts`   | 请求、事件、自动重连；关闭客户端不停止服务        |
-| `service/launchd.ts`  | 安装、启动、停止及移除 LaunchAgent                |
-| `shared/contracts.ts` | IPC / socket 参数 schema、返回类型和消息合约      |
-| `shared/messages.ts`  | Pi transcript 转换为聊天快照                      |
-| `worker/service.ts`   | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
-| `worker/commands.ts`  | 各 transport 共用的业务命令                       |
-| `worker/agents.ts`    | Pi API 适配和总管／工兵能力配置                   |
-| `worker/worker-tools.ts` | 工兵消息工具：ask_chief、tell_chief、check_msgs |
-| `worker/runs.ts`      | Run 状态、attempt、收集、恢复及验收               |
-| `worker/data.ts`      | task、memory、Inbox 操作和更新事件                |
-| `worker/db.ts`        | 业务数据、渠道绑定、通知 outbox、幂等记录         |
-| `worker/scopes.ts`    | scope 目录、notes 和 Inbox 文件导入               |
-| `worker/memory.ts`    | 文件记忆与摘要树                                  |
-| `worker/dispatch.ts`  | worktree、commit、diff、merge 和 PR 命令          |
+| 模块                     | 职责                                              |
+| ------------------------ | ------------------------------------------------- |
+| `service/server.ts`      | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
+| `service/client.ts`      | 请求、事件、自动重连；关闭客户端不停止服务        |
+| `service/launchd.ts`     | 安装、启动、停止及移除 LaunchAgent                |
+| `shared/contracts.ts`    | IPC / socket 参数 schema、返回类型和消息合约      |
+| `shared/messages.ts`     | Pi transcript 转换为聊天快照                      |
+| `worker/service.ts`      | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
+| `worker/commands.ts`     | 各 transport 共用的业务命令                       |
+| `worker/agents.ts`       | Pi API 适配和总管／工兵能力配置                   |
+| `worker/worker-tools.ts` | 工兵消息工具：ask_chief、tell_chief、check_msgs   |
+| `worker/runs.ts`         | Run 状态、attempt、收集、恢复及验收               |
+| `worker/data.ts`         | task、memory、Inbox 操作和更新事件                |
+| `worker/db.ts`           | 业务数据、渠道绑定、通知 outbox、幂等记录         |
+| `worker/scopes.ts`       | scope 目录、notes 和 Inbox 文件导入               |
+| `worker/memory.ts`       | 文件记忆与摘要树                                  |
+| `worker/dispatch.ts`     | worktree、commit、diff、merge 和 PR 命令          |
 
 总管和工兵共用常驻服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵当前是 Durable 会话，生命周期与桌面客户端独立。
 

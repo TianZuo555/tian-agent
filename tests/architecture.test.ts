@@ -340,9 +340,9 @@ test('chief and worker capabilities remain separate, including previously contam
       'write',
     ]);
     // The chief keeps its narrow envelope: no coding, no worker messaging.
-    const chiefNames = (
-      await restored.agent(BACKGROUND_CONTEXT)
-    ).tools.map((tool) => tool.name);
+    const chiefNames = (await restored.agent(BACKGROUND_CONTEXT)).tools.map(
+      (tool) => tool.name,
+    );
     assert.ok(chiefNames.includes('send_run_msg'));
     assert.ok(!chiefNames.includes('ask_chief'));
     assert.ok(!chiefNames.includes('bash'));
