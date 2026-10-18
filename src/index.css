@@ -431,6 +431,23 @@ body {
   [data-slot='combobox-input-group']::before {
     box-shadow: none !important;
   }
+  /*
+    Pele diagrams theme through these variables, so light/dark switches apply
+    without re-rendering — the whole point of using it over Mermaid.js.
+  */
+  .pele-theme {
+    --pele-bg: transparent;
+    --pele-fg: hsl(var(--content-primary));
+    --pele-muted: hsl(var(--content-secondary));
+    --pele-line: hsl(var(--content-secondary));
+    --pele-surface: hsl(var(--surface-secondary));
+    --pele-surface-alt: hsl(var(--surface-tertiary));
+    --pele-border: hsl(var(--border-default));
+    --pele-accent: hsl(var(--content-link));
+    --pele-font: var(--font-sans);
+    --pele-font-mono: var(--font-mono);
+    --pele-radius: 6px;
+  }
   /* Pierre diffs inherit the app's typography instead of their own defaults. */
   diffs-container {
     --diffs-font-family: var(--font-mono);

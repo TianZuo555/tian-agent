@@ -7,10 +7,13 @@ import {
   PanelRightOpen,
   Sparkles,
 } from 'lucide-react';
-import { Streamdown } from 'streamdown';
+import { lazy, Suspense } from 'react';
+import { defaultComponents, Streamdown } from 'streamdown';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChatComposer } from './ChatComposer';
+// Pele adds ~400 KB; load it only when a diagram actually shows up.
+const MermaidDiagram = lazy(() => import('./MermaidDiagram'));
 import { MessageIn, Reveal } from './motion-primitives';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
@@ -171,6 +174,30 @@ function AssistantBubble({ row }: { row: MessageRow }) {
             isAnimating={Boolean(row.streaming)}
             caret="circle"
             controls={{ code: { copy: true }, table: { copy: true } }}
+            components={{
+              pre: (props) => {
+                const child = Array.isArray(props.children)
+                  ? props.children[0]
+                  : props.children;
+                const language = (
+                  (child as { props?: { className?: string } })?.props
+                    ?.className ?? ''
+                ).match(/language-([\w-]+)/)?.[1];
+                if (language !== 'mermaid') {
+                  const Fallback = defaultComponents.pre;
+                  return <Fallback {...props} />;
+                }
+                const source = String(
+                  (child as { props?: { children?: unknown } })?.props
+                    ?.children ?? '',
+                ).replace(/\n$/, '');
+                return (
+                  <Suspense fallback={null}>
+                    <MermaidDiagram source={source} />
+                  </Suspense>
+                );
+              },
+            }}
           >
             {row.text}
           </Streamdown>
