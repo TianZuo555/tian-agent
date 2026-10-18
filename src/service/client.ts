@@ -13,6 +13,8 @@ const channels = new Set<keyof AppEvents>([
   'view',
   'conversations',
   'tasks',
+  'goals',
+  'notices',
   'runs',
   'inbox',
   'memory',

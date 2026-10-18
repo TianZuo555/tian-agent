@@ -317,6 +317,42 @@ test('service restart restores sessions and memory; existing clients reconnect',
   }
 });
 
+test('goal commands round-trip over the socket, including their events', async (t) => {
+  const f = await fixture(t);
+  const events: string[] = [];
+  const app = f.client((channel) => events.push(channel));
+  await app.start();
+  const goal = await app.invoke('createGoal', [
+    'global',
+    'Ship wave 1',
+    'tests green',
+    'no push',
+    2,
+  ]);
+  assert.equal(goal.status, 'active');
+  assert.ok(goal.conversationId);
+  const scheduled = await app.invoke('addSchedule', [
+    goal.id,
+    '*/5 * * * *',
+    'UTC',
+  ]);
+  assert.equal(scheduled.schedules.length, 1);
+  const run = await app.invoke('runGoalNow', [goal.id]);
+  assert.equal(run.trigger, 'manual');
+  assert.equal(run.owner, 'agent');
+  assert.equal((await app.invoke('listGoals', ['global'])).length, 1);
+  assert.deepEqual(await app.invoke('listNotices', ['global']), []);
+  assert.equal((await app.invoke('listTasks', ['global'])).length, 1);
+  await app.invoke('setGoalStatus', [goal.id, 'paused']);
+  const removed = await app.invoke('removeSchedule', [
+    scheduled.schedules[0].id,
+  ]);
+  assert.equal(removed.schedules.length, 0);
+  // Goal and notice events must reach the client without breaking the socket.
+  assert.ok(events.includes('goals'));
+  assert.equal((await app.invoke('listScopes', []))[0].id, 'global');
+});
+
 test(
   'LaunchAgent runs Node from a stable release and automatically restarts at login',
   { skip: process.platform !== 'darwin' },
