@@ -50,8 +50,14 @@ function createWindow(): void {
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', (event) => {
-    event.preventDefault();
+  // The dev server reloads its own page after re-optimizing dependencies, so
+  // only navigations that leave the application are blocked.
+  window.webContents.on('will-navigate', (event, url) => {
+    if (
+      !MAIN_WINDOW_VITE_DEV_SERVER_URL ||
+      new URL(url).origin !== new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
+    )
+      event.preventDefault();
   });
   const clientId = window.webContents.id;
   window.webContents.once('destroyed', () => runtime?.releaseClient(clientId));
