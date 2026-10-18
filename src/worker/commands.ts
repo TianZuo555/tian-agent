@@ -29,5 +29,7 @@ export const commandHandlers = (service: Service, clientId: number) =>
     shipRun: (id) => service.shipRun(id),
     getSettings: () => service.getSettings(),
     setModel: (model) => service.setModel(model),
+    modelCatalog: () => service.getModelCatalog(),
+    refreshModels: () => service.refreshModels(),
     usageStats: (scopeId) => service.usageStats(scopeId),
   }) satisfies Handlers;

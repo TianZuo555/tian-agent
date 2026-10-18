@@ -17,6 +17,7 @@ import type { WorkerConversation, WorkerRuntime } from './runs.js';
 /** The only adapter that knows Pi's conversation and submission APIs. */
 export class AgentRuntime implements WorkerRuntime {
   harness!: Harness;
+  private models: ReturnType<Settings['models']> | undefined;
   private chief!: Extension;
   private worker!: Extension;
   constructor(
@@ -26,6 +27,17 @@ export class AgentRuntime implements WorkerRuntime {
     private db: Db,
   ) {}
 
+  /**
+   * Swap in a fresh provider after the model catalog was refreshed. The Models
+   * instance is shared with the open Harness, so replacing the provider is
+   * enough — no need to reopen storage.
+   */
+  refreshModels(): void {
+    if (!this.models) return;
+    for (const provider of this.settings.models().getProviders())
+      this.models.setProvider(provider);
+  }
+
   async open(chief: Extension, worker: Extension): Promise<void> {
     this.chief = chief;
     this.worker = worker;
@@ -33,10 +45,11 @@ export class AgentRuntime implements WorkerRuntime {
     registry.install(chief);
     registry.install(worker);
     registry.install(CodingTools);
+    this.models = this.settings.models();
     this.harness = await Harness.open(
       await openNodeSqliteStorage(join(this.userDataDir, 'pi-session.sqlite')),
       {
-        models: this.settings.models(),
+        models: this.models,
         registry,
         settings: { extensions: [chief], toolExecution: 'sequential' },
         env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? this.globalDir }),

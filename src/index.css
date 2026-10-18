@@ -1,8 +1,12 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/inter';
+@import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
+@import 'streamdown/styles.css';
 
-@custom-variant dark (&:is(.dark *));
+/* Streamdown ships Tailwind classes inside its dist bundle. */
+@source '../node_modules/streamdown/dist/*.js';
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
 
 html,
 body,
@@ -11,8 +15,43 @@ body,
   margin: 0;
 }
 
+html {
+  color-scheme: light dark;
+}
+
 body {
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: hsl(var(--content-link) / 28%);
+}
+
+/* Quiet, inset scrollbars that stay out of the way of content. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--surface-quaternary)) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: hsl(var(--surface-quaternary));
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--surface-control));
 }
 
 @theme inline {
@@ -25,9 +64,50 @@ body {
   --animate-toast-error-odd: toast-error-odd 0.28s cubic-bezier(0.5, 1, 0.89, 1);
   --animate-toast-error-even: toast-error-even 0.28s
     cubic-bezier(0.5, 1, 0.89, 1);
-  --font-heading: 'Inter', sans-serif;
-  --font-mono: 'Geist Mono', monospace;
-  --font-sans: 'Inter', sans-serif;
+
+  --font-heading: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', monospace;
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+
+  /* Coder type ramp: dense UI sizes are medium weight by default. */
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-xs--font-weight: 500;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+  --text-sm--font-weight: 500;
+
+  /* Coder semantic content + surface scale, usable directly in class names. */
+  --color-content-primary: hsl(var(--content-primary));
+  --color-content-secondary: hsl(var(--content-secondary));
+  --color-content-disabled: hsl(var(--content-disabled));
+  --color-content-invert: hsl(var(--content-invert));
+  --color-content-link: hsl(var(--content-link));
+  --color-content-success: hsl(var(--content-success));
+  --color-content-warning: hsl(var(--content-warning));
+  --color-content-destructive: hsl(var(--content-destructive));
+  --color-surface-primary: hsl(var(--surface-primary));
+  --color-surface-secondary: hsl(var(--surface-secondary));
+  --color-surface-tertiary: hsl(var(--surface-tertiary));
+  --color-surface-quaternary: hsl(var(--surface-quaternary));
+  --color-surface-control: hsl(var(--surface-control));
+  --color-surface-invert-primary: hsl(var(--surface-invert-primary));
+  --color-surface-invert-secondary: hsl(var(--surface-invert-secondary));
+  --color-surface-destructive: hsl(var(--surface-destructive));
+  --color-surface-green: hsl(var(--surface-green));
+  --color-surface-git-added: hsl(var(--surface-git-added));
+  --color-surface-git-deleted: hsl(var(--surface-git-deleted));
+  --color-border-default: hsl(var(--border-default));
+  --color-border-secondary: hsl(var(--border-secondary));
+  --color-border-control: hsl(var(--border-control));
+  --color-border-destructive: hsl(var(--border-destructive));
+  --color-border-success: hsl(var(--border-success));
+  --color-border-warning: hsl(var(--border-warning));
+  --color-git-added: hsl(var(--git-added));
+  --color-git-deleted: hsl(var(--git-deleted));
+
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -69,13 +149,14 @@ body {
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
   --color-destructive-foreground: var(--destructive-foreground);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-xl: calc(var(--radius) * 1.5);
+  --radius-2xl: calc(var(--radius) * 2);
+  --radius-3xl: calc(var(--radius) * 2.5);
+  --radius-4xl: calc(var(--radius) * 3);
   @keyframes skeleton {
     to {
       background-position: -200% 0;
@@ -156,121 +237,168 @@ body {
   }
 }
 
+/*
+  Coder's token model: semantic surfaces/content/borders defined as raw HSL
+  channels, then exposed to Tailwind as real color values. Keeping the channels
+  separate lets any surface take an alpha suffix (`/50`) without a second token.
+*/
 :root {
-  --destructive-foreground: var(--color-red-700);
-  --info: var(--color-blue-500);
-  --info-foreground: var(--color-blue-700);
-  --success: var(--color-emerald-500);
-  --success-foreground: var(--color-emerald-700);
-  --warning: var(--color-amber-500);
-  --warning-foreground: var(--color-amber-700);
-  --accent: --alpha(var(--color-black) / 4%);
-  --accent-foreground: var(--color-neutral-800);
-  --background: var(--color-white);
-  --border: --alpha(var(--color-black) / 8%);
-  --card: var(--color-white);
-  --card-foreground: var(--color-neutral-800);
-  --destructive: var(--color-red-500);
-  --foreground: var(--color-neutral-800);
-  --input: --alpha(var(--color-black) / 10%);
-  --muted: --alpha(var(--color-black) / 4%);
-  --muted-foreground: color-mix(
-    in srgb,
-    var(--color-neutral-500) 90%,
-    var(--color-black)
-  );
-  --popover: var(--color-white);
-  --popover-foreground: var(--color-neutral-800);
-  --primary: var(--color-neutral-800);
-  --primary-foreground: var(--color-neutral-50);
-  --ring: var(--color-neutral-400);
-  --secondary: --alpha(var(--color-black) / 4%);
-  --secondary-foreground: var(--color-neutral-800);
-  --chart-1: var(--color-orange-600);
-  --chart-2: var(--color-teal-600);
-  --chart-3: var(--color-cyan-900);
-  --chart-4: var(--color-amber-400);
-  --chart-5: var(--color-amber-500);
-  --code: var(--color-white);
-  --code-foreground: var(--foreground);
-  --code-highlight: --alpha(var(--color-black) / 4%);
-  --radius: 0.625rem;
-  --sidebar: var(--color-neutral-50);
-  --sidebar-accent: --alpha(var(--color-black) / 4%);
-  --sidebar-accent-foreground: var(--color-neutral-800);
-  --sidebar-border: --alpha(var(--color-black) / 6%);
-  --sidebar-foreground: color-mix(
-    in srgb,
-    var(--color-neutral-800) 64%,
-    var(--sidebar)
-  );
-  --sidebar-primary: var(--color-neutral-800);
-  --sidebar-primary-foreground: var(--color-neutral-50);
-  --sidebar-ring: var(--color-neutral-400);
+  --radius: 0.5rem;
+
+  --content-primary: 240 10% 4%;
+  --content-secondary: 240 5% 34%;
+  --content-disabled: 240 5% 65%;
+  --content-invert: 0 0% 98%;
+  --content-link: 221 83% 53%;
+  --content-success: 142 72% 29%;
+  --content-warning: 27 96% 61%;
+  --content-destructive: 0 72% 51%;
+
+  --surface-primary: 0 0% 100%;
+  --surface-secondary: 240 5% 96%;
+  --surface-tertiary: 240 6% 90%;
+  --surface-quaternary: 240 5% 84%;
+  --surface-control: 240 5% 57%;
+  --surface-invert-primary: 240 4% 16%;
+  --surface-invert-secondary: 240 5% 26%;
+  --surface-scrollbar: 240 4% 46%;
+  --surface-destructive: 0 93% 94%;
+  --surface-green: 141 79% 85%;
+  --surface-git-added: 141 84% 93%;
+  --surface-git-deleted: 0 93% 94%;
+
+  --border-default: 240 6% 90%;
+  --border-secondary: 240 5% 65%;
+  --border-control: 240 4% 46%;
+  --border-destructive: 0 72% 51%;
+  --border-success: 142 76% 36%;
+  --border-warning: 31 97% 72%;
+  --border-sky: 203 90% 40%;
+
+  --git-added: 142 72% 29%;
+  --git-deleted: 0 74% 42%;
+
+  /* shadcn-shaped aliases consumed by coss primitives. */
+  --background: hsl(var(--surface-primary));
+  --foreground: hsl(var(--content-primary));
+  --card: hsl(var(--surface-primary));
+  --card-foreground: hsl(var(--content-primary));
+  --popover: hsl(var(--surface-primary));
+  --popover-foreground: hsl(var(--content-primary));
+  --primary: hsl(var(--surface-invert-primary));
+  --primary-foreground: hsl(var(--surface-primary));
+  --secondary: hsl(var(--surface-secondary));
+  --secondary-foreground: hsl(var(--content-primary));
+  --muted: hsl(var(--surface-secondary));
+  --muted-foreground: hsl(var(--content-secondary));
+  --accent: hsl(var(--surface-secondary));
+  --accent-foreground: hsl(var(--content-primary));
+  --destructive: hsl(var(--content-destructive));
+  --destructive-foreground: hsl(var(--content-destructive));
+  --border: hsl(var(--border-default));
+  --input: hsl(var(--border-default));
+  --ring: hsl(var(--content-link));
+  --success: hsl(var(--content-success));
+  --success-foreground: hsl(var(--content-success));
+  --warning: hsl(var(--content-warning));
+  --warning-foreground: hsl(27 96% 40%);
+  --info: hsl(var(--content-link));
+  --info-foreground: hsl(var(--content-link));
+
+  --chart-1: hsl(var(--content-link));
+  --chart-2: hsl(var(--content-success));
+  --chart-3: hsl(var(--content-warning));
+  --chart-4: hsl(271 61% 45%);
+  --chart-5: hsl(var(--content-destructive));
+
+  --code: hsl(var(--surface-secondary));
+  --code-foreground: hsl(var(--content-primary));
+  --code-highlight: hsl(var(--surface-tertiary));
+
+  --sidebar: hsl(240 5% 98%);
+  --sidebar-foreground: hsl(var(--content-secondary));
+  --sidebar-accent: hsl(var(--surface-tertiary));
+  --sidebar-accent-foreground: hsl(var(--content-primary));
+  --sidebar-border: hsl(var(--border-default));
+  --sidebar-primary: hsl(var(--content-primary));
+  --sidebar-primary-foreground: hsl(var(--surface-primary));
+  --sidebar-ring: hsl(var(--content-link));
 }
 
-.dark {
-  --destructive-foreground: var(--color-red-400);
-  --info: var(--color-blue-500);
-  --info-foreground: var(--color-blue-400);
-  --success: var(--color-emerald-500);
-  --success-foreground: var(--color-emerald-400);
-  --warning: var(--color-amber-500);
-  --warning-foreground: var(--color-amber-400);
-  --accent: --alpha(var(--color-white) / 4%);
-  --accent-foreground: var(--color-neutral-100);
-  --background: color-mix(
-    in srgb,
-    var(--color-neutral-950) 95%,
-    var(--color-white)
-  );
-  --border: --alpha(var(--color-white) / 6%);
-  --card: color-mix(in srgb, var(--background) 98%, var(--color-white));
-  --card-foreground: var(--color-neutral-100);
-  --destructive: color-mix(
-    in srgb,
-    var(--color-red-500) 90%,
-    var(--color-white)
-  );
-  --foreground: var(--color-neutral-100);
-  --input: --alpha(var(--color-white) / 8%);
-  --muted: --alpha(var(--color-white) / 4%);
-  --muted-foreground: color-mix(
-    in srgb,
-    var(--color-neutral-500) 90%,
-    var(--color-white)
-  );
-  --popover: color-mix(in srgb, var(--background) 98%, var(--color-white));
-  --popover-foreground: var(--color-neutral-100);
-  --primary: var(--color-neutral-100);
-  --primary-foreground: var(--color-neutral-800);
-  --ring: var(--color-neutral-500);
-  --secondary: --alpha(var(--color-white) / 4%);
-  --secondary-foreground: var(--color-neutral-100);
-  --chart-1: var(--color-blue-700);
-  --chart-2: var(--color-emerald-500);
-  --chart-3: var(--color-amber-500);
-  --chart-4: var(--color-purple-500);
-  --chart-5: var(--color-rose-500);
-  --code: color-mix(in srgb, var(--background) 98%, var(--color-white));
-  --code-foreground: var(--foreground);
-  --code-highlight: --alpha(var(--color-white) / 4%);
-  --sidebar: color-mix(
-    in srgb,
-    var(--color-neutral-950) 97%,
-    var(--color-white)
-  );
-  --sidebar-accent: --alpha(var(--color-white) / 4%);
-  --sidebar-accent-foreground: var(--color-neutral-100);
-  --sidebar-border: --alpha(var(--color-white) / 5%);
-  --sidebar-foreground: color-mix(
-    in srgb,
-    var(--color-neutral-100) 64%,
-    var(--sidebar)
-  );
-  --sidebar-primary: var(--color-neutral-100);
-  --sidebar-primary-foreground: var(--color-neutral-800);
-  --sidebar-ring: var(--color-neutral-400);
+@media (prefers-color-scheme: dark) {
+  :root {
+    --content-primary: 0 0% 100%;
+    --content-secondary: 240 5% 65%;
+    --content-disabled: 240 5% 26%;
+    --content-invert: 240 10% 4%;
+    --content-link: 213 94% 68%;
+    --content-success: 142 76% 42%;
+    --content-warning: 31 97% 72%;
+    --content-destructive: 0 91% 71%;
+
+    --surface-primary: 240 10% 4%;
+    --surface-secondary: 240 6% 10%;
+    --surface-tertiary: 240 4% 16%;
+    --surface-quaternary: 240 5% 26%;
+    --surface-control: 240 4% 46%;
+    --surface-invert-primary: 240 6% 90%;
+    --surface-invert-secondary: 240 5% 65%;
+    --surface-scrollbar: 240 4% 46%;
+    --surface-destructive: 0 75% 15%;
+    --surface-green: 145 80% 10%;
+    --surface-git-added: 145 80% 10%;
+    --surface-git-deleted: 0 75% 15%;
+
+    --border-default: 240 4% 16%;
+    --border-secondary: 240 5% 26%;
+    --border-control: 240 4% 46%;
+    --border-destructive: 0 91% 71%;
+    --border-success: 142 76% 42%;
+    --border-warning: 31 97% 72%;
+    --border-sky: 194 90% 62%;
+
+    --git-added: 142 77% 73%;
+    --git-deleted: 0 94% 82%;
+
+    --background: hsl(var(--surface-primary));
+    --foreground: hsl(var(--content-primary));
+    --card: hsl(var(--surface-secondary));
+    --card-foreground: hsl(var(--content-primary));
+    --popover: hsl(var(--surface-secondary));
+    --popover-foreground: hsl(var(--content-primary));
+    --primary: hsl(var(--surface-invert-primary));
+    --primary-foreground: hsl(var(--surface-primary));
+    --secondary: hsl(var(--surface-secondary));
+    --secondary-foreground: hsl(var(--content-primary));
+    --muted: hsl(var(--surface-secondary));
+    --muted-foreground: hsl(var(--content-secondary));
+    --accent: hsl(var(--surface-tertiary));
+    --accent-foreground: hsl(var(--content-primary));
+    --destructive: hsl(var(--content-destructive));
+    --destructive-foreground: hsl(var(--content-destructive));
+    --border: hsl(var(--border-default));
+    --input: hsl(var(--border-default));
+    --ring: hsl(var(--content-link));
+    --success: hsl(var(--content-success));
+    --success-foreground: hsl(var(--content-success));
+    --warning: hsl(var(--content-warning));
+    --warning-foreground: hsl(var(--content-warning));
+    --info: hsl(var(--content-link));
+    --info-foreground: hsl(var(--content-link));
+
+    --code: hsl(var(--surface-secondary));
+    --code-foreground: hsl(var(--content-primary));
+    --code-highlight: hsl(var(--surface-tertiary));
+
+    --sidebar: hsl(var(--surface-secondary));
+    --sidebar-foreground: hsl(var(--content-secondary));
+    --sidebar-accent: hsl(var(--surface-tertiary));
+    --sidebar-accent-foreground: hsl(var(--content-primary));
+    --sidebar-border: hsl(var(--border-default));
+    --sidebar-primary: hsl(var(--content-primary));
+    --sidebar-primary-foreground: hsl(var(--surface-primary));
+    --sidebar-ring: hsl(var(--content-link));
+  }
 }
 
 @layer base {
@@ -287,6 +415,86 @@ body {
     font-family: var(--font-mono);
   }
   html {
-    @apply font-sans font-mono;
+    @apply font-sans;
   }
+  /* Coder-style chrome: flat surfaces, hairline borders, no glow. */
+  [data-slot='button'],
+  [data-slot='input-control'],
+  [data-slot='composer'],
+  [data-slot='select-trigger'],
+  [data-slot='combobox-input-group'] {
+    box-shadow: none !important;
+  }
+  [data-slot='button']::before,
+  [data-slot='input-control']::before,
+  [data-slot='composer']::before,
+  [data-slot='combobox-input-group']::before {
+    box-shadow: none !important;
+  }
+  /* Pierre diffs inherit the app's typography instead of their own defaults. */
+  diffs-container {
+    --diffs-font-family: var(--font-mono);
+    --diffs-font-size: 12px;
+    --diffs-line-height: 20px;
+    --diffs-header-font-family: var(--font-sans);
+    --diffs-gap-block: 0px;
+    --diffs-border-radius: calc(var(--radius) - 2px);
+  }
+}
+
+/*
+  Streamdown draws its own bordered shells around code blocks and tables
+  (outer wrapper + inner scroller). Flatten them onto the Coder surface scale.
+  These live outside @layer so they beat Streamdown's bundled utilities.
+*/
+[data-tian-prose] div:has(> [class*='language-']),
+[data-tian-prose] div:has(> table) {
+  margin-block: 0.75rem;
+  gap: 0;
+  padding: 0;
+  border: 1px solid hsl(var(--border-default));
+  border-radius: 0.375rem;
+  background: hsl(var(--code));
+}
+
+[data-tian-prose] div:has(> [class*='language-']) > div:first-child,
+[data-tian-prose] div:has(> table) > div:first-child {
+  padding: 0.375rem 0.625rem;
+  border-bottom: 1px solid hsl(var(--border-default));
+  background: transparent;
+  color: hsl(var(--content-secondary));
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+[data-tian-prose] [class*='language-'] {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.75rem;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+[data-tian-prose] div:has(> table) > div:first-child {
+  display: flex;
+  justify-content: flex-end;
+  border-bottom: 1px solid hsl(var(--border-default));
+  padding: 0.25rem 0.5rem;
+}
+
+[data-tian-prose] table {
+  font-size: 12.5px;
+  border-collapse: collapse;
+}
+
+[data-tian-prose] th,
+[data-tian-prose] td {
+  border-color: hsl(var(--border-default));
+}
+
+[data-tian-prose] th {
+  background: hsl(var(--surface-secondary));
 }

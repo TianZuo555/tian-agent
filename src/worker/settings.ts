@@ -1,92 +1,106 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  createModels,
-  type createProvider,
-} from '@earendil-works/pi-ai/models';
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
-import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
+import { createModels } from '@earendil-works/pi-ai/models';
 import type { SettingsInfo } from '../shared/types.js';
 import { atomicWrite } from './files.js';
+import {
+  MAGPIE_DEFAULT_MODEL,
+  MAGPIE_PROVIDER,
+  fetchMagpieCatalog,
+  magpieBaseUrl,
+  magpieProvider,
+  type MagpieModelInfo,
+} from './magpie.js';
 
-const providers: Record<string, () => ReturnType<typeof createProvider>> = {
-  anthropic: anthropicProvider,
-  openai: openaiProvider,
-  deepseek: deepseekProvider,
-};
-const envNames: Record<string, string[]> = {
-  anthropic: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'],
-  openai: ['OPENAI_API_KEY'],
-  deepseek: ['DEEPSEEK_API_KEY'],
-};
-const defaults: Record<string, string> = {
-  anthropic: 'claude-sonnet-5-5',
-  openai: 'gpt-5',
-  deepseek: 'deepseek-v4-pro',
-};
+export interface ModelCatalog {
+  models: MagpieModelInfo[];
+  ok: boolean;
+  baseUrl: string;
+  message?: string;
+}
 
+/**
+ * Settings own the model choice and the last known Magpie catalog. The catalog
+ * is cached so the app still opens (and the picker still lists something) when
+ * the gateway is not running.
+ */
 export class Settings {
   private path: string;
   private value: SettingsInfo;
+  private catalog: MagpieModelInfo[] = [];
+  private status: Omit<ModelCatalog, 'models'> = {
+    ok: false,
+    baseUrl: magpieBaseUrl(),
+  };
+
   constructor(userDataDir: string) {
     this.path = join(userDataDir, 'settings.json');
-    const preferred: string[] = [];
-    try {
-      const authPath =
-        process.env.HOME && join(process.env.HOME, '.pi/agent/auth.json');
-      if (authPath && existsSync(authPath)) {
-        const auth = JSON.parse(readFileSync(authPath, 'utf8')) as Record<
-          string,
-          { type?: string; key?: string }
-        >;
-        for (const [provider, names] of Object.entries(envNames)) {
-          const entry = auth[provider];
-          if (
-            (entry?.type === 'api_key' || entry?.type === 'api-key') &&
-            entry.key
-          ) {
-            for (const name of names) process.env[name] = entry.key;
-            preferred.push(provider);
-          }
-        }
-      }
-    } catch {
-      /* Credentials may also be supplied by the environment. */
-    }
-    const provider =
-      [...preferred, ...Object.keys(providers)].find((name) =>
-        envNames[name].some((env) => !!process.env[env]),
-      ) ?? 'anthropic';
-    this.value = { model: { provider, modelId: defaults[provider] } };
+    this.value = {
+      model: { provider: MAGPIE_PROVIDER, modelId: MAGPIE_DEFAULT_MODEL },
+    };
     try {
       if (existsSync(this.path)) {
-        const saved = JSON.parse(
-          readFileSync(this.path, 'utf8'),
-        ) as SettingsInfo;
-        if (
-          Object.hasOwn(providers, saved.model?.provider) &&
-          typeof saved.model.modelId === 'string' &&
-          saved.model.modelId.trim()
-        )
-          this.value = saved;
+        const saved = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<
+          SettingsInfo & { catalog?: MagpieModelInfo[] }
+        >;
+        if (typeof saved.model?.modelId === 'string' && saved.model.modelId.trim())
+          this.value = {
+            model: {
+              provider: MAGPIE_PROVIDER,
+              modelId: saved.model.modelId,
+            },
+          };
+        if (Array.isArray(saved.catalog)) this.catalog = saved.catalog;
       }
     } catch {
       /* A missing or malformed settings file uses defaults. */
     }
   }
+
   get(): SettingsInfo {
     return structuredClone(this.value);
   }
-  setModel(model: SettingsInfo['model']): void {
-    if (!Object.hasOwn(providers, model.provider) || !model.modelId.trim())
-      throw new Error('Invalid provider or model');
-    this.value = { model: { ...model } };
-    atomicWrite(this.path, JSON.stringify(this.value, null, 2));
+
+  catalogState(): ModelCatalog {
+    return { ...this.status, models: structuredClone(this.catalog) };
   }
+
+  setModel(model: SettingsInfo['model']): void {
+    if (!model.modelId.trim()) throw new Error('Invalid model');
+    this.value = { model: { provider: MAGPIE_PROVIDER, modelId: model.modelId } };
+    this.persist();
+  }
+
+  /** Pull the gateway catalog. A failure keeps the previous catalog intact. */
+  async refreshCatalog(): Promise<ModelCatalog> {
+    try {
+      const models = await fetchMagpieCatalog();
+      if (models.length === 0) throw new Error('gateway returned no chat models');
+      this.catalog = models;
+      if (!models.some((model) => model.id === this.value.model.modelId))
+        this.value.model.modelId = models[0].id;
+      this.status = { ok: true, baseUrl: magpieBaseUrl() };
+      this.persist();
+    } catch (error) {
+      this.status = {
+        ok: false,
+        baseUrl: magpieBaseUrl(),
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+    return this.catalogState();
+  }
+
   models() {
     const models = createModels();
-    for (const make of Object.values(providers)) models.setProvider(make());
+    models.setProvider(magpieProvider(this.catalog));
     return models;
+  }
+
+  private persist(): void {
+    atomicWrite(
+      this.path,
+      JSON.stringify({ ...this.value, catalog: this.catalog }, null, 2),
+    );
   }
 }

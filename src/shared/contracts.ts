@@ -9,6 +9,7 @@ import type {
   RunInfo,
   ScopeInfo,
   SettingsInfo,
+  ModelCatalog,
   TaskItem,
   SessionBinding,
   ServiceInfo,
@@ -49,6 +50,8 @@ export interface Commands {
   shipRun: Command<[id: string], string>;
   getSettings: Command<[], SettingsInfo>;
   setModel: Command<[model: SettingsInfo['model']], void>;
+  modelCatalog: Command<[], ModelCatalog>;
+  refreshModels: Command<[], ModelCatalog>;
   usageStats: Command<[scopeId: string | null], UsageStats>;
 }
 
@@ -128,6 +131,8 @@ export const commandArgs = {
       { additionalProperties: false },
     ),
   ]),
+  modelCatalog: Type.Tuple([]),
+  refreshModels: Type.Tuple([]),
   usageStats: Type.Tuple([nullableId]),
 } satisfies Record<keyof Commands, TSchema>;
 

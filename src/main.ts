@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { ServiceClient } from './service/client.js';
@@ -10,6 +10,8 @@ import type { Emit } from './shared/types.js';
 const primaryInstance = !started && app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
 app.commandLine.appendSwitch('force-renderer-accessibility');
+if (!app.isPackaged)
+  app.commandLine.appendSwitch('remote-debugging-port', '9222');
 let runtime: ServiceClient | null = null;
 
 const broadcast: Emit = (channel, payload, clientId) => {
@@ -25,9 +27,14 @@ const broadcast: Emit = (channel, payload, clientId) => {
 
 function createWindow(): void {
   const window = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: 1280,
+    height: 840,
+    minWidth: 880,
+    minHeight: 560,
     title: 'Tian Agent',
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 14, y: 15 },
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#171719' : '#fbfbfc',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

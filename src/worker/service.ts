@@ -470,6 +470,15 @@ export class Service {
   usageStats(scopeId: string | null) {
     return collectUsage(this.agents, usageConversationIds(this.db, scopeId));
   }
+  getModelCatalog() {
+    return this.settings.catalogState();
+  }
+  async refreshModels() {
+    const catalog = await this.settings.refreshCatalog();
+    this.agents.refreshModels();
+    this.emit('settings', this.settings.get());
+    return catalog;
+  }
   async setModel(model: SettingsInfo['model']): Promise<void> {
     this.settings.setModel(model);
     for (const conversation of this.db.listConversations()) {

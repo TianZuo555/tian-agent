@@ -1,65 +1,140 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { PanelRight } from 'lucide-react';
 import { actions, useStore } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
-import { RightPanel } from './components/RightPanel';
+import { InboxView, ScheduleView } from './components/NavViews';
+import { ContextPane } from './components/ContextPane';
 import { SettingsDialog } from './components/SettingsDialog';
+import { PaneDivider, usePersistedWidth } from './components/PaneDivider';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { EASE } from './components/motion-primitives';
+import { Button } from '@/components/ui/button';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
+/**
+ * Three-pane shell, Cursor/Codex style: navigation, conversation, context.
+ * Both dividers drag; the right pane collapses entirely.
+ */
 export function App() {
   const loading = useStore((s) => s.loading);
   const error = useStore((s) => s.error);
-  const operationError = useStore((s) => s.operationError);
-  const runtimeStatus = useStore((s) => s.runtimeStatus);
+  const contextOpen = useStore((s) => s.contextOpen);
+  const nav = useStore((s) => s.nav);
+  const reduce = useReducedMotion();
+  const [init, setInit] = useState(false);
+  const [navWidth, setNavWidth] = usePersistedWidth(
+    'tian.navWidth',
+    264,
+    200,
+    380,
+  );
+  const [contextWidth, setContextWidth] = usePersistedWidth(
+    'tian.contextWidth',
+    360,
+    280,
+    640,
+  );
 
-  useEffect(() => actions.init(), []);
+  useEffect(() => {
+    if (!init) {
+      setInit(true);
+      void actions.init();
+    }
+  }, [init]);
 
   return (
-    <div
-      role="application"
-      aria-label="Tian Agent"
-      className="dark flex h-screen bg-background text-foreground"
-    >
-      {loading ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
-          Loading…
-        </div>
-      ) : error ? (
-        <div className="flex flex-1 items-center justify-center text-destructive text-sm">
-          {error}
-        </div>
-      ) : (
-        <div className="flex min-w-0 flex-1 flex-col">
-          {(operationError || runtimeStatus === 'starting') && (
-            <div
-              role={operationError ? 'alert' : 'status'}
-              className="flex items-center gap-2 border-b px-4 py-2 text-sm"
-            >
-              <span
-                className={
-                  operationError ? 'text-destructive' : 'text-muted-foreground'
-                }
-              >
-                {operationError ?? 'Reconnecting to the agent runtime…'}
-              </span>
-              {operationError && (
-                <button
-                  type="button"
-                  className="ml-auto underline"
-                  onClick={actions.clearError}
-                >
-                  Dismiss
-                </button>
-              )}
+    <TooltipProvider delay={400}>
+      <div
+        role="application"
+        aria-label="Tian Agent"
+        className="flex h-screen overflow-hidden bg-background text-foreground"
+      >
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center">
+            <div className="flex items-center gap-2 font-mono text-[11px] text-content-secondary">
+              <span className="size-1.5 animate-pulse rounded-full bg-content-secondary" />
+              starting…
             </div>
-          )}
-          <div className="flex min-h-0 flex-1">
-            <Sidebar />
-            <ChatView />
-            <RightPanel />
           </div>
-        </div>
-      )}
-      <SettingsDialog />
-    </div>
+        ) : error ? (
+          <div
+            role="alert"
+            className="flex flex-1 items-center justify-center px-8 text-center text-destructive-foreground text-sm"
+          >
+            {error}
+          </div>
+        ) : (
+          <>
+            <motion.div
+              initial={false}
+              animate={{ width: navWidth }}
+              transition={
+                reduce ? { duration: 0 } : { duration: 0.18, ease: EASE }
+              }
+              className="flex min-h-0 shrink-0 overflow-hidden"
+            >
+              <Sidebar />
+            </motion.div>
+            <PaneDivider
+              side="left"
+              label="Resize navigation"
+              width={navWidth}
+              min={200}
+              max={380}
+              onResize={setNavWidth}
+            />
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={nav}
+                initial={reduce ? false : { opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, y: -4 }}
+                transition={{ duration: 0.16, ease: EASE }}
+                className="flex min-h-0 min-w-0 flex-1"
+              >
+                {nav === 'chat' ? (
+                  <ChatView />
+                ) : nav === 'schedule' ? (
+                  <ScheduleView />
+                ) : (
+                  <InboxView />
+                )}
+              </motion.div>
+            </AnimatePresence>
+            {contextOpen ? (
+              <>
+                <PaneDivider
+                  side="right"
+                  label="Resize context pane"
+                  width={contextWidth}
+                  min={280}
+                  max={640}
+                  onResize={setContextWidth}
+                />
+                <div
+                  style={{ width: contextWidth }}
+                  className="flex min-h-0 shrink-0"
+                >
+                  <ContextPane />
+                </div>
+              </>
+            ) : (
+              <div className="flex w-11 shrink-0 flex-col items-center border-border border-l py-2">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Show context pane"
+                  onClick={() => actions.setContextOpen(true)}
+                >
+                  <PanelRight className="size-4" />
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+        <SettingsDialog />
+      </div>
+    </TooltipProvider>
   );
 }

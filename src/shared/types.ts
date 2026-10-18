@@ -107,6 +107,23 @@ export interface SettingsInfo {
   model: { provider: string; modelId: string };
 }
 
+export interface ModelInfo {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  levels: string[];
+  input: ('text' | 'image')[];
+  contextWindow: number;
+  maxTokens: number;
+}
+
+export interface ModelCatalog {
+  models: ModelInfo[];
+  ok: boolean;
+  baseUrl: string;
+  message?: string;
+}
+
 export interface UsageDay {
   date: string;
   input: number;

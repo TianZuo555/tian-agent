@@ -4,6 +4,7 @@ import type {
   ConversationInfo,
   InboxItem,
   MemoryDump,
+  ModelCatalog,
   ProjectPatch,
   RunInfo,
   ScopeInfo,
@@ -12,6 +13,8 @@ import type {
 } from '../shared/types';
 
 export type Tab = 'tasks' | 'memory' | 'inbox' | 'runs';
+/** Primary destination chosen in the left rail. */
+export type Nav = 'chat' | 'schedule' | 'inbox';
 export interface State {
   scopes: ScopeInfo[];
   conversations: ConversationInfo[];
@@ -23,7 +26,10 @@ export interface State {
   inbox: InboxItem[];
   runs: RunInfo[];
   settings: SettingsInfo | null;
+  catalog: ModelCatalog | null;
   tab: Tab;
+  nav: Nav;
+  contextOpen: boolean;
   settingsOpen: boolean;
   loading: boolean;
   error: string | null;
@@ -44,7 +50,10 @@ export function createAppStore(api: TianApi) {
     inbox: [],
     runs: [],
     settings: null,
+    catalog: null,
     tab: 'tasks',
+    nav: 'chat',
+    contextOpen: true,
     settingsOpen: false,
     loading: true,
     error: null,
@@ -75,6 +84,7 @@ export function createAppStore(api: TianApi) {
       | 'scopes'
       | 'conversations'
       | 'settings'
+      | 'catalog'
       | 'tasks'
       | 'memory'
       | 'inbox'
@@ -134,6 +144,7 @@ export function createAppStore(api: TianApi) {
         load('scopes', () => api.listScopes()),
         load('conversations', () => api.listConversations()),
         load('settings', () => api.getSettings()),
+        load('catalog', () => api.modelCatalog()),
       ]);
       if (generation !== lifetime) return;
       set({ loading: false, error: null, runtimeStatus: 'ready' });
@@ -326,6 +337,17 @@ export function createAppStore(api: TianApi) {
     },
     setTab(tab: Tab) {
       set({ tab });
+    },
+    setNav(nav: Nav) {
+      set({ nav });
+    },
+    setContextOpen(contextOpen: boolean) {
+      set({ contextOpen });
+    },
+    async refreshModels() {
+      const catalog = await api.refreshModels();
+      set({ catalog });
+      return catalog;
     },
     setSettingsOpen(settingsOpen: boolean) {
       set({ settingsOpen });
