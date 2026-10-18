@@ -131,6 +131,7 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 | `worker/history.ts`       | transcript 与事件的派生全文索引、增量同步与检索   |
 | `worker/tools-history.ts` | 总管检索工具：search_history、read_history        |
 | `worker/dispatch.ts`      | worktree、commit、diff、merge 和 PR 命令          |
+| `worker/telegram.ts`      | Telegram Bot 长轮询、白名单、会话映射与回复转发   |
 
 总管和工兵共用常驻服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵当前是 Durable 会话，生命周期与桌面客户端独立。
 
