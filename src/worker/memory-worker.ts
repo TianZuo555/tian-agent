@@ -644,10 +644,9 @@ export class MemoryWorker {
       GLOBAL_SCOPE,
       ...this.deps.db.listProjects().map((project) => project.id),
     ];
-    const results: RunResult[] = [];
-    for (const scopeId of scopes)
-      results.push(await this.trigger(scopeId, trigger));
-    return results;
+    // Scopes are independent: each has its own inflight entry, throttle
+    // window, and rows, so a slow extraction in one must not delay the rest.
+    return Promise.all(scopes.map((scopeId) => this.trigger(scopeId, trigger)));
   }
 
   /** Wait for in-flight work (used on service close). */

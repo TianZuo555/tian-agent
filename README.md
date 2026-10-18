@@ -162,10 +162,10 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 | `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录         |
 | `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入               |
 | `worker/memory.ts`             | SQLite 记忆、来源与版本、摘要树                   |
-| `worker/memory-worker.ts` | 后台候选提取（F03）：触发、游标、启发式提取器 |
+| `worker/memory-worker.ts`      | 后台候选提取（F03）：触发、游标、启发式提取器     |
 | `worker/events.ts`             | 业务事件与审计日志（`events` 表）                 |
-| `worker/improvements.ts` | 改进日志、系统异常指纹去重、提升为 Task |
-| `worker/tools-improvements.ts` | 总管工具：log_improvement、list_improvements |
+| `worker/improvements.ts`       | 改进日志、系统异常指纹去重、提升为 Task           |
+| `worker/tools-improvements.ts` | 总管工具：log_improvement、list_improvements      |
 | `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索   |
 | `worker/tools-history.ts`      | 总管检索工具：search_history、read_history        |
 | `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令          |
