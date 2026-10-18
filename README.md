@@ -85,7 +85,22 @@ Settings 中的“服务与升级”在服务离线时也可访问，支持查�
 
 例如 App 与 Telegram 都绑定 `global`，拥有独立聊天上下文，但每次请求加载同一份全局 Memory。仅存在于聊天记录、没有沉淀为 Memory 的内容不会自动进入其他 Session。外部输入可以向 `submit` 提供稳定的 `requestId`，由 Durable 去重。
 
-当前提供多渠道 Session 接口，尚未接入 Telegram Bot 的收发与账号授权。后续 adapter 负责外部身份、收发和会话映射，复用现有工具及记忆。
+### Telegram
+
+服务内置 Telegram Bot 适配器：Bot API long polling，无需公网入口。未配置 token 时适配器不启动，服务其余部分不受影响；网络故障按指数退避重试，不会阻塞服务。
+
+在 `<dataDir>/service.env`（0600）中配置后重启服务：
+
+```sh
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
+```
+
+- 只有白名单中的 chat 可以触发对话，其余更新只记录 chat ID 并忽略。
+- 每个 chat 维护一个当前 scope（默认 `global`）：`/scope` 查看，`/scope 项目名` 切换；切换后同一 chat 的消息进入该 scope 的独立 conversation，选择持久化，重启后保持。`/status` 显示当前 scope 的待办任务与运行中的 Run；`/help` 列出命令，未知命令同样返回帮助。
+- 收到的消息以 `tg:<chatId>:<message_id>` 为稳定 `requestId` 提交，同一更新重复投递不会重复提交；`getUpdates` offset 持久化，重启不会重放已处理的更新。
+- 所在会话的总管回复（直接回复与主动汇报）以纯文本发回 chat：按行边界拆分为不超过 4096 字符的消息；转发游标持久化，重启既不重发也不漏发；流式片段、工具调用与思考内容不转发。
+- 审批等受控操作尚未接入 Telegram，适配器的命令入口与推送通道为后续接入预留。
 
 ## 进程与模块
 
@@ -234,6 +249,6 @@ thread: optional-thread
 
 ## 后续
 
-当前通过 Magpie 网关接入模型。Keychain、Telegram adapter、远程服务、本机／云端协议、更多工兵类型、定时简报、远端自动更新源、发布签名与公证仍待实现。
+当前通过 Magpie 网关接入模型。Keychain、远程服务、本机／云端协议、更多工兵类型、定时简报、远端自动更新源、发布签名与公证仍待实现。
 
 参考：[Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable)、[OptMem](https://github.com/VictorTaelin/OptMem)、[launchd](https://www.launchd.info/)、[coss](https://coss.com/ui)。
