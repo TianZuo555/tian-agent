@@ -487,7 +487,10 @@ export function Sidebar() {
             }`}
           />
         </span>
-        <span className="truncate font-mono text-[10px] text-content-disabled">
+        <span
+          role="status"
+          className="truncate font-mono text-[10px] text-content-disabled"
+        >
           {statusLabel}
         </span>
         <Sparkle
@@ -527,7 +530,6 @@ export function Sidebar() {
                 aria-label="Project name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                autoFocus
               />
               <div className="flex gap-2">
                 <Input

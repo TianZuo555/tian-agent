@@ -209,7 +209,6 @@ export function App() {
     <IconProvider>
       <TooltipProvider delay={400}>
         <div
-          role="application"
           aria-label="Tian Agent"
           className="flex h-screen overflow-hidden bg-background text-foreground"
         >

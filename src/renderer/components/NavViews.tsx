@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   CalendarCheck,
@@ -161,6 +161,7 @@ function GoalForm(props: {
   onOpenChange: (open: boolean) => void;
 }) {
   const { open, goal, onOpenChange } = props;
+  const budgetId = useId();
   const [objective, setObjective] = useState('');
   const [criteria, setCriteria] = useState('');
   const [constraints, setConstraints] = useState('');
@@ -215,7 +216,6 @@ function GoalForm(props: {
             aria-label="Objective"
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
-            autoFocus
           />
           <Input
             placeholder="Success criteria (optional): e.g. green for 7 days"
@@ -229,13 +229,16 @@ function GoalForm(props: {
             value={constraints}
             onChange={(e) => setConstraints(e.target.value)}
           />
-          <label className="flex items-center gap-2 font-mono text-[10px] text-content-secondary">
+          <label
+            className="flex items-center gap-2 font-mono text-[10px] text-content-secondary"
+            htmlFor={budgetId}
+          >
             Daily run budget
             <Input
+              id={budgetId}
               type="number"
               min={1}
               max={48}
-              aria-label="Daily run budget"
               value={budget}
               onChange={(e) => setBudget(e.target.value)}
               size="sm"
@@ -257,6 +260,12 @@ function GoalForm(props: {
 function ScheduleRow({ goal }: { goal: GoalItem }) {
   const [adding, setAdding] = useState(false);
   const [cron, setCron] = useState('');
+  const cronRef = useRef<HTMLInputElement>(null);
+  // Move focus to the cron field once the inline form is inserted; unlike the
+  // autoFocus attribute this also works for content added after first paint.
+  useEffect(() => {
+    if (adding) cronRef.current?.focus();
+  }, [adding]);
   return (
     <div className="flex flex-col gap-1">
       {goal.schedules.map((s) => (
@@ -294,12 +303,12 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
           }}
         >
           <Input
+            ref={cronRef}
             value={cron}
             onChange={(e) => setCron(e.target.value)}
             placeholder="cron expression, e.g. 30 9 * * *"
             aria-label="Cron expression"
             size="sm"
-            autoFocus
             className="font-mono text-[11px]"
           />
           <Button type="submit" size="sm" variant="outline">
@@ -683,7 +692,7 @@ export function GoalsView() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="新对话"
+              aria-label="New conversation"
               className="text-content-secondary"
               onClick={() => {
                 actions.setNav('chat');
@@ -865,7 +874,7 @@ export function GoalsView() {
             </section>
           )}
 
-          <section aria-label="任务">
+          <section aria-label="Tasks">
             <SectionLabel label="Tasks" count={tasks.length} />
             <TaskList tasks={tasks} />
           </section>

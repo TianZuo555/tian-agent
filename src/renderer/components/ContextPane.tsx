@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import {
   ArrowsClockwise,
   CaretDoubleRight,
@@ -512,6 +512,7 @@ function RunsPanel() {
 
 function MemoryPanel() {
   const memory = useStore((s) => s.memory);
+  const historyId = useId();
   const [showHistory, setShowHistory] = useState(false);
   const [revising, setRevising] = useState<MemoryItem | null>(null);
   const [forgetting, setForgetting] = useState<MemoryItem | null>(null);
@@ -533,11 +534,14 @@ function MemoryPanel() {
             ? ` · ${memory.pendingMerges} merges pending`
             : ''}
         </span>
-        <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-content-secondary">
+        <label
+          className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-content-secondary"
+          htmlFor={historyId}
+        >
           <Checkbox
+            id={historyId}
             checked={showHistory}
             onCheckedChange={(checked) => setShowHistory(checked === true)}
-            aria-label="Show superseded and deleted memories"
           />
           History
         </label>
@@ -906,17 +910,36 @@ export function ContextPane() {
       <div
         role="tablist"
         aria-label="Context sections"
+        tabIndex={-1}
         className="flex shrink-0 items-center gap-0.5 border-border border-b px-1.5 py-1"
+        onKeyDown={(e) => {
+          // Roving-tabindex arrow navigation per the ARIA tabs pattern.
+          const current = TABS.findIndex((t) => t.id === tab);
+          let next: number | null = null;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown')
+            next = (current + 1) % TABS.length;
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+            next = (current - 1 + TABS.length) % TABS.length;
+          else if (e.key === 'Home') next = 0;
+          else if (e.key === 'End') next = TABS.length - 1;
+          if (next === null) return;
+          e.preventDefault();
+          const nextTab = TABS[next];
+          setTab(nextTab.id);
+          document.getElementById(`context-tab-${nextTab.id}`)?.focus();
+        }}
       >
         {TABS.map(({ id, label, icon: TabIcon }) => {
           const active = tab === id;
           return (
             <button
               key={id}
+              id={`context-tab-${id}`}
               type="button"
               role="tab"
               aria-selected={active}
-              aria-label={label}
+              aria-controls={`context-panel-${id}`}
+              tabIndex={active ? 0 : -1}
               onClick={() => setTab(id)}
               className={`group relative flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md px-1.5 font-medium text-[10.5px] transition-colors ${
                 active
@@ -954,6 +977,10 @@ export function ContextPane() {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={tab}
+          role="tabpanel"
+          id={`context-panel-${tab}`}
+          aria-labelledby={`context-tab-${tab}`}
+          tabIndex={0}
           initial={reduce ? false : { opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
           exit={reduce ? undefined : { opacity: 0, y: -3 }}
