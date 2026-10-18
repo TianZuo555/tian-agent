@@ -12,6 +12,42 @@ import {
   wakeContent,
   type SchedulerDeps,
 } from '../src/worker/scheduler';
+import { goalsTools } from '../src/worker/tools-goals';
+
+/** Call a chief goal tool the way the harness would. */
+function toolRunner(f: Fixture) {
+  let call = 0;
+  const tools = new Map(
+    goalsTools({
+      db: f.db,
+      goals: f.goals,
+      openGoalConversation: (goalId) => Promise.resolve(`conv-${goalId}`),
+      resolveScope: () => 'global',
+      emitUpdates: () => {},
+      emitNotice: () => {},
+    }).map((tool) => [tool.name, tool]),
+  );
+  return async (
+    name: string,
+    args: Record<string, unknown>,
+    ids: { taskId?: string; callId?: string } = {},
+  ): Promise<string> => {
+    const tool = tools.get(name);
+    if (!tool) throw new Error(`missing tool ${name}`);
+    const result = await tool.execute(
+      args,
+      {
+        taskId: ids.taskId ?? 'task-1',
+        callId: ids.callId ?? `call-${++call}`,
+        conversationId: '1',
+      } as never,
+      {} as never,
+    );
+    return (result.output ?? [])
+      .map((item) => ('text' in item ? item.text : ''))
+      .join('\n');
+  };
+}
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -422,6 +458,96 @@ test('nested transactions (operation replay around a transition) compose', (t) =
     }),
   );
   assert.equal(f.db.getTask(id)!.status, 'running');
+});
+
+test('notify_user dedupes inside the window and replays safely', async (t) => {
+  const f = fixture(t);
+  const goal = f.goals.insertGoal({
+    scopeId: 'global',
+    objective: 'Watch the deploy',
+  });
+  const run = toolRunner(f);
+  const first = await run('notify_user', {
+    goal: goal.id,
+    fingerprint: 'deploy-broken',
+    notice: 'deploy 42 is red',
+  });
+  assert.match(first, /delivered/);
+  const repeat = await run('notify_user', {
+    goal: goal.id,
+    fingerprint: 'deploy-broken',
+    notice: 'deploy 42 is still red',
+  });
+  assert.match(repeat, /suppressed/);
+  assert.equal(f.goals.listNotices(null).length, 1);
+  // A durable replay of the same call returns the saved answer, not a new notice.
+  const replayed = await run(
+    'notify_user',
+    { goal: goal.id, fingerprint: 'deploy-broken', notice: 'deploy 42 is red' },
+    { taskId: 'task-9', callId: 'stable-call' },
+  );
+  const replayedAgain = await run(
+    'notify_user',
+    { goal: goal.id, fingerprint: 'deploy-broken', notice: 'deploy 42 is red' },
+    { taskId: 'task-9', callId: 'stable-call' },
+  );
+  assert.equal(replayed, replayedAgain);
+  assert.equal(f.goals.listNotices(null).length, 1);
+  // Another fingerprint is a separate notice.
+  await run('notify_user', {
+    goal: goal.id,
+    fingerprint: 'needs-decision',
+    notice: 'raise the cap?',
+  });
+  assert.equal(f.goals.listNotices(null).length, 2);
+});
+
+test('the task tools move a woken task to a recorded outcome', async (t) => {
+  const f = fixture(t);
+  const goal = f.goals.insertGoal({ scopeId: 'global', objective: 'Check CI' });
+  const run = toolRunner(f);
+  dailySchedule(f, goal.id);
+  const [task] = await f.scheduler.fireDue();
+
+  assert.match(await run('start_task', { task: task.id }), /running/);
+  assert.equal(f.db.getTask(task.id)!.attempts, 1);
+  assert.match(
+    await run('complete_task', {
+      task: task.id,
+      outcome: 'no_change',
+      summary: 'still green',
+    }),
+    /completed \(no_change\)/,
+  );
+  const done = f.db.getTask(task.id)!;
+  assert.equal(done.status, 'completed');
+  assert.equal(done.outcome, 'no_change');
+  assert.equal(done.summary, 'still green');
+
+  const failingId = f.db.addTask('global', 'second', null);
+  assert.match(
+    await run('fail_task', {
+      task: failingId,
+      reason: 'no access to the repo',
+    }),
+    /no access/,
+  );
+  const failed = f.db.getTask(failingId)!;
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.summary, 'no access to the repo');
+
+  // Starting a task past its attempt budget is refused, not silently retried.
+  f.db.sqlite
+    .prepare('UPDATE tasks SET attempts = max_attempts WHERE id = ?')
+    .run(failingId);
+  f.db.updateTaskStatus(failingId, 'pending');
+  assert.match(await run('start_task', { task: failingId }), /attempts/);
+  assert.equal(f.db.getTask(failingId)!.status, 'pending');
+  // Unknown ids are reported as errors rather than throwing out of the tool.
+  assert.match(
+    await run('complete_task', { task: 999, outcome: 'achieved' }),
+    /Unknown task/,
+  );
 });
 
 test('schedule parsing validates expressions and computes the first fire', () => {
