@@ -20,6 +20,8 @@ import { Scopes } from '../src/worker/scopes';
 import { DataService } from '../src/worker/data';
 import { AgentRuntime } from '../src/worker/agents';
 import { Settings } from '../src/worker/settings';
+import { EventLog } from '../src/worker/events';
+import { HistoryIndex } from '../src/worker/history';
 import { chiefExtension } from '../src/worker/tools';
 import { workerExtension } from '../src/worker/worker-tools';
 import {
@@ -260,11 +262,20 @@ test('chief and worker capabilities remain separate, including previously contam
   const f = await fixture(t);
   const settings = new Settings(f.userData);
   const data = new DataService(f.db, f.scopes, () => {});
+  const events = new EventLog(f.db);
+  let agents = new AgentRuntime(
+    f.userData,
+    f.scopes.root('global'),
+    settings,
+    f.db,
+  );
+  const history = new HistoryIndex(f.db, agents, events);
   const extension = chiefExtension({
     scopes: f.scopes,
     db: f.db,
     data,
     latestUserEntry: async () => null,
+    history: { db: f.db, events, history },
     dispatch: (input) => f.runs.dispatch(input),
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),
@@ -272,12 +283,6 @@ test('chief and worker capabilities remain separate, including previously contam
       data.sendRunMessage(runId, body, operationId),
     runMessages: (runId) => data.runMessages(runId),
   });
-  let agents = new AgentRuntime(
-    f.userData,
-    f.scopes.root('global'),
-    settings,
-    f.db,
-  );
   const worker = workerExtension({ db: f.db, wake: async () => {} });
   await agents.open(extension, worker);
   const chief = await agents.createChief(f.projectPath);

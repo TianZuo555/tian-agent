@@ -15,6 +15,7 @@ import {
   toolErr as err,
   toolText as text,
 } from './tools-memory.js';
+import { historyTools, type HistoryDeps } from './tools-history.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
@@ -39,6 +40,8 @@ export interface ChiefDeps {
   runMessages: (runId: string) => AgentMessageRow[];
   /** Newest user entry in a conversation, to detect a new user turn. */
   latestUserEntry: (conversationId: string) => Promise<string | null>;
+  /** Derived history backing search_history/read_history (event log + transcript index). */
+  history: HistoryDeps;
 }
 
 /**
@@ -67,7 +70,9 @@ DISPATCH. You command, others execute. You have no shell and cannot edit code �
 
 WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
-SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to note.`,
+SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to remember.
+
+HISTORY. Everything said or done stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. The scope defaults to this conversation's scope; pass scope "all" to search everything. If nothing matches, say plainly that no record was found — never invent history.`,
     { tag: false },
   );
 
@@ -569,6 +574,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       readRunDiff,
       sendRunMsg,
       listRunMsgs,
+      ...historyTools(deps.history),
     ],
   });
 }
