@@ -5,6 +5,10 @@ import type {
   GoalItem,
   GoalPatch,
   GoalStatus,
+  ImprovementItem,
+  ImprovementKind,
+  ImprovementSeverity,
+  ImprovementSummary,
   InboxItem,
   MemoryDump,
   ModelCatalog,
@@ -18,7 +22,7 @@ import type {
 
 export type Tab = 'tasks' | 'memory' | 'inbox' | 'runs';
 /** Primary destination chosen in the left rail. */
-export type Nav = 'chat' | 'goals' | 'inbox';
+export type Nav = 'chat' | 'goals' | 'inbox' | 'log';
 export interface State {
   scopes: ScopeInfo[];
   conversations: ConversationInfo[];
@@ -28,6 +32,8 @@ export interface State {
   tasks: TaskItem[];
   goals: GoalItem[];
   notices: NoticeItem[];
+  improvements: ImprovementSummary[];
+  improvementDetails: Record<string, string>;
   memory: MemoryDump | null;
   inbox: InboxItem[];
   runs: RunInfo[];
@@ -55,6 +61,8 @@ export function createAppStore(api: TianApi) {
     tasks: [],
     goals: [],
     notices: [],
+    improvements: [],
+    improvementDetails: {},
     memory: null,
     inbox: [],
     runs: [],
@@ -98,6 +106,7 @@ export function createAppStore(api: TianApi) {
       | 'tasks'
       | 'goals'
       | 'notices'
+      | 'improvements'
       | 'memory'
       | 'inbox'
       | 'runs',
@@ -117,6 +126,7 @@ export function createAppStore(api: TianApi) {
       load('tasks', () => api.listTasks(scopeId), scopeId),
       load('goals', () => api.listGoals(scopeId), scopeId),
       load('notices', () => api.listNotices(scopeId), scopeId),
+      load('improvements', () => api.listImprovements(null)),
       load('memory', () => api.memoryDump(scopeId), scopeId),
       load('inbox', () => api.inboxList(scopeId), scopeId),
       load(
@@ -252,6 +262,10 @@ export function createAppStore(api: TianApi) {
             ),
           });
         }),
+        api.on('improvements', (improvements) => {
+          next('improvements');
+          set({ improvements });
+        }),
         api.on('runs', (runs) => {
           next('runs');
           set({
@@ -351,6 +365,49 @@ export function createAppStore(api: TianApi) {
     toggleTask: (id: number, done: boolean) =>
       safe(async () => {
         await api.doneTask(id, done);
+      }),
+    addImprovement: (
+      kind: ImprovementKind,
+      summary: string,
+      detail: string,
+      severity: ImprovementSeverity,
+    ) =>
+      safe(async () => {
+        const entry = await api.addImprovement(
+          state.activeScopeId,
+          kind,
+          summary,
+          detail,
+          severity,
+        );
+        set({
+          improvementDetails: {
+            ...state.improvementDetails,
+            [entry.id]: entry.detail,
+          },
+        });
+      }),
+    setImprovementStatus: (
+      id: string,
+      status: 'open' | 'resolved' | 'dismissed',
+    ) =>
+      safe(async () => {
+        await api.setImprovementStatus(id, status);
+      }),
+    promoteImprovement: (id: string) =>
+      safe(async () => {
+        await api.promoteImprovement(id);
+      }),
+    loadImprovement: (id: string) =>
+      safe(async () => {
+        if (state.improvementDetails[id] !== undefined) return;
+        const entry: ImprovementItem = await api.getImprovement(id);
+        set({
+          improvementDetails: {
+            ...state.improvementDetails,
+            [id]: entry.detail,
+          },
+        });
       }),
     memoryRevise: (seq: number, text: string, reason: string) =>
       safe(() => api.memoryRevise(state.activeScopeId, seq, text, reason)),

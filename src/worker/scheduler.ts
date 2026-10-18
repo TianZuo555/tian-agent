@@ -1,6 +1,7 @@
 import { Cron } from 'croner';
 import type { Db } from './db.js';
 import type { GoalStore } from './goals.js';
+import type { IssueReporter } from './improvements.js';
 import type { GoalItem, ScheduleItem, TaskItem } from '../shared/types.js';
 
 export const DEFAULT_MAX_RUNS_PER_DAY = 3;
@@ -41,6 +42,8 @@ export interface SchedulerDeps {
   now?: () => Date;
   /** While true (closing/maintenance) no fire happens and the timer idles. */
   isPaused?: () => boolean;
+  /** Automatic issue sink; defaults to the console. */
+  reportIssue?: IssueReporter;
   /** Push task/goal/notice updates to clients. */
   emitUpdates?: () => void;
   /** Refresh the notices panel of the scope a new notice belongs to. */
@@ -104,7 +107,8 @@ export class GoalScheduler {
       try {
         await this.fireDue();
       } catch (error) {
-        console.error('Scheduler:', error);
+        if (this.deps.reportIssue) this.deps.reportIssue('scheduler', error);
+        else console.error('Scheduler:', error);
       }
     }
     this.scheduleNext();

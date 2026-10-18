@@ -25,6 +25,9 @@ const InboxView = lazy(() =>
 const GoalsView = lazy(() =>
   import('./components/NavViews').then((m) => ({ default: m.GoalsView })),
 );
+const LogView = lazy(() =>
+  import('./components/LogView').then((m) => ({ default: m.LogView })),
+);
 const ContextPane = lazy(() =>
   import('./components/ContextPane').then((m) => ({ default: m.ContextPane })),
 );
@@ -182,6 +185,9 @@ export function App() {
       } else if (key === '3') {
         event.preventDefault();
         actions.setNav('inbox');
+      } else if (key === '4') {
+        event.preventDefault();
+        actions.setNav('log');
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -193,6 +199,7 @@ export function App() {
     const warm = () => {
       void import('./components/ChatView');
       void import('./components/NavViews');
+      void import('./components/LogView');
       void import('./components/ContextPane');
       void import('./components/SettingsDialog');
       void import('./components/CommandPalette');
@@ -338,6 +345,10 @@ export function App() {
                     ) : nav === 'goals' ? (
                       <Suspense fallback={null}>
                         <GoalsView />
+                      </Suspense>
+                    ) : nav === 'log' ? (
+                      <Suspense fallback={null}>
+                        <LogView />
                       </Suspense>
                     ) : (
                       <Suspense fallback={null}>

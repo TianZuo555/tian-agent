@@ -6,6 +6,10 @@ import type {
   GoalItem,
   GoalPatch,
   GoalStatus,
+  ImprovementItem,
+  ImprovementKind,
+  ImprovementSeverity,
+  ImprovementSummary,
   InboxItem,
   MemoryDump,
   ProjectPatch,
@@ -68,6 +72,25 @@ export interface Commands {
   >;
   removeSchedule: Command<[scheduleId: string], GoalItem>;
   listNotices: Command<[scopeId: string | null], NoticeItem[]>;
+  listImprovements: Command<[scopeId: string | null], ImprovementSummary[]>;
+  getImprovement: Command<[id: string], ImprovementItem>;
+  addImprovement: Command<
+    [
+      scopeId: string,
+      kind: ImprovementKind,
+      summary: string,
+      detail: string,
+      severity: ImprovementSeverity,
+    ],
+    ImprovementItem
+  >;
+  setImprovementStatus: Command<
+    [id: string, status: 'open' | 'resolved' | 'dismissed'],
+    ImprovementSummary
+  >;
+  promoteImprovement: Command<[id: string], ImprovementSummary>;
+  /** Best-effort report from the renderer; recorded as a system issue. */
+  reportClientIssue: Command<[summary: string, detail: string], void>;
   memoryDump: Command<[scopeId: string], MemoryDump>;
   memoryRevise: Command<
     [scopeId: string, seq: number, text: string, reason: string],
@@ -105,6 +128,23 @@ const patch = Type.Partial(
   }),
   { additionalProperties: false },
 );
+
+const improvementKind = Type.Union([
+  Type.Literal('issue'),
+  Type.Literal('friction'),
+  Type.Literal('idea'),
+  Type.Literal('win'),
+]);
+const improvementSeverity = Type.Union([
+  Type.Literal('low'),
+  Type.Literal('medium'),
+  Type.Literal('high'),
+]);
+const improvementStatus = Type.Union([
+  Type.Literal('open'),
+  Type.Literal('resolved'),
+  Type.Literal('dismissed'),
+]);
 
 export const commandArgs = {
   getActivity: Type.Tuple([]),
@@ -183,6 +223,21 @@ export const commandArgs = {
   ]),
   removeSchedule: Type.Tuple([id]),
   listNotices: Type.Tuple([nullableId]),
+  listImprovements: Type.Tuple([nullableId]),
+  getImprovement: Type.Tuple([id]),
+  addImprovement: Type.Tuple([
+    id,
+    improvementKind,
+    Type.String({ minLength: 1, maxLength: 300 }),
+    Type.String({ maxLength: 20_000 }),
+    improvementSeverity,
+  ]),
+  setImprovementStatus: Type.Tuple([id, improvementStatus]),
+  promoteImprovement: Type.Tuple([id]),
+  reportClientIssue: Type.Tuple([
+    Type.String({ minLength: 1, maxLength: 300 }),
+    Type.String({ maxLength: 20_000 }),
+  ]),
   memoryDump: Type.Tuple([id]),
   memoryRevise: Type.Tuple([
     id,

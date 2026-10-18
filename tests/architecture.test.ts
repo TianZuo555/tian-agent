@@ -18,6 +18,7 @@ import { MemoryStore } from '../src/worker/memory';
 import { Db, type RunRow } from '../src/worker/db';
 import { Scopes } from '../src/worker/scopes';
 import { GoalStore } from '../src/worker/goals';
+import { ImprovementStore } from '../src/worker/improvements';
 import { DataService } from '../src/worker/data';
 import { AgentRuntime } from '../src/worker/agents';
 import { Settings } from '../src/worker/settings';
@@ -189,6 +190,33 @@ test('IPC rejects unknown fields, unsupported workers, and invalid settings', ()
     validateCommand('updateProject', ['p1', { unexpected: true }]),
   );
   assert.throws(() => validateCommand('__proto__', []));
+  assert.throws(() =>
+    validateCommand('addImprovement', [
+      'global',
+      'bug',
+      'Not a known kind',
+      '',
+      'medium',
+    ]),
+  );
+  assert.throws(() =>
+    validateCommand('setImprovementStatus', ['entry', 'promoted']),
+  );
+  assert.throws(() =>
+    validateCommand('reportClientIssue', ['', 'empty summaries are invalid']),
+  );
+  assert.doesNotThrow(() =>
+    validateCommand('addImprovement', [
+      'global',
+      'issue',
+      'A useful summary',
+      'Detail',
+      'high',
+    ]),
+  );
+  assert.doesNotThrow(() =>
+    validateCommand('setImprovementStatus', ['entry', 'resolved']),
+  );
   assert.doesNotThrow(() =>
     validateCommand('updateProject', [
       'p1',
@@ -278,8 +306,10 @@ test('chief and worker capabilities remain separate, including previously contam
     latestUserEntry: async () => null,
     history: { db: f.db, events, history },
     goals: new GoalStore(f.db),
+    improvements: new ImprovementStore(f.db),
     openGoalConversation: (goalId) => Promise.resolve(`goal-conv-${goalId}`),
     emitUpdates: () => {},
+    emitImprovements: () => {},
     emitNotices: () => {},
     dispatch: (input) => f.runs.dispatch(input),
     runReport: (id) => f.runs.report(id),

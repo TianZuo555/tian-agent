@@ -15,6 +15,7 @@ const channels = new Set<keyof AppEvents>([
   'tasks',
   'goals',
   'notices',
+  'improvements',
   'runs',
   'inbox',
   'memory',

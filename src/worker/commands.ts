@@ -43,6 +43,15 @@ export const commandHandlers = (service: Service, clientId: number) =>
       service.addSchedule(goalId, cron, timezone),
     removeSchedule: (scheduleId) => service.removeSchedule(scheduleId),
     listNotices: (scopeId) => service.noticeList(scopeId),
+    listImprovements: (scopeId) => service.improvementList(scopeId),
+    getImprovement: (id) => service.getImprovementItem(id),
+    addImprovement: (scopeId, kind, summary, detail, severity) =>
+      service.addImprovementItem(scopeId, kind, summary, detail, severity),
+    setImprovementStatus: (id, status) =>
+      service.setImprovementStatusItem(id, status),
+    promoteImprovement: (id) => service.promoteImprovementItem(id),
+    reportClientIssue: (summary, detail) =>
+      service.reportClientIssue(summary, detail),
     memoryDump: (scopeId) => service.memoryDump(scopeId),
     memoryRevise: (scopeId, seq, text, reason) =>
       service.memoryRevise(scopeId, seq, text, reason),

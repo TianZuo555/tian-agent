@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { lock } from 'proper-lockfile';
 import { Service } from '../worker/service.js';
 import type { TelegramSetup } from '../worker/telegram.js';
+import type { IssueContext } from '../worker/improvements.js';
 import { commandHandlers } from '../worker/commands.js';
 import { validateCommand, type RuntimeMessage } from '../shared/contracts.js';
 import type { Emit, ServiceInfo } from '../shared/types.js';
@@ -60,6 +61,12 @@ export class ResidentServer {
   get service(): Service {
     if (!this.application) throw new Error('Service has not started');
     return this.application;
+  }
+
+  /** Best-effort issue capture for process-level failures and the entrypoint. */
+  reportIssue(area: string, error: unknown, context: IssueContext = {}): void {
+    if (this.application) this.application.reportIssue(area, error, context);
+    else console.error(`${area}:`, error);
   }
 
   private emit: Emit = (channel, payload, clientId) => {
@@ -126,10 +133,11 @@ export class ResidentServer {
       this.ownsSocket = true;
       chmodSync(this.paths.socketPath, 0o600);
       this.server.on('error', (error) => {
-        console.error('Service listener failed:', error);
+        this.reportIssue('service.listener', error, { severity: 'high' });
         void this.close();
       });
     } catch (error) {
+      this.reportIssue('service.start', error, { severity: 'high' });
       await this.close();
       throw error;
     }
@@ -155,7 +163,9 @@ export class ResidentServer {
       this.connections.delete(connection);
       for (const canonical of connection.clients.values()) {
         this.targets.delete(canonical);
-        void this.service.releaseClient(canonical).catch(console.error);
+        void this.service
+          .releaseClient(canonical)
+          .catch((error) => this.reportIssue('service.release-client', error));
       }
       connection.clients.clear();
     });
@@ -173,7 +183,9 @@ export class ResidentServer {
       connection.clients.delete(message.clientId);
       if (canonical !== undefined) {
         this.targets.delete(canonical);
-        void this.service.releaseClient(canonical).catch(console.error);
+        void this.service
+          .releaseClient(canonical)
+          .catch((error) => this.reportIssue('service.release-client', error));
       }
       return;
     }

@@ -70,6 +70,20 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     }),
     listGoals: async () => [],
     listNotices: async () => [],
+    listImprovements: async () => [],
+    getImprovement: async () => {
+      throw new Error('Unused');
+    },
+    addImprovement: async () => {
+      throw new Error('Unused');
+    },
+    setImprovementStatus: async () => {
+      throw new Error('Unused');
+    },
+    promoteImprovement: async () => {
+      throw new Error('Unused');
+    },
+    reportClientIssue: async () => {},
     createGoal: async () => {
       throw new Error('Unused');
     },

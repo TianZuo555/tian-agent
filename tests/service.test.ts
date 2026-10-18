@@ -400,6 +400,63 @@ test('a refused maintenance request leaves the scheduler firing', async (t) => {
   assert.equal(fired[0].goalId, goal.id);
 });
 
+test('improvement entries are added, promoted, resolved, and listed over IPC', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  const entry = await client.invoke('addImprovement', [
+    'global',
+    'idea',
+    'Show the run diff inline',
+    'Avoid a round trip to the diff pane.',
+    'medium',
+  ]);
+  assert.equal(entry.status, 'open');
+  assert.equal(entry.source, 'user');
+  const list = await client.invoke('listImprovements', [null]);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].summary, entry.summary);
+  assert.equal(
+    (await client.invoke('getImprovement', [entry.id])).detail,
+    'Avoid a round trip to the diff pane.',
+  );
+
+  const promoted = await client.invoke('promoteImprovement', [entry.id]);
+  assert.equal(promoted.status, 'promoted');
+  assert.notEqual(promoted.taskId, null);
+  const tasks = await client.invoke('listTasks', ['global']);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].title, 'Show the run diff inline');
+
+  const again = await client.invoke('promoteImprovement', [entry.id]);
+  assert.equal(again.taskId, promoted.taskId);
+  assert.equal((await client.invoke('listTasks', ['global'])).length, 1);
+
+  const resolved = await client.invoke('setImprovementStatus', [
+    entry.id,
+    'resolved',
+  ]);
+  assert.equal(resolved.status, 'resolved');
+
+  await client.invoke('reportClientIssue', [
+    'Renderer failed to mount',
+    'component stack',
+  ]);
+  const issues = (await client.invoke('listImprovements', [null])).filter(
+    (item) => item.area === 'renderer',
+  );
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].kind, 'issue');
+  assert.equal(issues[0].source, 'system');
+
+  f.server.service.reportIssue('test.capture', new Error('boom'));
+  f.server.service.reportIssue('test.capture', new Error('boom'));
+  const captured = (await client.invoke('listImprovements', [null])).filter(
+    (item) => item.area === 'test.capture',
+  );
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].occurrences, 2);
+});
+
 test(
   'LaunchAgent runs Node from a stable release and automatically restarts at login',
   { skip: process.platform !== 'darwin' },

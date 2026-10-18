@@ -4,6 +4,7 @@ import {
   ChatCircleDots,
   Folder,
   Gear,
+  Notebook,
   SidebarSimple,
   Target,
   Tray,
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
 import { actions, useStore } from '../store';
+import type { Nav } from '../state';
 
 interface PaletteItem {
   value: string;
@@ -45,7 +47,7 @@ export function CommandPalette() {
 
   const items = useMemo<PaletteItem[]>(() => {
     const close = () => actions.setPaletteOpen(false);
-    const go = (nav: 'chat' | 'goals' | 'inbox') => () => {
+    const go = (nav: Nav) => () => {
       actions.setNav(nav);
       close();
     };
@@ -82,6 +84,13 @@ export function CommandPalette() {
         shortcut: '⌘3',
         icon: Tray,
         run: go('inbox'),
+      },
+      {
+        value: 'go log',
+        label: 'Go to Log',
+        shortcut: '⌘4',
+        icon: Notebook,
+        run: go('log'),
       },
       {
         value: 'toggle context pane',

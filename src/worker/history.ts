@@ -6,6 +6,7 @@ import type {
 } from '@earendil-works/pi-durable';
 import type { Db } from './db.js';
 import type { EventLog } from './events.js';
+import type { IssueReporter } from './improvements.js';
 
 /** One searchable unit: a transcript excerpt, a tool call/result, or an event. */
 export interface HistoryRow {
@@ -76,6 +77,8 @@ export class HistoryIndex {
     private events: EventLog,
     /** Gate for background sync work (e.g. paused during service maintenance). */
     private enabled: () => boolean = () => true,
+    /** Automatic issue sink; defaults to the console. */
+    private onIssue?: IssueReporter,
   ) {
     db.sqlite.exec(`
       CREATE TABLE IF NOT EXISTS history_entries (
@@ -238,7 +241,10 @@ export class HistoryIndex {
     await Promise.all(
       selected.map((row) =>
         this.syncConversation(row.id, row.scopeId).catch((error) =>
-          console.error(`History sync ${row.id}:`, error),
+          this.report('history.sync', error, {
+            scopeId: row.scopeId,
+            conversationId: `conv:${row.id}`,
+          }),
         ),
       ),
     );
@@ -255,7 +261,10 @@ export class HistoryIndex {
         this.timers.delete(conversationId);
         if (this.stopped || !this.enabled()) return;
         void this.syncConversation(conversationId, scopeId).catch((error) =>
-          console.error(`History sync ${conversationId}:`, error),
+          this.report('history.sync', error, {
+            scopeId,
+            conversationId: `conv:${conversationId}`,
+          }),
         );
       }, SYNC_DEBOUNCE_MS),
     );
@@ -275,6 +284,15 @@ export class HistoryIndex {
   /** Wait for in-flight syncs (used on service close). */
   async idle(): Promise<void> {
     await Promise.allSettled(this.syncs.values());
+  }
+
+  private report(
+    area: string,
+    error: unknown,
+    context: Parameters<IssueReporter>[2] = {},
+  ): void {
+    if (this.onIssue) this.onIssue(area, error, context);
+    else console.error(`${area}:`, error);
   }
 
   stop(): void {

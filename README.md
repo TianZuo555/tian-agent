@@ -109,35 +109,37 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 - **Main**：管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库。
 - **常驻服务**：唯一持有应用数据库和 Pi storage，执行模型、工具、Inbox、通知和 Run。客户端重连后重新获取快照及订阅。
 
-| 模块                      | 职责                                              |
-| ------------------------- | ------------------------------------------------- |
-| `service/server.ts`       | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
-| `service/client.ts`       | 请求、事件、自动重连；关闭客户端不停止服务        |
-| `service/launchd.ts`      | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理 |
-| `desktop/controller.ts`   | App 连接偏好、服务控制及本地升级入口              |
-| `desktop/app-update.ts`   | App 校验、独立替换、启动检查与失败恢复            |
-| `shared/contracts.ts`     | IPC / socket 参数 schema、返回类型和消息合约      |
-| `shared/messages.ts`      | Pi transcript 转换为聊天快照                      |
-| `worker/service.ts`       | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
-| `worker/commands.ts`      | 各 transport 共用的业务命令                       |
-| `worker/agents.ts`        | Pi API 适配和总管／工兵能力配置                   |
-| `worker/worker-tools.ts`  | 工兵消息工具：ask_chief、tell_chief、check_msgs   |
-| `worker/runs.ts`          | Run 状态、attempt、收集、恢复及验收               |
-| `worker/data.ts`          | task、memory、Inbox 操作和更新事件                |
-| `worker/db.ts`            | 业务数据、渠道绑定、通知 outbox、幂等记录         |
-| `worker/scopes.ts`        | scope 目录、notes 和 Inbox 文件导入               |
-| `worker/memory.ts`        | SQLite 记忆、来源与版本、摘要树                   |
-| `worker/events.ts`        | 业务事件与审计日志（`events` 表）                 |
-| `worker/history.ts`       | transcript 与事件的派生全文索引、增量同步与检索   |
-| `worker/tools-history.ts` | 总管检索工具：search_history、read_history        |
-| `worker/dispatch.ts`      | worktree、commit、diff、merge 和 PR 命令          |
-| `worker/telegram.ts`      | Telegram Bot 长轮询、白名单、会话映射与回复转发   |
+| 模块                           | 职责                                              |
+| ------------------------------ | ------------------------------------------------- |
+| `service/server.ts`            | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
+| `service/client.ts`            | 请求、事件、自动重连；关闭客户端不停止服务        |
+| `service/launchd.ts`           | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理 |
+| `desktop/controller.ts`        | App 连接偏好、服务控制及本地升级入口              |
+| `desktop/app-update.ts`        | App 校验、独立替换、启动检查与失败恢复            |
+| `shared/contracts.ts`          | IPC / socket 参数 schema、返回类型和消息合约      |
+| `shared/messages.ts`           | Pi transcript 转换为聊天快照                      |
+| `worker/service.ts`            | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
+| `worker/commands.ts`           | 各 transport 共用的业务命令                       |
+| `worker/agents.ts`             | Pi API 适配和总管／工兵能力配置                   |
+| `worker/worker-tools.ts`       | 工兵消息工具：ask_chief、tell_chief、check_msgs   |
+| `worker/runs.ts`               | Run 状态、attempt、收集、恢复及验收               |
+| `worker/data.ts`               | task、memory、Inbox 操作和更新事件                |
+| `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录         |
+| `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入               |
+| `worker/memory.ts`             | SQLite 记忆、来源与版本、摘要树                   |
+| `worker/events.ts`             | 业务事件与审计日志（`events` 表）                 |
+| `worker/improvements.ts`       | 改进日志、系统异常指纹去重、提升为 Task           |
+| `worker/tools-improvements.ts` | 总管工具：log_improvement、list_improvements      |
+| `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索   |
+| `worker/tools-history.ts`      | 总管检索工具：search_history、read_history        |
+| `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令          |
+| `worker/telegram.ts`           | Telegram Bot 长轮询、白名单、会话映射与回复转发   |
 
 总管和工兵共用常驻服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵当前是 Durable 会话，生命周期与桌面客户端独立。
 
 ## 权限与 scope
 
-总管只启用 chief extension：task、memory、notes、Inbox、dispatch 和 Run 查询，以及 Run 消息（`send_run_msg` / `list_run_msgs`），没有 `bash/read/write/edit`。读取结果使用 `read_run_report` / `read_run_diff`。启动时也会重新限制已有总管会话的 extension。
+总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch 和 Run 查询，以及 Run 消息（`send_run_msg` / `list_run_msgs`），没有 `bash/read/write/edit`。读取结果使用 `read_run_report` / `read_run_diff`。启动时也会重新限制已有总管会话的 extension。
 
 工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可在执行中用 `ask_chief` 向总管提问并阻塞等待答复，用 `tell_chief` 发送进度通知，用 `check_msgs` 接收总管指令；问题通过通知管道唤醒总管，答复与指令落在按 run 持久化的消息线程（`agent_messages` 表）里，重启不丢。指令要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，当前不提供操作系统文件访问沙箱。
 
@@ -174,6 +176,17 @@ Core Memory（`wake`）按 Token 预算渲染：默认每 Scope 1500 tokens，�
 项目记忆位于 `<project root>/memory/`；全局记忆位于 `<dataDir>/scopes/global/memory/`。较长内容存入 `<scope root>/notes/` 的 Markdown 文档。UI 中用户可直接修订或删除记忆（`memoryRevise` / `memoryForget`，操作者为 user），全部历史保留在版本记录中。
 
 记什么、如何摘要由总管模型负责。当前没有向量索引、语义去重或独立后台压缩服务。
+
+## 改进日志
+
+Log 视图和 `improvements` 表记录值得改进的产品问题、使用摩擦、想法与成功经验，与审计 Event、Memory 分开（[ADR 0010](docs/adr/0010-improvement-log.md)）：
+
+- 一条条目带 `kind`（issue / friction / idea / win）、`status`（open / promoted / resolved / dismissed）、severity、来源（user / chief / system）和 Scope；可选关联 Run、Conversation、Event。列表只取摘要，展开时才读取 detail。
+- 总管用 `log_improvement` 写入，用户可在 Log 视图新建；`list_improvements` 用于避免重复记录。
+- 服务启动、监听、Inbox、History、通知、调度、Run、Land/Ship、Telegram 与渲染层的异常会通过同一个 `reportIssue` 汇点自动记录。相同 `area + error name + code + message` 在同一个 Scope 的 open/promoted 条目上合并为一条并累计 `occurrences`；正文会脱敏 bot token、Bearer、`sk-*` 和常见密钥赋值。
+- Promote 会在同一事务中创建一条带 `improvement:<id>` 去重键的待办 Task，并回写 `task_id`；重复操作复用同一条 Task。
+- 自动捕获是 best-effort，写入失败只回到 `console.error`，不阻塞原业务。原始进程输出仍写入 `service.log`。
+- 新增 Log 命令与 `improvements` 事件后，`SERVICE_PROTOCOL` 为 3。
 
 ## Run 生命周期
 

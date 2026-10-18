@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { Db, RunRow } from './db.js';
 import type { Scopes } from './scopes.js';
 import type { EventLog } from './events.js';
+import type { IssueReporter } from './improvements.js';
 import type { Emit } from '../shared/types.js';
 import { atomicWrite } from './files.js';
 import * as Git from './dispatch.js';
@@ -45,6 +46,8 @@ export class RunOrchestrator {
     private emit: Emit,
     private notify: () => Promise<void>,
     private events?: EventLog,
+    /** Automatic issue sink for failures that otherwise only reach the console. */
+    private onIssue?: IssueReporter,
   ) {}
 
   private async locked<T>(key: string, action: () => Promise<T>): Promise<T> {
@@ -163,6 +166,11 @@ export class RunOrchestrator {
         else await this.ship(run.id);
       } catch (error) {
         this.db.patchRun(run.id, { error: String(error) });
+        this.onIssue?.('run.recovery', error, {
+          scopeId: run.projectId,
+          runId: run.id,
+          taskId: run.taskId ?? undefined,
+        });
       }
     }
     for (const run of this.db.activeRuns()) {
@@ -185,7 +193,15 @@ export class RunOrchestrator {
               await this.fail(run, error);
           });
       })
-      .catch((error) => console.error(`Run ${id}:`, error))
+      .catch((error) => {
+        const run = this.db.getRun(id);
+        this.onIssue?.('run.launch', error, {
+          ...(run ? { scopeId: run.projectId } : {}),
+          runId: id,
+          taskId: run?.taskId ?? undefined,
+          conversationId: run?.chiefConversationId ?? undefined,
+        });
+      })
       .finally(() => {
         this.collectors.delete(id);
       });
@@ -245,9 +261,12 @@ export class RunOrchestrator {
       else {
         const timer = setTimeout(() => {
           timedOut = true;
-          void conversation
-            .abort()
-            .catch((error) => console.error(`Abort ${id}:`, error));
+          void conversation.abort().catch((error) =>
+            this.onIssue?.('run.abort', error, {
+              scopeId: prepared.run.projectId,
+              runId: id,
+            }),
+          );
         }, remaining);
         this.timers.set(id, timer);
       }
@@ -340,6 +359,14 @@ export class RunOrchestrator {
       summary: `Run ${run.id} attempt ${run.attempt} ${status}${run.error ? `: ${run.error}` : ''}`,
       payload: { status, error: run.error },
     });
+    if (run.error)
+      this.onIssue?.('run.failure', new Error(run.error), {
+        scopeId: run.projectId,
+        runId: run.id,
+        taskId: run.taskId ?? undefined,
+        conversationId: run.chiefConversationId ?? undefined,
+        eventId: `run:${run.id}:attempt:${run.attempt}:finished`,
+      });
     this.changed();
     await this.notify();
   }
@@ -360,6 +387,13 @@ export class RunOrchestrator {
       conversationId: run.chiefConversationId,
       summary: `Run ${run.id} attempt ${run.attempt} failed: ${String(error).slice(0, 160)}`,
       payload: { status: 'failed', error: String(error) },
+    });
+    this.onIssue?.('run.failure', error, {
+      scopeId: run.projectId,
+      runId: run.id,
+      taskId: run.taskId ?? undefined,
+      conversationId: run.chiefConversationId ?? undefined,
+      eventId: `run:${run.id}:attempt:${run.attempt}:finished`,
     });
     this.changed();
     await this.notify();
@@ -433,6 +467,11 @@ export class RunOrchestrator {
           });
         } catch (error) {
           this.db.patchRun(id, { error: String(error) });
+          this.onIssue?.('run.land', error, {
+            scopeId: run.projectId,
+            runId: id,
+            taskId: run.taskId ?? undefined,
+          });
           throw error;
         } finally {
           this.changed();
@@ -475,6 +514,11 @@ export class RunOrchestrator {
         });
       } catch (error) {
         this.db.patchRun(id, { error: String(error) });
+        this.onIssue?.('run.discard', error, {
+          scopeId: run.projectId,
+          runId: id,
+          taskId: run.taskId ?? undefined,
+        });
         throw error;
       } finally {
         this.changed();
@@ -543,6 +587,11 @@ export class RunOrchestrator {
         return url;
       } catch (error) {
         this.db.patchRun(id, { error: String(error) });
+        this.onIssue?.('run.ship', error, {
+          scopeId: run.projectId,
+          runId: id,
+          taskId: run.taskId ?? undefined,
+        });
         throw error;
       } finally {
         this.changed();

@@ -7,6 +7,7 @@ import type {
 import type { ConversationInfo, SessionBinding } from '../shared/types.js';
 import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
 import type { Db } from './db.js';
+import type { IssueContext } from './improvements.js';
 
 export const TELEGRAM_CHANNEL = 'telegram';
 
@@ -95,6 +96,8 @@ export interface TelegramHost {
     requestId: string,
   ): Promise<void>;
   conversation(conversationId: string): Promise<Conversation>;
+  /** Automatic issue sink; the adapter degrades to console logging without it. */
+  reportIssue?: (area: string, error: unknown, context?: IssueContext) => void;
 }
 
 const API_BASE = 'https://api.telegram.org';
@@ -241,6 +244,15 @@ export class TelegramAdapter {
     return this.config.allowedChatIds.includes(chatId);
   }
 
+  private report(
+    area: string,
+    error: unknown,
+    context: IssueContext = {},
+  ): void {
+    if (this.host.reportIssue) this.host.reportIssue(area, error, context);
+    else console.error(`${area}:`, errorText(error));
+  }
+
   // ---- lifecycle
 
   /** Idempotent; never throws and never blocks on the polling loop itself. */
@@ -256,7 +268,7 @@ export class TelegramAdapter {
       }
       await this.forwardAll(); // catch up on anything missed while stopped
     } catch (error) {
-      console.error('Telegram adapter start:', errorText(error));
+      this.report('telegram.start', error);
     }
     this.loop = this.pollLoop();
   }
@@ -321,7 +333,7 @@ export class TelegramAdapter {
           await this.sleep(20); // no long poll: avoid a hot spin
       } catch (error) {
         if (!this.running) return;
-        console.error('Telegram polling failed:', errorText(error));
+        this.report('telegram.poll', error);
         await this.sleep(backoff);
         backoff = Math.min(backoff * 2, this.options.maxBackoffMs);
       }
@@ -342,17 +354,15 @@ export class TelegramAdapter {
         return;
       } catch (error) {
         if (attempt >= this.options.maxUpdateAttempts) {
-          console.error(
-            `Telegram update ${update.update_id} skipped after ${attempt} attempts:`,
-            errorText(error),
-          );
+          this.report('telegram.update', error, {
+            extra: `update ${update.update_id} skipped after ${attempt} attempts`,
+          });
           this.saveOffset(update.update_id + 1);
           return;
         }
-        console.error(
-          `Telegram update ${update.update_id} attempt ${attempt} failed:`,
-          errorText(error),
-        );
+        this.report('telegram.update', error, {
+          extra: `update ${update.update_id}, attempt ${attempt}`,
+        });
         await this.sleep(this.options.backoffMs);
       }
     }
@@ -484,7 +494,11 @@ export class TelegramAdapter {
     }
     const run = this.forwardNow(chatId, conversationId)
       .catch((error) =>
-        console.error(`Telegram forward to chat ${chatId}:`, errorText(error)),
+        this.report('telegram.forward', error, {
+          scopeId: this.chatScope(chatId),
+          conversationId: `conv:${conversationId}`,
+          extra: `chat ${chatId}`,
+        }),
       )
       .then(() => {
         this.forwardRuns.delete(conversationId);
@@ -563,10 +577,10 @@ export class TelegramAdapter {
         await this.forwardChat(chatId, conversationId);
       });
     } catch (error) {
-      console.error(
-        `Telegram: cannot watch conversation ${conversationId}:`,
-        errorText(error),
-      );
+      this.report('telegram.watch', error, {
+        scopeId: this.chatScope(chatId),
+        conversationId: `conv:${conversationId}`,
+      });
     }
   }
 

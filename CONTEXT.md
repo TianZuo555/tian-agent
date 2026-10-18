@@ -90,6 +90,16 @@ _Avoid_: episodic memory, transcript log
 Scope 中 `notes/` 下的 Markdown 长文档，用于放不适合单行 Memory 的内容。
 _Avoid_: doc, memory
 
+## 改进
+
+**Improvement Log（改进日志）**:
+按 Scope 归属、可 triage 的改进记录集合，包含产品问题、使用摩擦、想法与成功经验；可由 Tian、Chief 或系统写入。
+_Avoid_: bug tracker、feedback inbox、event log
+
+**Improvement Entry（改进条目）**:
+改进日志中的一条记录，带 kind（issue / friction / idea / win）、状态与可选的 Run、Conversation、Task 引用；可提升为 Task。
+_Avoid_: log line、event、memory
+
 ## 交互
 
 **Conversation**:

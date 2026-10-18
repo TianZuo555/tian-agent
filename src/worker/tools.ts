@@ -16,6 +16,8 @@ import {
   toolText as text,
 } from './tools-memory.js';
 import { historyTools, type HistoryDeps } from './tools-history.js';
+import { improvementTools } from './tools-improvements.js';
+import type { ImprovementStore } from './improvements.js';
 import type { GoalStore } from './goals.js';
 import { goalsTools } from './tools-goals.js';
 
@@ -24,10 +26,13 @@ export interface ChiefDeps {
   db: Db;
   data: DataService;
   goals: GoalStore;
+  improvements: ImprovementStore;
   /** Open (or reuse) a goal's dedicated chief conversation. */
   openGoalConversation: (goalId: string, scopeId: string) => Promise<string>;
   /** Push task/goal updates to clients after chief tool writes. */
   emitUpdates: () => void;
+  /** Refresh the Log view after an improvement write. */
+  emitImprovements: () => void;
   /** Push the notices panel update for a scope. */
   emitNotices: (scopeId: string) => void;
   runReport: (id: string) => string;
@@ -91,7 +96,9 @@ WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you a
 
 SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to remember.
 
-HISTORY. Everything said or done stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. The scope defaults to this conversation's scope; pass scope "all" to search everything. If nothing matches, say plainly that no record was found — never invent history.`,
+HISTORY. Everything said or done stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. The scope defaults to this conversation's scope; pass scope "all" to search everything. If nothing matches, say plainly that no record was found — never invent history.
+
+LOG. Use log_improvement for durable product feedback: broken behavior, recurring friction, a concrete idea, or a win worth repeating. Log it when Tian reports it (source "user") or when you notice it while working; skip routine task noise and one-off model hiccups. Entries appear in Tian's Log view, where he triages them and promotes one into a task. Run list_improvements before logging if you are unsure whether it is already there — do not duplicate an open entry.`,
     { tag: false },
   );
 
@@ -632,6 +639,7 @@ HISTORY. Everything said or done stays searchable across sessions. When Tian ask
       listRunMsgs,
       ...historyTools(deps.history),
       ...goalTools,
+      ...improvementTools(deps),
     ],
   });
 }

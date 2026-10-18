@@ -15,6 +15,11 @@ import { DataService } from './data.js';
 import { AgentRuntime } from './agents.js';
 import { RunOrchestrator, type DispatchInput } from './runs.js';
 import { EventLog } from './events.js';
+import {
+  ImprovementStore,
+  fingerprintError,
+  type IssueContext,
+} from './improvements.js';
 import { HistoryIndex } from './history.js';
 import { GoalStore } from './goals.js';
 import { GoalScheduler, parseCron } from './scheduler.js';
@@ -30,6 +35,8 @@ import type {
   Emit,
   GoalPatch,
   GoalStatus,
+  ImprovementItem,
+  ImprovementSummary,
   ProjectPatch,
   ScopeInfo,
   SettingsInfo,
@@ -45,6 +52,7 @@ export class Service {
   readonly data: DataService;
   readonly runs: RunOrchestrator;
   readonly events: EventLog;
+  readonly improvements: ImprovementStore;
   readonly history: HistoryIndex;
   readonly goals: GoalStore;
   readonly scheduler: GoalScheduler;
@@ -84,11 +92,13 @@ export class Service {
       this.db,
     );
     this.events = new EventLog(this.db);
+    this.improvements = new ImprovementStore(this.db);
     this.history = new HistoryIndex(
       this.db,
       this.agents,
       this.events,
       () => !this.maintenanceMode,
+      (area, error, context) => this.reportIssue(area, error, context),
     );
     this.runs = new RunOrchestrator(
       this.db,
@@ -98,6 +108,7 @@ export class Service {
       emit,
       () => this.deliverNotifications(),
       this.events,
+      (area, error, context) => this.reportIssue(area, error, context),
     );
     this.goals = new GoalStore(this.db);
     this.scheduler = new GoalScheduler({
@@ -107,6 +118,8 @@ export class Service {
         this.ensureGoalConversation(goalId, scopeId),
       notify: () => this.deliverNotifications(),
       isPaused: () => this.closing || this.maintenanceMode,
+      reportIssue: (area, error, context) =>
+        this.reportIssue(area, error, context),
       emitUpdates: () => this.emitUpdates(),
       emitNotice: (scopeId) =>
         this.emit('notices', this.goals.listNotices(scopeId)),
@@ -123,9 +136,11 @@ export class Service {
         latestUserEntry: (conversationId) =>
           this.latestUserEntry(conversationId),
         goals: this.goals,
+        improvements: this.improvements,
         openGoalConversation: (goalId, scopeId) =>
           this.ensureGoalConversation(goalId, scopeId),
         emitUpdates: () => this.emitUpdates(),
+        emitImprovements: () => this.emitImprovements(),
         emitNotices: (scopeId) =>
           this.emit('notices', this.goals.listNotices(scopeId)),
         dispatch: (input) => this.runs.dispatch(input),
@@ -157,7 +172,7 @@ export class Service {
           this.watchInbox(scope.id);
           this.scanInbox(scope.id);
         } catch (error) {
-          console.error(`Inbox ${scope.id}:`, error);
+          this.reportIssue('inbox.scan', error, { scopeId: scope.id });
         }
       }
       void this.deliverNotifications();
@@ -170,7 +185,7 @@ export class Service {
     // Catch the derived history index up in the background; never block startup.
     this.historyBackfill = this.history
       .syncAll()
-      .catch((error) => console.error('History backfill:', error));
+      .catch((error) => this.reportIssue('history.backfill', error));
     this.scheduler.start();
     for (const scope of this.listScopes()) {
       this.watchInbox(scope.id);
@@ -196,6 +211,8 @@ export class Service {
             await this.submit(conversationId, content, requestId);
           },
           conversation: (id) => this.agents.conversation(id),
+          reportIssue: (area, error, context) =>
+            this.reportIssue(area, error, context),
         },
         config,
         this.telegramSetup.api ?? fetchBotApi(config.token),
@@ -524,14 +541,14 @@ export class Service {
           try {
             this.scanInbox(scopeId);
           } catch (error) {
-            console.error(`Inbox ${scopeId}:`, error);
+            this.reportIssue('inbox.scan', error, { scopeId });
           }
         }, 200),
       );
     });
     watcher.on('error', (error) => {
       this.stopInbox(scopeId);
-      console.error(`Inbox ${scopeId}:`, error);
+      this.reportIssue('inbox.watch', error, { scopeId });
     });
     this.inboxWatches.set(scopeId, watcher);
   }
@@ -617,7 +634,10 @@ export class Service {
           });
           this.emit('inbox', notification.scopeId);
         } catch (error) {
-          console.error(`Notification ${notification.id}:`, error);
+          this.reportIssue('notification.deliver', error, {
+            scopeId: notification.scopeId,
+            conversationId: notification.conversationId ?? undefined,
+          });
         }
       }
     })().finally(() => {
@@ -652,6 +672,110 @@ export class Service {
   }
   taskList(scopeId: string | null) {
     return this.db.listTasks(scopeId);
+  }
+
+  /** All improvement summaries, or those belonging to one scope. */
+  improvementList(scopeId: string | null): ImprovementSummary[] {
+    return this.improvements.list({ scopeId });
+  }
+
+  getImprovementItem(id: string) {
+    const entry = this.improvements.get(id);
+    if (!entry) throw new Error(`Unknown improvement: ${id}`);
+    return entry;
+  }
+
+  /** User-authored entry from the Log view. */
+  addImprovementItem(
+    scopeId: string,
+    kind: ImprovementItem['kind'],
+    summary: string,
+    detail: string,
+    severity: ImprovementItem['severity'],
+  ) {
+    this.scopes.root(scopeId);
+    const entry = this.improvements.record({
+      scopeId,
+      kind,
+      summary,
+      detail,
+      severity,
+      source: 'user',
+    });
+    this.emitImprovements();
+    return entry;
+  }
+
+  setImprovementStatusItem(
+    id: string,
+    status: 'open' | 'resolved' | 'dismissed',
+  ): ImprovementSummary {
+    this.improvements.setStatus(id, status);
+    this.emitImprovements();
+    return this.improvementSummary(id);
+  }
+
+  /** Promote an entry into one deduped task; repeated calls reuse that task. */
+  promoteImprovementItem(id: string): ImprovementSummary {
+    const promotion = this.improvements.promote(id);
+    if (promotion.created) {
+      this.events.record({
+        id: `improvement:${id}:promoted`,
+        type: 'improvement.promoted',
+        actor: 'user',
+        scopeId: promotion.entry.scopeId,
+        taskId: String(promotion.task.id),
+        summary: `Improvement ${id} promoted to task #${promotion.task.id}: ${promotion.entry.summary.slice(0, 120)}`,
+        payload: { taskId: promotion.task.id, kind: promotion.entry.kind },
+      });
+    }
+    this.emitImprovements();
+    this.emit('tasks', this.db.listTasks(null));
+    return this.improvementSummary(id);
+  }
+
+  /** Best-effort issue report from the renderer; never throws back into UI. */
+  reportClientIssue(summary: string, detail: string): void {
+    const text = summary.trim();
+    if (!text) return;
+    try {
+      this.improvements.record({
+        scopeId: GLOBAL_SCOPE,
+        kind: 'issue',
+        source: 'system',
+        severity: 'medium',
+        area: 'renderer',
+        summary: text,
+        detail,
+        fingerprint: fingerprintError('renderer', new Error(text)),
+      });
+      this.emitImprovements();
+    } catch (error) {
+      console.error('Renderer issue capture failed:', error);
+    }
+  }
+
+  /**
+   * Central automatic issue sink: log the error as before, then record it as a
+   * fingerprinted improvement. Capture failures never break the caller.
+   */
+  reportIssue(area: string, error: unknown, context: IssueContext = {}): void {
+    console.error(`${area}:`, error);
+    try {
+      this.improvements.capture(area, error, context);
+      this.emitImprovements();
+    } catch (reportError) {
+      console.error('Improvement capture failed:', reportError);
+    }
+  }
+
+  private improvementSummary(id: string): ImprovementSummary {
+    const { detail: _detail, ...summary } = this.getImprovementItem(id);
+    return summary;
+  }
+
+  private emitImprovements(): void {
+    this.emit('improvements', this.improvements.list());
   }
 
   /** The goal's dedicated chief conversation, created once per goal. */

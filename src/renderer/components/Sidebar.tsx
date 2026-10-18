@@ -5,6 +5,7 @@ import {
   ChatCircleText,
   FolderPlus,
   MagnifyingGlass,
+  Notebook,
   Plus,
   SlidersHorizontal,
   Sparkle,
@@ -118,7 +119,7 @@ function ConversationRow(props: {
   );
 }
 
-/** Top-level destination: Chat / Goals / Inbox. */
+/** Top-level destination: Chat / Goals / Inbox / Log. */
 function NavItem(props: {
   icon: Icon;
   label: string;
@@ -238,6 +239,7 @@ export function Sidebar() {
   const nav = useStore((s) => s.nav);
   const inbox = useStore((s) => s.inbox);
   const tasks = useStore((s) => s.tasks);
+  const improvements = useStore((s) => s.improvements);
   const runtimeStatus = useStore((s) => s.runtimeStatus);
   const [query, setQuery] = useState('');
   const [name, setName] = useState('');
@@ -254,6 +256,9 @@ export function Sidebar() {
   const projects = scopes.filter((s) => s.kind === 'project');
   const pendingTasks = tasks.filter((t) => t.status === 'pending').length;
   const unread = inbox.filter((m) => !m.read).length;
+  const openImprovements = improvements.filter(
+    (entry) => entry.status === 'open',
+  ).length;
 
   const connected = runtimeStatus === 'ready';
   const statusLabel =
@@ -360,6 +365,13 @@ export function Sidebar() {
           active={nav === 'inbox'}
           badge={unread}
           onClick={() => actions.setNav('inbox')}
+        />
+        <NavItem
+          icon={Notebook}
+          label="Log"
+          active={nav === 'log'}
+          badge={openImprovements}
+          onClick={() => actions.setNav('log')}
         />
       </nav>
 

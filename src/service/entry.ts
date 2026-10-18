@@ -18,6 +18,11 @@ if (existsSync(paths.environmentPath))
 const server = new ResidentServer(paths, {
   telegram: { config: telegramConfigFromEnv() },
 });
+// Runs before Node's default crash path, so a process-level failure still lands
+// in the Improvement Log when the database is reachable.
+process.on('uncaughtExceptionMonitor', (error, origin) => {
+  server.reportIssue(`process.${origin}`, error, { severity: 'high' });
+});
 let shutdown: Promise<void> | null = null;
 function stop(): void {
   if (shutdown) return;
@@ -29,7 +34,7 @@ function stop(): void {
       process.exit(0);
     },
     (error) => {
-      console.error(error);
+      server.reportIssue('service.shutdown', error, { severity: 'high' });
       process.exit(1);
     },
   );

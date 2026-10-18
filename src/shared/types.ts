@@ -115,6 +115,40 @@ export interface GoalItem {
   updatedAt: string;
 }
 
+/** A durable improvement observation: a bug, friction, idea, or win. */
+export type ImprovementKind = 'issue' | 'friction' | 'idea' | 'win';
+export type ImprovementStatus = 'open' | 'promoted' | 'resolved' | 'dismissed';
+export type ImprovementSource = 'user' | 'chief' | 'system';
+export type ImprovementSeverity = 'low' | 'medium' | 'high';
+
+/** List rows omit the detail body; fetch it with `getImprovement`. */
+export interface ImprovementSummary {
+  id: string;
+  scopeId: string;
+  kind: ImprovementKind;
+  status: ImprovementStatus;
+  severity: ImprovementSeverity;
+  summary: string;
+  source: ImprovementSource;
+  area: string | null;
+  /** Stable key for automatic capture; repeated failures fold into one row. */
+  fingerprint: string | null;
+  occurrences: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  taskId: number | null;
+  conversationId: string | null;
+  runId: string | null;
+  eventId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImprovementItem extends ImprovementSummary {
+  /** Markdown-ish free text: reproduction, stack, evidence. */
+  detail: string;
+}
+
 export interface NoticeItem {
   id: number;
   goalId: string;
@@ -263,6 +297,7 @@ export interface AppEvents {
   tasks: TaskItem[];
   goals: GoalItem[];
   notices: NoticeItem[];
+  improvements: ImprovementSummary[];
   runs: RunInfo[];
   inbox: string;
   memory: string;
