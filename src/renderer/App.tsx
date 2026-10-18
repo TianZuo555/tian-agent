@@ -1,17 +1,50 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { tian } from './api';
 import { PanelRight } from 'lucide-react';
 import { actions, useStore } from './store';
 import { Sidebar } from './components/Sidebar';
-import { ChatView } from './components/ChatView';
-import { InboxView, ScheduleView } from './components/NavViews';
-import { ContextPane } from './components/ContextPane';
-import { SettingsDialog } from './components/SettingsDialog';
 import { PaneDivider, usePersistedWidth } from './components/PaneDivider';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { EASE } from './components/motion-primitives';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
+
+const ChatView = lazy(() =>
+  import('./components/ChatView').then((m) => ({ default: m.ChatView })),
+);
+const InboxView = lazy(() =>
+  import('./components/NavViews').then((m) => ({ default: m.InboxView })),
+);
+const ScheduleView = lazy(() =>
+  import('./components/NavViews').then((m) => ({ default: m.ScheduleView })),
+);
+const ContextPane = lazy(() =>
+  import('./components/ContextPane').then((m) => ({ default: m.ContextPane })),
+);
+const SettingsDialog = lazy(() =>
+  import('./components/SettingsDialog').then((m) => ({
+    default: m.SettingsDialog,
+  })),
+);
+
+/**
+ * Mounts the settings dialog only after it is first opened, so its chunk
+ * (and the usage/service settings inside) load on demand. Stays mounted
+ * afterwards so dialog exit animations still play on close.
+ */
+function DeferredSettingsDialog() {
+  const open = useStore((s) => s.settingsOpen);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    if (open) setMounted(true);
+  }, [open]);
+  if (!mounted) return null;
+  return (
+    <Suspense fallback={null}>
+      <SettingsDialog />
+    </Suspense>
+  );
+}
 
 /**
  * Three-pane shell, Cursor/Codex style: navigation, conversation, context.
@@ -41,6 +74,18 @@ export function App() {
   useEffect(() => actions.init(), []);
   useEffect(() => {
     void tian.desktop('ready').catch(() => {});
+  }, []);
+  useEffect(() => {
+    // Warm the lazy chunks once the shell has painted so first navigation,
+    // context pane, and settings opens never wait on a chunk fetch.
+    const warm = () => {
+      void import('./components/ChatView');
+      void import('./components/NavViews');
+      void import('./components/ContextPane');
+      void import('./components/SettingsDialog');
+    };
+    const id = window.requestIdleCallback(warm, { timeout: 3000 });
+    return () => window.cancelIdleCallback(id);
   }, []);
 
   return (
@@ -137,11 +182,17 @@ export function App() {
                   </div>
                 )}
                 {nav === 'chat' ? (
-                  <ChatView />
+                  <Suspense fallback={null}>
+                    <ChatView />
+                  </Suspense>
                 ) : nav === 'schedule' ? (
-                  <ScheduleView />
+                  <Suspense fallback={null}>
+                    <ScheduleView />
+                  </Suspense>
                 ) : (
-                  <InboxView />
+                  <Suspense fallback={null}>
+                    <InboxView />
+                  </Suspense>
                 )}
               </motion.div>
             </AnimatePresence>
@@ -159,7 +210,9 @@ export function App() {
                   style={{ width: contextWidth }}
                   className="flex min-h-0 shrink-0"
                 >
-                  <ContextPane />
+                  <Suspense fallback={null}>
+                    <ContextPane />
+                  </Suspense>
                 </div>
               </>
             ) : (
@@ -176,7 +229,7 @@ export function App() {
             )}
           </>
         )}
-        <SettingsDialog />
+        <DeferredSettingsDialog />
       </div>
     </TooltipProvider>
   );
