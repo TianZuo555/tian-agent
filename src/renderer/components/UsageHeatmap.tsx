@@ -11,11 +11,11 @@ import { tian } from '../api';
 
 const WEEKS = 26;
 const LEVELS = [
-  'bg-muted',
-  'bg-primary/25',
-  'bg-primary/50',
-  'bg-primary/75',
-  'bg-primary',
+  'bg-surface-tertiary/70',
+  'bg-brand/20',
+  'bg-brand/40',
+  'bg-brand/65',
+  'bg-brand',
 ];
 
 const dayKey = (date: Date): string => {
@@ -104,11 +104,28 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
     return { cells, monthLabels, totalTokens, totalCost };
   }, [days]);
 
+  if (days === null && !error) {
+    return (
+      <div className="flex flex-col gap-2" aria-busy="true">
+        <div className="h-2 w-24 animate-pulse rounded-full bg-secondary" />
+        <div className="mx-auto grid w-full max-w-[440px] grid-flow-col grid-rows-7 gap-[3px]">
+          {Array.from({ length: WEEKS * 7 }, (_, i) => (
+            <span
+              key={i}
+              className="aspect-square animate-pulse rounded-[3px] bg-surface-tertiary/60"
+              style={{ animationDelay: `${(i % 12) * 40}ms` }}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <TooltipProvider>
       <div
         aria-hidden="true"
-        className="mb-0.5 grid gap-[3px] overflow-hidden"
+        className="mx-auto mb-1 grid w-full max-w-[440px] gap-[3px] overflow-hidden"
         style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }}
       >
         {monthLabels.map((label, index) => (
@@ -123,10 +140,10 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
       <div
         role="list"
         aria-label={`Model usage in the last ${WEEKS} weeks`}
-        className="grid grid-flow-col grid-rows-7 gap-[3px]"
+        className="mx-auto grid w-full max-w-[440px] grid-flow-col grid-rows-7 gap-[3px]"
         style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }}
       >
-        {cells.map((cell) => (
+        {cells.map((cell, index) => (
           <Tooltip key={cell.key}>
             <TooltipTrigger
               render={
@@ -138,9 +155,12 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
                       : 'no usage'
                   }`}
                   className={cn(
-                    'aspect-square rounded-[3px]',
+                    'animate-cell-in aspect-square cursor-default rounded-[3px] transition-transform duration-150 hover:scale-125 hover:ring-1 hover:ring-brand/40',
                     LEVELS[cell.level],
                   )}
+                  style={{
+                    animationDelay: `${Math.min(index * 1.5, 260)}ms`,
+                  }}
                 />
               }
             />
@@ -159,12 +179,10 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
           </Tooltip>
         ))}
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
         <span aria-live="polite" className="min-w-0 truncate">
           {error ??
-            (days === null
-              ? 'Loading usage…'
-              : `${formatTokens(totalTokens)} tokens · ${formatCost(totalCost)} in the last ${WEEKS} weeks`)}
+            `${formatTokens(totalTokens)} tokens · ${formatCost(totalCost)} in the last ${WEEKS} weeks`}
         </span>
         <span className="flex shrink-0 items-center gap-1">
           Less

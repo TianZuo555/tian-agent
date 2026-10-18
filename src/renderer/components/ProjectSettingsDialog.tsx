@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { Settings } from 'lucide-react';
+import { Gear } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -62,11 +62,16 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
           />
         }
       >
-        <Settings className="size-3.5" />
+        <Gear size={13} />
       </DialogTrigger>
       <DialogPopup className="sm:max-w-md" showCloseButton={!busy}>
         <DialogHeader>
-          <DialogTitle>{scope.name} settings</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex size-7 items-center justify-center rounded-lg bg-brand/12 text-brand">
+              <Gear size={14} />
+            </span>
+            {scope.name} settings
+          </DialogTitle>
           <DialogDescription>{scope.rootPath}</DialogDescription>
         </DialogHeader>
         <form

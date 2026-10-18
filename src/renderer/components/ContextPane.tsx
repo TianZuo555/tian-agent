@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  CheckCircle2,
-  ChevronRight,
+  ArrowsClockwise,
+  CaretDoubleRight,
+  CaretRight,
+  CheckCircle,
   CircleDashed,
-  FileCode2,
+  CircleNotch,
+  FileCode,
   GitMerge,
-  Inbox,
-  Layers,
-  ListTodo,
-  Loader2,
-  Pencil,
-  RefreshCw,
-  Trash2,
+  ListChecks,
+  PencilSimple,
+  Plus,
+  Stack,
+  Trash,
+  Tray,
+  WarningCircle,
   XCircle,
-} from 'lucide-react';
+} from '@phosphor-icons/react';
+import type { Icon } from '@phosphor-icons/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs';
 import { FileDiff } from '@pierre/diffs/react';
 import { Badge } from '@/components/ui/badge';
@@ -34,17 +39,17 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
 import { tian } from '../api';
-import { CountPulse } from './motion-primitives';
+import { CountPulse, EASE } from './motion-primitives';
 import type { MemoryItem, RunInfo } from '@/shared/types';
 import { actions, useStore } from '../store';
 
 type PaneTab = 'tasks' | 'runs' | 'memory' | 'inbox';
 
-const TABS: { id: PaneTab; label: string; icon: typeof ListTodo }[] = [
-  { id: 'tasks', label: 'Tasks', icon: ListTodo },
+const TABS: { id: PaneTab; label: string; icon: Icon }[] = [
+  { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'runs', label: 'Runs', icon: GitMerge },
-  { id: 'memory', label: 'Memory', icon: Layers },
-  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'memory', label: 'Memory', icon: Stack },
+  { id: 'inbox', label: 'Inbox', icon: Tray },
 ];
 
 /** Discarded/landed/shipped runs read as terminal, whatever status they had. */
@@ -62,12 +67,12 @@ const statusVariant: Record<
   running: 'secondary',
   queued: 'outline',
   collecting: 'secondary',
-  done: 'success',
+  done: 'secondary',
   failed: 'destructive',
   interrupted: 'warning',
   discarded: 'outline',
-  landed: 'success',
-  shipped: 'success',
+  landed: 'secondary',
+  shipped: 'secondary',
 };
 
 const isLive = (run: RunInfo) =>
@@ -117,7 +122,7 @@ function DiffView({ patch }: { patch: string }) {
 
   if (files.length === 0) {
     return (
-      <div className="px-3 py-6 text-center text-[11px] text-content-secondary">
+      <div className="px-3 py-8 text-center text-[11px] text-content-secondary">
         No file changes in this run.
       </div>
     );
@@ -140,34 +145,41 @@ function DiffView({ patch }: { patch: string }) {
 /** Task row, Beautiful-UI style: icon, label, trailing meta. */
 function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
   const meta = isLive(run)
-    ? { icon: Loader2, spin: true, tone: 'text-info-foreground' }
+    ? { icon: CircleNotch, spin: true, tone: 'text-info-foreground' }
     : run.status === 'done'
-      ? { icon: CheckCircle2, spin: false, tone: 'text-success-foreground' }
+      ? { icon: CheckCircle, spin: false, tone: 'text-content-secondary' }
       : run.status === 'failed'
         ? { icon: XCircle, spin: false, tone: 'text-destructive-foreground' }
         : { icon: CircleDashed, spin: false, tone: 'text-content-disabled' };
-  const Icon = meta.icon;
+  const RunIcon = meta.icon;
   return (
-    <button
+    <motion.button
+      layout
       type="button"
       onClick={onOpen}
       aria-label={`Run ${run.id}: ${runLabel(run)}`}
-      className="group flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-secondary"
+      whileTap={{ scale: 0.99 }}
+      className="group flex w-full cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-secondary"
     >
-      <Icon
-        className={`mt-0.5 size-3.5 shrink-0 ${meta.tone} ${meta.spin ? 'animate-spin' : ''}`}
+      <RunIcon
+        size={13}
+        weight={isLive(run) ? 'regular' : 'fill'}
+        className={`mt-0.5 shrink-0 ${meta.tone} ${meta.spin ? 'animate-spin' : ''}`}
       />
       <span className="min-w-0 flex-1">
         <span className="line-clamp-2 text-[12px] leading-snug">
           {run.prompt}
         </span>
-        <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-content-disabled">
+        <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[9.5px] text-content-disabled">
           {run.id}
           {run.branch ? <span className="truncate">· {run.branch}</span> : null}
         </span>
       </span>
-      <ChevronRight className="mt-0.5 size-3 shrink-0 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100" />
-    </button>
+      <CaretRight
+        size={10}
+        className="mt-1 shrink-0 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100"
+      />
+    </motion.button>
   );
 }
 
@@ -176,6 +188,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
   const [patch, setPatch] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const reduce = useReducedMotion();
 
   useEffect(() => {
     setReport(null);
@@ -207,15 +220,22 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
   const reviewable = isReviewable(run);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <motion.div
+      initial={reduce ? false : { opacity: 0, x: 14 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={reduce ? undefined : { opacity: 0, x: 14 }}
+      transition={{ duration: 0.2, ease: EASE }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <div className="flex shrink-0 items-center gap-1.5 border-border border-b px-2 py-1.5">
         <Button
           variant="ghost"
           size="icon-xs"
           aria-label="Back to runs"
+          className="text-content-secondary"
           onClick={onBack}
         >
-          <ChevronRight className="size-3.5 rotate-180" />
+          <CaretRight size={12} className="rotate-180" />
         </Button>
         <span className="truncate font-mono text-[10px] text-content-secondary">
           {run.id}
@@ -250,7 +270,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               loading={busy === 'land'}
               onClick={() => void act('land', () => actions.landRun(run.id))}
             >
-              <GitMerge className="size-3" />
+              <GitMerge size={11} />
               Land
             </Button>
             <Button
@@ -267,7 +287,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
           <Button
             variant="ghost"
             size="xs"
-            className="text-destructive-foreground"
+            className="ml-auto text-destructive-foreground"
             loading={busy === 'discard'}
             onClick={() =>
               void act('discard', async () => {
@@ -284,28 +304,33 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
       {error && (
         <div
           role="alert"
-          className="border-border-destructive border-b bg-surface-destructive px-2 py-1.5 text-[11px] text-destructive-foreground"
+          className="flex items-start gap-1.5 border-border-destructive border-b bg-surface-destructive px-2 py-1.5 text-[11px] text-destructive-foreground"
         >
-          {error}
+          <WarningCircle size={12} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 break-words">{error}</span>
         </div>
       )}
 
-      <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
+      <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
         {run.branch ? (
           patch === null ? (
-            <div className="flex justify-center py-6">
-              <Spinner className="size-3.5 text-content-secondary" />
+            <div className="flex justify-center py-8">
+              <Spinner className="size-4 text-content-secondary" />
             </div>
           ) : (
             <DiffView patch={patch} />
           )
         ) : (
-          <div className="px-3 py-6 text-center text-[11px] text-content-secondary">
+          <div className="px-3 py-8 text-center text-[11px] text-content-secondary">
             No git branch for this run.
           </div>
         )}
-        <details className="border-border border-t">
-          <summary className="cursor-pointer px-3 py-1.5 font-medium font-mono text-[10px] text-content-secondary uppercase tracking-[0.09em]">
+        <details className="group border-border border-t">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 font-medium font-mono text-[9.5px] text-content-secondary uppercase tracking-[0.1em] transition-colors hover:text-foreground">
+            <CaretRight
+              size={9}
+              className="transition-transform duration-200 group-open:rotate-90"
+            />
             Report
           </summary>
           <pre className="max-h-72 overflow-auto px-3 pb-3 whitespace-pre-wrap break-words font-mono text-[11px] text-content-secondary leading-relaxed">
@@ -313,6 +338,30 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
           </pre>
         </details>
       </ScrollArea>
+    </motion.div>
+  );
+}
+
+function EmptyPanel({
+  icon: IconComponent,
+  title,
+  hint,
+}: {
+  icon: Icon;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+      <span className="flex size-9 items-center justify-center rounded-xl border border-border bg-card text-content-disabled">
+        <IconComponent size={16} weight="duotone" />
+      </span>
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[12px] text-foreground">{title}</span>
+        <span className="max-w-[16rem] text-[11px] text-content-secondary leading-relaxed">
+          {hint}
+        </span>
+      </div>
     </div>
   );
 }
@@ -320,48 +369,58 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
 function TasksPanel() {
   const tasks = useStore((s) => s.tasks);
   const [draft, setDraft] = useState('');
+  const reduce = useReducedMotion();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
         <div className="flex flex-col gap-px p-1.5">
           {tasks.length === 0 && (
-            <p className="px-2 py-6 text-center text-[11px] text-content-disabled">
-              No tasks yet
-            </p>
+            <EmptyPanel
+              icon={ListChecks}
+              title="No tasks yet"
+              hint="Add one below or ask the chief to plan."
+            />
           )}
-          {tasks.map((t) => (
-            <label
-              key={t.id}
-              aria-label={`Task: ${t.title}`}
-              className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 hover:bg-secondary"
-            >
-              <Checkbox
-                className="mt-0.5"
-                checked={t.status === 'completed'}
-                onCheckedChange={(checked) =>
-                  void actions.toggleTask(t.id, checked === true)
-                }
-              />
-              <span
-                className={`min-w-0 text-[12px] leading-snug ${
-                  t.status === 'completed'
-                    ? 'text-content-disabled line-through'
-                    : 'text-foreground'
-                }`}
+          <AnimatePresence initial={false}>
+            {tasks.map((t) => (
+              <motion.label
+                layout={!reduce}
+                key={t.id}
+                aria-label={`Task: ${t.title}`}
+                initial={reduce ? false : { opacity: 0, y: -3 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, height: 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="flex cursor-pointer items-start gap-2 overflow-hidden rounded-lg px-2 py-1.5 transition-colors hover:bg-secondary"
               >
-                {t.title}
-                {t.due && (
-                  <span className="ml-1.5 font-mono text-[10px] text-content-disabled">
-                    {t.due.slice(0, 10)}
-                  </span>
-                )}
-              </span>
-            </label>
-          ))}
+                <Checkbox
+                  className="mt-0.5"
+                  checked={t.status === 'completed'}
+                  onCheckedChange={(checked) =>
+                    void actions.toggleTask(t.id, checked === true)
+                  }
+                />
+                <span
+                  className={`min-w-0 text-[12px] leading-snug ${
+                    t.status === 'completed'
+                      ? 'text-content-disabled line-through'
+                      : 'text-foreground'
+                  }`}
+                >
+                  {t.title}
+                  {t.due && (
+                    <span className="ml-1.5 font-mono text-[9.5px] text-content-disabled">
+                      {t.due.slice(0, 10)}
+                    </span>
+                  )}
+                </span>
+              </motion.label>
+            ))}
+          </AnimatePresence>
         </div>
       </ScrollArea>
       <form
-        className="flex shrink-0 items-center gap-1 border-border border-t p-1.5"
+        className="group flex shrink-0 items-center gap-1 border-border border-t p-1.5"
         onSubmit={async (e) => {
           e.preventDefault();
           if (!draft.trim()) return;
@@ -382,9 +441,10 @@ function TasksPanel() {
           variant="ghost"
           size="icon-xs"
           aria-label="Add task"
+          className="shrink-0 text-content-secondary group-focus-within:text-brand"
           disabled={!draft.trim()}
         >
-          <ListTodo className="size-3.5" />
+          <Plus size={13} />
         </Button>
       </form>
     </div>
@@ -395,37 +455,57 @@ function RunsPanel() {
   const runs = useStore((s) => s.runs);
   const [selected, setSelected] = useState<string | null>(null);
   const run = runs.find((r) => r.id === selected) ?? null;
-
-  if (run) return <RunDetail run={run} onBack={() => setSelected(null)} />;
+  const reduce = useReducedMotion();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-1 border-border border-b px-2 py-1">
-        <span className="font-mono text-[10px] text-content-disabled">
-          {runs.length} dispatched
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="ml-auto"
-          aria-label="Refresh runs"
-          onClick={() => void actions.refreshRuns()}
-        >
-          <RefreshCw className="size-3" />
-        </Button>
-      </div>
-      <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
-        <div className="flex flex-col gap-px p-1.5">
-          {runs.length === 0 && (
-            <p className="px-2 py-6 text-center text-[11px] text-content-disabled">
-              No runs dispatched yet
-            </p>
-          )}
-          {runs.map((r) => (
-            <TaskRow key={r.id} run={r} onOpen={() => setSelected(r.id)} />
-          ))}
-        </div>
-      </ScrollArea>
+      <AnimatePresence mode="wait" initial={false}>
+        {run ? (
+          <RunDetail key={run.id} run={run} onBack={() => setSelected(null)} />
+        ) : (
+          <motion.div
+            key="list"
+            initial={reduce ? false : { opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={reduce ? undefined : { opacity: 0, x: -10 }}
+            transition={{ duration: 0.18, ease: EASE }}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <div className="flex shrink-0 items-center gap-1 border-border border-b px-2 py-1">
+              <span className="font-mono text-[9.5px] text-content-disabled">
+                {runs.length} dispatched
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="ml-auto text-content-secondary"
+                aria-label="Refresh runs"
+                onClick={() => void actions.refreshRuns()}
+              >
+                <ArrowsClockwise size={12} />
+              </Button>
+            </div>
+            <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
+              <div className="flex flex-col gap-px p-1.5">
+                {runs.length === 0 && (
+                  <EmptyPanel
+                    icon={GitMerge}
+                    title="No runs yet"
+                    hint="Runs dispatched to a worker will appear here."
+                  />
+                )}
+                {runs.map((r) => (
+                  <TaskRow
+                    key={r.id}
+                    run={r}
+                    onOpen={() => setSelected(r.id)}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -435,6 +515,7 @@ function MemoryPanel() {
   const [showHistory, setShowHistory] = useState(false);
   const [revising, setRevising] = useState<MemoryItem | null>(null);
   const [forgetting, setForgetting] = useState<MemoryItem | null>(null);
+  const reduce = useReducedMotion();
 
   const items = (memory?.items ?? []).filter(
     (item) => showHistory || item.status === 'active',
@@ -446,7 +527,7 @@ function MemoryPanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-border border-b px-2 py-1">
-        <span className="font-mono text-[10px] text-content-disabled">
+        <span className="font-mono text-[9.5px] text-content-disabled">
           {activeCount} active
           {memory && memory.pendingMerges > 0
             ? ` · ${memory.pendingMerges} merges pending`
@@ -461,21 +542,34 @@ function MemoryPanel() {
           History
         </label>
       </div>
-      <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
+      <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
         <div className="flex flex-col gap-px p-1.5">
           {items.length === 0 && (
-            <p className="px-2 py-6 text-center text-[11px] text-content-disabled">
-              {showHistory ? 'No memories at all' : 'No active memories yet'}
-            </p>
-          )}
-          {items.map((item) => (
-            <MemoryRow
-              key={item.seq}
-              item={item}
-              onRevise={() => setRevising(item)}
-              onForget={() => setForgetting(item)}
+            <EmptyPanel
+              icon={Stack}
+              title={showHistory ? 'No memories at all' : 'No memories yet'}
+              hint="Facts the chief chooses to keep will live here."
             />
-          ))}
+          )}
+          <AnimatePresence initial={false}>
+            {items.map((item) => (
+              <motion.div
+                key={item.seq}
+                layout={!reduce}
+                initial={reduce ? false : { opacity: 0, y: -3 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, height: 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="overflow-hidden"
+              >
+                <MemoryRow
+                  item={item}
+                  onRevise={() => setRevising(item)}
+                  onForget={() => setForgetting(item)}
+                />
+              </motion.div>
+            ))}
+          </AnimatePresence>
         </div>
       </ScrollArea>
       <ReviseMemoryDialog item={revising} onClose={() => setRevising(null)} />
@@ -488,7 +582,7 @@ function MemoryPanel() {
 }
 
 const trustVariant: Record<string, 'success' | 'secondary' | 'warning'> = {
-  user_confirmed: 'success',
+  user_confirmed: 'secondary',
   agent_inferred: 'secondary',
   third_party: 'warning',
 };
@@ -504,10 +598,10 @@ function MemoryRow({
 }) {
   const historical = item.status !== 'active';
   return (
-    <div className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-secondary">
+    <div className="group flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-secondary">
       <span
         aria-label={`Memory #${item.seq}`}
-        className={`mt-px shrink-0 font-mono text-[10px] tabular-nums ${
+        className={`mt-px shrink-0 font-mono text-[9.5px] tabular-nums ${
           historical ? 'text-content-disabled' : 'text-content-secondary'
         }`}
       >
@@ -523,7 +617,7 @@ function MemoryRow({
         >
           {item.content}
         </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-1">
+        <span className="mt-1 flex flex-wrap items-center gap-1">
           <Badge variant="outline" size="sm" className="font-mono">
             {item.kind}
           </Badge>
@@ -543,7 +637,7 @@ function MemoryRow({
               {item.status}
             </Badge>
           )}
-          <span className="font-mono text-[10px] text-content-disabled">
+          <span className="font-mono text-[9.5px] text-content-disabled">
             {item.createdAt.slice(0, 10)}
           </span>
         </span>
@@ -556,7 +650,7 @@ function MemoryRow({
             aria-label={`Revise memory #${item.seq}`}
             onClick={onRevise}
           >
-            <Pencil className="size-3" />
+            <PencilSimple size={11} />
           </Button>
           <Button
             variant="ghost"
@@ -565,7 +659,7 @@ function MemoryRow({
             aria-label={`Forget memory #${item.seq}`}
             onClick={onForget}
           >
-            <Trash2 className="size-3" />
+            <Trash size={11} />
           </Button>
         </span>
       )}
@@ -714,33 +808,43 @@ function ForgetMessageDialog({
 
 function InboxPanel() {
   const inbox = useStore((s) => s.inbox);
+  const reduce = useReducedMotion();
   return (
-    <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
+    <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
       <div className="flex flex-col gap-1.5 p-1.5">
         {inbox.length === 0 && (
-          <p className="px-2 py-6 text-center text-[11px] text-content-disabled">
-            Inbox is empty
-          </p>
+          <EmptyPanel
+            icon={Tray}
+            title="Inbox is empty"
+            hint="Messages from agents and runs land here."
+          />
         )}
-        {inbox.map((m) => (
-          <div
-            key={m.id}
-            className={`rounded-md border px-2 py-1.5 text-[11px] ${
-              m.read
-                ? 'border-border text-content-secondary'
-                : 'border-border-sky/40 bg-surface-sky/20 text-foreground'
-            }`}
-          >
-            <div className="mb-1 flex items-center gap-1 font-mono text-[10px] text-content-secondary">
-              <span className="truncate">{m.from}</span>
-              {m.to && <span>→ {m.to}</span>}
-              <span className="ml-auto shrink-0">
-                {m.ts.slice(5, 16).replace('T', ' ')}
-              </span>
-            </div>
-            <div className="whitespace-pre-wrap break-words">{m.body}</div>
-          </div>
-        ))}
+        <AnimatePresence initial={false}>
+          {inbox.map((m) => (
+            <motion.div
+              layout={!reduce}
+              key={m.id}
+              initial={reduce ? false : { opacity: 0, y: -3 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? undefined : { opacity: 0, height: 0 }}
+              transition={{ duration: 0.18, ease: EASE }}
+              className={`rounded-lg border px-2 py-1.5 text-[11px] ${
+                m.read
+                  ? 'border-border text-content-secondary'
+                  : 'border-border-sky/40 bg-surface-sky/20 text-foreground'
+              }`}
+            >
+              <div className="mb-1 flex items-center gap-1 font-mono text-[9.5px] text-content-secondary">
+                <span className="truncate">{m.from}</span>
+                {m.to && <span>→ {m.to}</span>}
+                <span className="ml-auto shrink-0">
+                  {m.ts.slice(5, 16).replace('T', ' ')}
+                </span>
+              </div>
+              <div className="whitespace-pre-wrap break-words">{m.body}</div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
     </ScrollArea>
   );
@@ -757,6 +861,7 @@ export function ContextPane() {
   const runs = useStore((s) => s.runs);
   const inbox = useStore((s) => s.inbox);
   const [tab, setTab] = useState<PaneTab>('tasks');
+  const reduce = useReducedMotion();
 
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
   const memory = useStore((s) => s.memory);
@@ -773,11 +878,29 @@ export function ContextPane() {
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar"
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-border border-b px-3 [-webkit-app-region:drag]">
-        <FileCode2 className="size-3.5 text-content-secondary" />
+        <span
+          aria-hidden="true"
+          className="flex size-5 items-center justify-center rounded-md bg-secondary text-content-secondary"
+        >
+          <FileCode size={12} />
+        </span>
         <span className="truncate font-medium text-[12px]">Context</span>
-        <Badge variant="outline" size="sm" className="ml-auto font-mono">
+        <Badge
+          variant="outline"
+          size="sm"
+          className="ml-auto font-mono text-[9.5px]"
+        >
           {name}
         </Badge>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Hide context pane"
+          className="[-webkit-app-region:no-drag] text-content-secondary"
+          onClick={() => actions.setContextOpen(false)}
+        >
+          <CaretDoubleRight size={13} />
+        </Button>
       </div>
 
       <div
@@ -785,7 +908,7 @@ export function ContextPane() {
         aria-label="Context sections"
         className="flex shrink-0 items-center gap-0.5 border-border border-b px-1.5 py-1"
       >
-        {TABS.map(({ id, label, icon: Icon }) => {
+        {TABS.map(({ id, label, icon: TabIcon }) => {
           const active = tab === id;
           return (
             <button
@@ -795,24 +918,54 @@ export function ContextPane() {
               aria-selected={active}
               aria-label={label}
               onClick={() => setTab(id)}
-              className={`relative flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 font-medium text-[11px] transition-colors ${
+              className={`group relative flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md px-1.5 font-medium text-[10.5px] transition-colors ${
                 active
-                  ? 'bg-secondary text-foreground'
-                  : 'text-content-secondary hover:text-foreground'
+                  ? 'text-foreground'
+                  : 'text-content-secondary hover:bg-surface-tertiary/40 hover:text-foreground'
               }`}
             >
-              <Icon className="size-3.5 shrink-0" />
-              <span className="truncate">{label}</span>
-              <CountPulse value={counts[id]} />
+              {active && (
+                <motion.span
+                  layoutId="context-tab"
+                  transition={
+                    reduce
+                      ? { duration: 0 }
+                      : { type: 'spring', stiffness: 520, damping: 40 }
+                  }
+                  className="absolute inset-0 rounded-md border border-border bg-surface-tertiary/80"
+                />
+              )}
+              <TabIcon
+                size={12}
+                weight={active ? 'fill' : 'regular'}
+                className={`relative shrink-0 ${
+                  active ? 'text-brand' : 'text-content-disabled'
+                }`}
+              />
+              <span className="relative truncate">{label}</span>
+              <span className="relative">
+                <CountPulse value={counts[id]} />
+              </span>
             </button>
           );
         })}
       </div>
 
-      {tab === 'tasks' && <TasksPanel />}
-      {tab === 'runs' && <RunsPanel />}
-      {tab === 'memory' && <MemoryPanel />}
-      {tab === 'inbox' && <InboxPanel />}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={tab}
+          initial={reduce ? false : { opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduce ? undefined : { opacity: 0, y: -3 }}
+          transition={{ duration: 0.16, ease: EASE }}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {tab === 'tasks' && <TasksPanel />}
+          {tab === 'runs' && <RunsPanel />}
+          {tab === 'memory' && <MemoryPanel />}
+          {tab === 'inbox' && <InboxPanel />}
+        </motion.div>
+      </AnimatePresence>
     </aside>
   );
 }

@@ -6,7 +6,7 @@ import { mergeProps } from '@base-ui/react/merge-props';
 import { Radio as RadioPrimitive } from '@base-ui/react/radio';
 import { RadioGroup as RadioGroupPrimitive } from '@base-ui/react/radio-group';
 import { useRender } from '@base-ui/react/use-render';
-import { ChevronRightIcon, XIcon } from 'lucide-react';
+import { CaretRight, X, Check } from '@phosphor-icons/react';
 import type React from 'react';
 import { createContext, useContext } from 'react';
 import { cn } from '@/lib/utils';
@@ -218,7 +218,7 @@ export function DrawerPopup({
               className="absolute end-2 top-2 z-1"
               render={<Button size="icon" variant="ghost" />}
             >
-              <XIcon />
+              <X />
             </DrawerPrimitive.Close>
           )}
           {showBar && <DrawerBar />}
@@ -509,7 +509,7 @@ export function DrawerMenuTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ms-auto -me-0.5 opacity-80" />
+      <CaretRight className="ms-auto -me-0.5 opacity-80" />
     </DrawerTrigger>
   );
 }
@@ -558,19 +558,7 @@ export function DrawerMenuCheckboxItem({
       ) : (
         <>
           <CheckboxPrimitive.Indicator className="col-start-1">
-            <svg
-              fill="none"
-              height="24"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              viewBox="0 0 24 24"
-              width="24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-            </svg>
+            <Check size={12} weight="bold" />
           </CheckboxPrimitive.Indicator>
           <span className="wrap-anywhere col-start-2 min-w-0">{children}</span>
         </>
@@ -617,19 +605,7 @@ export function DrawerMenuRadioItem({
       {...props}
     >
       <RadioPrimitive.Indicator className="col-start-1">
-        <svg
-          fill="none"
-          height="24"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="2"
-          viewBox="0 0 24 24"
-          width="24"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-        </svg>
+        <Check size={12} weight="bold" />
       </RadioPrimitive.Indicator>
       <span className="wrap-anywhere col-start-2 min-w-0">{children}</span>
     </RadioPrimitive.Root>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Check, Cpu, RefreshCw } from 'lucide-react';
+import { ArrowsClockwise, Check, Cpu } from '@phosphor-icons/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -36,6 +37,7 @@ export function ModelPicker() {
   const models = catalog?.models ?? [];
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const reduce = useReducedMotion();
 
   const items = useMemo<ModelItem[]>(
     () =>
@@ -72,14 +74,17 @@ export function ModelPicker() {
       <ComboboxInput
         size="sm"
         showTrigger
-        startAddon={<Cpu />}
+        startAddon={<Cpu size={13} />}
         placeholder="Model"
         aria-label="Model"
-        className="w-56 [&_[data-slot=combobox-input]]:cursor-pointer [&_[data-slot=combobox-input]]:text-xs"
+        className="w-44 bg-secondary/40 [&_[data-slot=combobox-input]]:cursor-pointer [&_[data-slot=combobox-input]]:text-[11.5px]"
         readOnly
       />
       <ComboboxPopup align="end" className="w-96">
         <div className="flex items-center gap-2 border-border/70 border-b px-2.5 py-1.5">
+          <span className="flex size-4 items-center justify-center rounded bg-brand/10 text-brand">
+            <Cpu size={10} weight="fill" />
+          </span>
           <span className="font-medium text-[11px] text-muted-foreground">
             Magpie
           </span>
@@ -88,14 +93,14 @@ export function ModelPicker() {
               offline
             </Badge>
           ) : (
-            <Badge variant="success" size="sm">
+            <Badge variant="outline" size="sm">
               {models.length} models
             </Badge>
           )}
           <Button
             variant="ghost"
             size="icon-xs"
-            className="ml-auto"
+            className="ml-auto text-content-secondary"
             aria-label="Refresh model list"
             loading={refreshing}
             onClick={async () => {
@@ -107,13 +112,17 @@ export function ModelPicker() {
               }
             }}
           >
-            <RefreshCw className="size-3.5" />
+            <ArrowsClockwise
+              size={12}
+              className={refreshing ? 'animate-spin' : undefined}
+            />
           </Button>
         </div>
         <ComboboxEmpty>No models from Magpie</ComboboxEmpty>
         <ComboboxList>
           {(item) => {
             const m = item as ModelItem;
+            const isActive = m.value === settings?.model.modelId;
             return (
               <ComboboxItem key={m.value} value={m}>
                 <div className="flex min-w-0 items-center gap-2">
@@ -124,8 +133,19 @@ export function ModelPicker() {
                       {m.model.reasoning ? ' · reasoning' : ''}
                     </span>
                   </div>
-                  {m.value === settings?.model.modelId && (
-                    <Check className="ml-auto size-3.5 shrink-0 text-foreground/70" />
+                  {isActive && (
+                    <motion.span
+                      initial={reduce ? false : { scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{
+                        type: 'spring',
+                        stiffness: 500,
+                        damping: 24,
+                      }}
+                      className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-brand text-brand-contrast"
+                    >
+                      <Check size={9} weight="bold" />
+                    </motion.span>
                   )}
                 </div>
               </ComboboxItem>

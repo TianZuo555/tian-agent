@@ -1,4 +1,15 @@
 import { useEffect, useState } from 'react';
+import {
+  ArrowsClockwise,
+  DownloadSimple,
+  Plugs,
+  PlugsConnected,
+  Power,
+  ShieldCheck,
+  Stop,
+  Wrench,
+} from '@phosphor-icons/react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -34,6 +45,37 @@ interface Confirmation {
   description: string;
   candidate?: AppCandidate;
 }
+
+function StatusRow({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: 'neutral' | 'strong' | 'success' | 'warning' | 'destructive';
+}) {
+  const dot =
+    tone === 'strong'
+      ? 'bg-foreground'
+      : tone === 'success'
+        ? 'bg-content-secondary'
+        : tone === 'warning'
+          ? 'bg-warning'
+          : tone === 'destructive'
+            ? 'bg-destructive'
+            : 'bg-content-disabled/50';
+  return (
+    <>
+      <dt className="text-[11px] text-muted-foreground">{label}</dt>
+      <dd className="flex items-center gap-1.5 text-[11px]">
+        <span aria-hidden="true" className={`size-1 rounded-full ${dot}`} />
+        <span className="min-w-0 truncate">{value}</span>
+      </dd>
+    </>
+  );
+}
+
 export function ServiceSettings({ active }: { active: boolean }) {
   const [status, setStatus] = useState<DesktopStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,52 +168,93 @@ export function ServiceSettings({ active }: { active: boolean }) {
     setConfirmOpen(open);
   }
   return (
-    <section className="grid gap-3 border-t pt-4" aria-label="服务与升级">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="font-medium text-sm">服务与升级</h3>
+    <section
+      className="grid gap-3 border-border border-t pt-4"
+      aria-label="服务与升级"
+    >
+      <div className="flex items-center gap-2">
+        <span className="flex size-5 items-center justify-center rounded-md bg-secondary text-content-secondary">
+          <Wrench size={11} />
+        </span>
+        <h3 className="font-medium text-[12px]">服务与升级</h3>
         <Button
           type="button"
           size="xs"
           variant="ghost"
+          className="ml-auto text-content-secondary"
           disabled={busy}
           onClick={() => void run('status')}
         >
+          <ArrowsClockwise
+            size={11}
+            className={busy ? 'animate-spin' : undefined}
+          />
           刷新状态
         </Button>
       </div>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-        <dt className="text-muted-foreground">App 版本</dt>
-        <dd>{status?.appVersion ?? '—'}</dd>
-        <dt className="text-muted-foreground">后台服务</dt>
-        <dd>
-          {status?.legacyService
-            ? status.legacyRunning
-              ? '旧版运行中 · 待迁移'
-              : '旧版已停止 · 待迁移'
-            : status?.service
-              ? `运行中 · ${status.service.serviceVersion}`
-              : status?.installed
-                ? '已停止'
-                : '尚未安装'}
-        </dd>
-        <dt className="text-muted-foreground">本窗口连接</dt>
-        <dd>{status?.connected ? '已连接' : '已断开'}</dd>
-        <dt className="text-muted-foreground">配套服务版本</dt>
-        <dd>{status?.bundledServiceVersion ?? '—'}</dd>
-      </dl>
+      <div className="rounded-xl border border-border bg-secondary/25 px-3 py-2.5">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5">
+          <StatusRow
+            label="App 版本"
+            value={status?.appVersion ?? '—'}
+            tone="neutral"
+          />
+          <StatusRow
+            label="后台服务"
+            value={
+              status?.legacyService
+                ? status.legacyRunning
+                  ? '旧版运行中 · 待迁移'
+                  : '旧版已停止 · 待迁移'
+                : status?.service
+                  ? `运行中 · ${status.service.serviceVersion}`
+                  : status?.installed
+                    ? '已停止'
+                    : '尚未安装'
+            }
+            tone={
+              status?.service
+                ? 'strong'
+                : status?.installed
+                  ? 'warning'
+                  : 'neutral'
+            }
+          />
+          <StatusRow
+            label="本窗口连接"
+            value={status?.connected ? '已连接' : '已断开'}
+            tone={status?.connected ? 'strong' : 'warning'}
+          />
+          <StatusRow
+            label="配套服务版本"
+            value={status?.bundledServiceVersion ?? '—'}
+            tone="neutral"
+          />
+        </dl>
+        {status?.activity && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-border/60 border-t pt-2">
+            <Badge variant="outline" size="sm" className="font-mono">
+              活动任务 {status.activity.tasks}
+            </Badge>
+            <Badge variant="outline" size="sm" className="font-mono">
+              工兵 {status.activity.runs}
+            </Badge>
+            {status.activity.maintenance && (
+              <Badge variant="warning" size="sm" className="gap-1 font-mono">
+                <span className="size-1 animate-pulse rounded-full bg-warning" />
+                维护中
+              </Badge>
+            )}
+          </div>
+        )}
+      </div>
       {status?.legacyService && (
-        <p className="text-xs text-muted-foreground">
+        <p className="rounded-lg border border-border-warning/40 bg-warning/8 px-2.5 py-2 text-[11px] text-muted-foreground leading-relaxed">
           旧版服务需要一次迁移：先停止旧版，再安装此 App
           携带的配套服务。升级不会删除数据。
         </p>
       )}
-      {status?.activity && (
-        <p className="text-xs text-muted-foreground">
-          活动任务 {status.activity.tasks} · 工兵 {status.activity.runs}
-          {status.activity.maintenance ? ' · 维护中' : ''}
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <Button
           type="button"
           size="sm"
@@ -179,6 +262,11 @@ export function ServiceSettings({ active }: { active: boolean }) {
           disabled={busy || !status?.service}
           onClick={() => void run(status?.connected ? 'disconnect' : 'connect')}
         >
+          {status?.connected ? (
+            <Plugs size={12} />
+          ) : (
+            <PlugsConnected size={12} />
+          )}
           {status?.connected ? '断开本窗口连接' : '连接服务'}
         </Button>
         <Button
@@ -193,6 +281,7 @@ export function ServiceSettings({ active }: { active: boolean }) {
           }
           onClick={() => void run('start')}
         >
+          <Power size={12} />
           启动服务并连接
         </Button>
         <Button
@@ -210,10 +299,11 @@ export function ServiceSettings({ active }: { active: boolean }) {
             })
           }
         >
+          <Stop size={12} weight="fill" />
           停止服务
         </Button>
       </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">
+      <p className="text-[10.5px] leading-relaxed text-muted-foreground">
         断开连接后，后台任务继续执行；本窗口不会自动重连。停止服务会释放进程和数据库连接。
       </p>
       <Button
@@ -227,9 +317,10 @@ export function ServiceSettings({ active }: { active: boolean }) {
           void run(status?.loginEnabled ? 'login-disable' : 'login-enable')
         }
       >
+        <ShieldCheck size={12} />
         登录自启动：{status?.loginEnabled ? '已开启' : '已关闭'}
       </Button>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <Button
           type="button"
           size="sm"
@@ -246,6 +337,7 @@ export function ServiceSettings({ active }: { active: boolean }) {
             })
           }
         >
+          <DownloadSimple size={12} />
           {status?.installed ? '升级配套服务' : '安装并启动服务'}
         </Button>
         <Button
@@ -272,19 +364,19 @@ export function ServiceSettings({ active }: { active: boolean }) {
           )}
       </div>
       {!status?.canUpdateApp && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-[10.5px] text-muted-foreground">
           已打包的 macOS App 支持导入并安装新版 .app。
         </p>
       )}
       {status?.lastUpdate && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-[10.5px] text-muted-foreground">
           最近升级：
           {UPDATE_PHASES[status.lastUpdate.phase] ?? status.lastUpdate.phase}
           {status.lastUpdate.message ? ` · ${status.lastUpdate.message}` : ''}
         </p>
       )}
       {error && (
-        <p role="alert" className="text-xs text-destructive break-words">
+        <p role="alert" className="text-[11px] text-destructive break-words">
           {error}
         </p>
       )}

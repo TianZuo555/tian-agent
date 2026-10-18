@@ -37,6 +37,7 @@ export interface State {
   nav: Nav;
   contextOpen: boolean;
   settingsOpen: boolean;
+  paletteOpen: boolean;
   loading: boolean;
   error: string | null;
   operationError: string | null;
@@ -63,6 +64,7 @@ export function createAppStore(api: TianApi) {
     nav: 'chat',
     contextOpen: true,
     settingsOpen: false,
+    paletteOpen: false,
     loading: true,
     error: null,
     operationError: null,
@@ -429,6 +431,9 @@ export function createAppStore(api: TianApi) {
     },
     setSettingsOpen(settingsOpen: boolean) {
       set({ settingsOpen });
+    },
+    setPaletteOpen(paletteOpen: boolean) {
+      set({ paletteOpen });
     },
     setModel: (provider: string, modelId: string) =>
       safe(() => api.setModel({ provider, modelId })),

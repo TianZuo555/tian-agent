@@ -1,7 +1,7 @@
 'use client';
 
 import { NumberField as NumberFieldPrimitive } from '@base-ui/react/number-field';
-import { MinusIcon, PlusIcon } from 'lucide-react';
+import { Cursor, Minus, Plus } from '@phosphor-icons/react';
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
@@ -65,7 +65,7 @@ export function NumberFieldDecrement({
       data-slot="number-field-decrement"
       {...props}
     >
-      <MinusIcon />
+      <Minus />
     </NumberFieldPrimitive.Decrement>
   );
 }
@@ -83,7 +83,7 @@ export function NumberFieldIncrement({
       data-slot="number-field-increment"
       {...props}
     >
-      <PlusIcon />
+      <Plus />
     </NumberFieldPrimitive.Increment>
   );
 }
@@ -129,7 +129,7 @@ export function NumberFieldScrubArea({
         {label}
       </Label>
       <NumberFieldPrimitive.ScrubAreaCursor className="drop-shadow-[0_1px_1px_#0008] filter">
-        <CursorGrowIcon />
+        <Cursor size={14} weight="fill" />
       </NumberFieldPrimitive.ScrubAreaCursor>
     </NumberFieldPrimitive.ScrubArea>
   );
@@ -138,20 +138,7 @@ export function NumberFieldScrubArea({
 export function CursorGrowIcon(
   props: React.ComponentProps<'svg'>,
 ): React.ReactElement {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="black"
-      height="14"
-      stroke="white"
-      viewBox="0 0 24 14"
-      width="26"
-      xmlns="http://www.w3.org/2000/svg"
-      {...props}
-    >
-      <path d="M19.5 5.5L6.49737 5.51844V2L1 6.9999L6.5 12L6.49737 8.5L19.5 8.5V12L25 6.9999L19.5 2V5.5Z" />
-    </svg>
-  );
+  return <Cursor size={14} weight="fill" {...props} />;
 }
 
 export { NumberFieldPrimitive };

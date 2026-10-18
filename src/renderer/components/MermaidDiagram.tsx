@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { renderAsync, type RenderResult } from 'pele/lazy';
-import { CircleAlert } from 'lucide-react';
+import { WarningCircle } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -41,7 +41,7 @@ export default function MermaidDiagram({
         )}
       >
         <div className="flex items-center gap-1.5 border-b border-border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.09em] text-content-secondary">
-          <CircleAlert className="size-3" />
+          <WarningCircle size={12} />
           mermaid
         </div>
         <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-relaxed text-content-secondary">

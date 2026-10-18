@@ -57,6 +57,12 @@ body {
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
   --animate-caret-blink: 1s ease-out infinite caret-blink;
+  --animate-pulse-ring: pulse-ring 2.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-typing: typing 1.3s ease-in-out infinite;
+  --animate-sheen: sheen 5s ease-in-out infinite;
+  --animate-cell-in: cell-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-toast-success-odd: toast-success-odd 0.32s
     cubic-bezier(0.5, 1, 0.89, 1);
   --animate-toast-success-even: toast-success-even 0.32s
@@ -88,6 +94,10 @@ body {
   --color-content-success: hsl(var(--content-success));
   --color-content-warning: hsl(var(--content-warning));
   --color-content-destructive: hsl(var(--content-destructive));
+  --color-brand: hsl(var(--brand));
+  --color-brand-2: hsl(var(--brand-2));
+  --color-brand-soft: hsl(var(--brand-soft));
+  --color-brand-contrast: hsl(var(--brand-contrast));
   --color-surface-primary: hsl(var(--surface-primary));
   --color-surface-secondary: hsl(var(--surface-secondary));
   --color-surface-tertiary: hsl(var(--surface-tertiary));
@@ -97,6 +107,7 @@ body {
   --color-surface-invert-secondary: hsl(var(--surface-invert-secondary));
   --color-surface-destructive: hsl(var(--surface-destructive));
   --color-surface-green: hsl(var(--surface-green));
+  --color-surface-sky: hsl(var(--surface-sky));
   --color-surface-git-added: hsl(var(--surface-git-added));
   --color-surface-git-deleted: hsl(var(--surface-git-deleted));
   --color-border-default: hsl(var(--border-default));
@@ -105,6 +116,7 @@ body {
   --color-border-destructive: hsl(var(--border-destructive));
   --color-border-success: hsl(var(--border-success));
   --color-border-warning: hsl(var(--border-warning));
+  --color-border-sky: hsl(var(--border-sky));
   --color-git-added: hsl(var(--git-added));
   --color-git-deleted: hsl(var(--git-deleted));
 
@@ -171,6 +183,70 @@ body {
     20%,
     50% {
       opacity: 0;
+    }
+  }
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.72);
+      opacity: 0.75;
+    }
+    70% {
+      transform: scale(1.18);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1.18);
+      opacity: 0;
+    }
+  }
+  @keyframes shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    50% {
+      transform: translate3d(0, -6px, 0);
+    }
+  }
+  @keyframes typing {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.45;
+    }
+    30% {
+      transform: translateY(-3px);
+      opacity: 1;
+    }
+  }
+  @keyframes sheen {
+    0%,
+    100% {
+      opacity: 0.35;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+    50% {
+      opacity: 0.6;
+      transform: translate3d(0, -8px, 0) scale(1.05);
+    }
+  }
+  @keyframes cell-in {
+    from {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
     }
   }
   @keyframes toast-success-odd {
@@ -249,10 +325,16 @@ body {
   --content-secondary: 240 5% 34%;
   --content-disabled: 240 5% 65%;
   --content-invert: 0 0% 98%;
-  --content-link: 221 83% 53%;
-  --content-success: 142 72% 29%;
-  --content-warning: 27 96% 61%;
-  --content-destructive: 0 72% 51%;
+  --content-link: 240 6% 10%;
+  --content-success: 150 45% 30%;
+  --content-warning: 32 80% 38%;
+  --content-destructive: 0 60% 42%;
+
+  /* A monochrome accent: near-black ink in light, near-white ink in dark. */
+  --brand: 240 6% 10%;
+  --brand-2: 240 5% 42%;
+  --brand-soft: 240 6% 94%;
+  --brand-contrast: 0 0% 100%;
 
   --surface-primary: 0 0% 100%;
   --surface-secondary: 240 5% 96%;
@@ -264,16 +346,17 @@ body {
   --surface-scrollbar: 240 4% 46%;
   --surface-destructive: 0 93% 94%;
   --surface-green: 141 79% 85%;
+  --surface-sky: 240 5% 96%;
   --surface-git-added: 141 84% 93%;
   --surface-git-deleted: 0 93% 94%;
 
   --border-default: 240 6% 90%;
   --border-secondary: 240 5% 65%;
   --border-control: 240 4% 46%;
-  --border-destructive: 0 72% 51%;
-  --border-success: 142 76% 36%;
-  --border-warning: 31 97% 72%;
-  --border-sky: 203 90% 40%;
+  --border-destructive: 0 60% 42%;
+  --border-success: 150 45% 30%;
+  --border-warning: 32 80% 55%;
+  --border-sky: 240 5% 80%;
 
   --git-added: 142 72% 29%;
   --git-deleted: 0 74% 42%;
@@ -297,18 +380,18 @@ body {
   --destructive-foreground: hsl(var(--content-destructive));
   --border: hsl(var(--border-default));
   --input: hsl(var(--border-default));
-  --ring: hsl(var(--content-link));
+  --ring: hsl(var(--brand));
   --success: hsl(var(--content-success));
   --success-foreground: hsl(var(--content-success));
   --warning: hsl(var(--content-warning));
-  --warning-foreground: hsl(27 96% 40%);
-  --info: hsl(var(--content-link));
-  --info-foreground: hsl(var(--content-link));
+  --warning-foreground: hsl(32 80% 38%);
+  --info: hsl(var(--content-secondary));
+  --info-foreground: hsl(var(--content-secondary));
 
   --chart-1: hsl(var(--content-link));
   --chart-2: hsl(var(--content-success));
   --chart-3: hsl(var(--content-warning));
-  --chart-4: hsl(271 61% 45%);
+  --chart-4: hsl(240 5% 45%);
   --chart-5: hsl(var(--content-destructive));
 
   --code: hsl(var(--surface-secondary));
@@ -322,7 +405,7 @@ body {
   --sidebar-border: hsl(var(--border-default));
   --sidebar-primary: hsl(var(--content-primary));
   --sidebar-primary-foreground: hsl(var(--surface-primary));
-  --sidebar-ring: hsl(var(--content-link));
+  --sidebar-ring: hsl(var(--brand));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -331,10 +414,15 @@ body {
     --content-secondary: 240 5% 65%;
     --content-disabled: 240 5% 26%;
     --content-invert: 240 10% 4%;
-    --content-link: 213 94% 68%;
-    --content-success: 142 76% 42%;
-    --content-warning: 31 97% 72%;
-    --content-destructive: 0 91% 71%;
+    --content-link: 0 0% 98%;
+    --content-success: 150 40% 60%;
+    --content-warning: 38 75% 66%;
+    --content-destructive: 0 60% 66%;
+
+    --brand: 0 0% 98%;
+    --brand-2: 240 4% 72%;
+    --brand-soft: 240 5% 14%;
+    --brand-contrast: 240 10% 4%;
 
     --surface-primary: 240 10% 4%;
     --surface-secondary: 240 6% 10%;
@@ -346,16 +434,17 @@ body {
     --surface-scrollbar: 240 4% 46%;
     --surface-destructive: 0 75% 15%;
     --surface-green: 145 80% 10%;
+    --surface-sky: 240 5% 12%;
     --surface-git-added: 145 80% 10%;
     --surface-git-deleted: 0 75% 15%;
 
     --border-default: 240 4% 16%;
     --border-secondary: 240 5% 26%;
     --border-control: 240 4% 46%;
-    --border-destructive: 0 91% 71%;
-    --border-success: 142 76% 42%;
-    --border-warning: 31 97% 72%;
-    --border-sky: 194 90% 62%;
+    --border-destructive: 0 60% 66%;
+    --border-success: 150 40% 60%;
+    --border-warning: 32 80% 55%;
+    --border-sky: 240 4% 28%;
 
     --git-added: 142 77% 73%;
     --git-deleted: 0 94% 82%;
@@ -378,13 +467,13 @@ body {
     --destructive-foreground: hsl(var(--content-destructive));
     --border: hsl(var(--border-default));
     --input: hsl(var(--border-default));
-    --ring: hsl(var(--content-link));
+    --ring: hsl(var(--brand));
     --success: hsl(var(--content-success));
     --success-foreground: hsl(var(--content-success));
     --warning: hsl(var(--content-warning));
     --warning-foreground: hsl(var(--content-warning));
-    --info: hsl(var(--content-link));
-    --info-foreground: hsl(var(--content-link));
+    --info: hsl(var(--content-secondary));
+    --info-foreground: hsl(var(--content-secondary));
 
     --code: hsl(var(--surface-secondary));
     --code-foreground: hsl(var(--content-primary));
@@ -397,7 +486,108 @@ body {
     --sidebar-border: hsl(var(--border-default));
     --sidebar-primary: hsl(var(--content-primary));
     --sidebar-primary-foreground: hsl(var(--surface-primary));
-    --sidebar-ring: hsl(var(--content-link));
+    --sidebar-ring: hsl(var(--brand));
+  }
+}
+
+@layer utilities {
+  .bg-brand-gradient {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--brand)) 0%,
+      hsl(var(--brand-2)) 100%
+    );
+  }
+  .text-brand-gradient {
+    background-image: linear-gradient(
+      100deg,
+      hsl(var(--brand)) 0%,
+      hsl(var(--brand-2)) 90%
+    );
+    background-clip: text;
+    color: transparent;
+  }
+  .shadow-brand {
+    box-shadow:
+      0 1px 2px hsl(0 0% 0% / 35%),
+      0 10px 28px -10px hsl(0 0% 0% / 55%);
+  }
+  /* A soft radial wash used behind empty states and the boot screen. */
+  .ambient-glow {
+    background-image:
+      radial-gradient(
+        42rem 22rem at 50% 12%,
+        hsl(var(--brand) / 8%),
+        transparent 70%
+      ),
+      radial-gradient(
+        30rem 18rem at 72% 24%,
+        hsl(var(--brand) / 4%),
+        transparent 70%
+      );
+  }
+  .shimmer-text {
+    background-image: linear-gradient(
+      90deg,
+      hsl(var(--content-secondary)) 0%,
+      hsl(var(--content-secondary)) 35%,
+      hsl(var(--content-primary)) 50%,
+      hsl(var(--content-secondary)) 65%,
+      hsl(var(--content-secondary)) 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: var(--animate-shimmer);
+  }
+  .hairline-top {
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 4%);
+  }
+  .card-hover {
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      translate 180ms ease,
+      box-shadow 180ms ease;
+  }
+  .card-hover:hover {
+    border-color: hsl(var(--border-secondary));
+    translate: 0 -1px;
+    box-shadow: 0 6px 20px -14px hsl(0 0% 0% / 55%);
+  }
+  .icon-nudge {
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .group:hover .icon-nudge {
+    transform: translateX(1px) scale(1.04);
+  }
+  .icon-lift {
+    transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .group:hover .icon-lift {
+    transform: translateY(-1px) rotate(-6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-ring,
+  .animate-cell-in,
+  .animate-shimmer,
+  .animate-float,
+  .animate-typing,
+  .animate-sheen,
+  .animate-ping,
+  .animate-pulse,
+  .shimmer-text {
+    animation: none !important;
+  }
+  .animate-spin {
+    animation-duration: 2.4s !important;
+  }
+  .card-hover,
+  .icon-nudge,
+  .icon-lift {
+    transition: none !important;
   }
 }
 

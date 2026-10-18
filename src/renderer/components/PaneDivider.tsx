@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { DotsSixVertical } from '@phosphor-icons/react';
 
 /**
  * Drag-to-resize divider between two panes. Cursor-style: a 1px hairline that
@@ -10,6 +11,7 @@ export function PaneDivider({
   min,
   max,
   onResize,
+  onDraggingChange,
   label,
 }: {
   /** Which pane the divider resizes: the one to its left or right. */
@@ -18,6 +20,7 @@ export function PaneDivider({
   min: number;
   max: number;
   onResize: (width: number) => void;
+  onDraggingChange?: (dragging: boolean) => void;
   label: string;
 }) {
   const [dragging, setDragging] = useState(false);
@@ -30,6 +33,7 @@ export function PaneDivider({
   );
 
   useEffect(() => {
+    onDraggingChange?.(dragging);
     if (!dragging) return;
     const onMove = (e: PointerEvent) => {
       const delta =
@@ -49,7 +53,7 @@ export function PaneDivider({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [dragging, side, clamp, onResize]);
+  }, [dragging, side, clamp, onResize, onDraggingChange]);
 
   const active = dragging || hover;
 
@@ -75,14 +79,24 @@ export function PaneDivider({
         if (e.key === 'ArrowRight')
           onResize(clamp(width + (side === 'left' ? 16 : -16)));
       }}
-      className="group relative z-10 -mx-px w-0.5 shrink-0 cursor-col-resize bg-border outline-none focus-visible:bg-ring"
+      className={`group relative z-10 -mx-px w-0.5 shrink-0 cursor-col-resize bg-border outline-none transition-colors duration-150 focus-visible:bg-brand ${
+        active ? 'bg-brand/50' : ''
+      }`}
     >
       <span
         aria-hidden="true"
         className={`absolute inset-y-0 -inset-x-1.5 transition-colors ${
-          active ? 'bg-ring/40' : 'bg-transparent'
+          active ? 'bg-brand/12' : 'bg-transparent'
         }`}
       />
+      <span
+        aria-hidden="true"
+        className={`absolute top-1/2 left-1/2 flex h-7 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-content-disabled transition-all duration-200 ${
+          active ? 'scale-100 opacity-100 shadow-sm' : 'scale-75 opacity-0'
+        }`}
+      >
+        <DotsSixVertical size={9} className="rotate-90" />
+      </span>
     </div>
   );
 }

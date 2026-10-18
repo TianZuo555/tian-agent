@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUp, Square } from 'lucide-react';
+import { ArrowUp, Stop } from '@phosphor-icons/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
+import { EASE } from './motion-primitives';
 
 /**
  * Plain composer: a self-sizing textarea with a send button. Enter sends,
@@ -9,18 +12,26 @@ import { Button } from '@/components/ui/button';
 export function ChatComposer({
   busy,
   disabled = false,
+  value,
+  onValueChange,
   onSend,
   onStop,
   placeholder = 'Message the steward…',
+  textareaRef,
 }: {
   busy: boolean;
   disabled?: boolean;
+  value: string;
+  onValueChange: (value: string) => void;
   onSend: (text: string) => void;
   onStop: () => void;
   placeholder?: string;
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }) {
-  const [value, setValue] = useState('');
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const localRef = useRef<HTMLTextAreaElement>(null);
+  const ref = textareaRef ?? localRef;
+  const [focused, setFocused] = useState(false);
+  const reduce = useReducedMotion();
 
   // Grow with content up to ~8 lines, then scroll.
   useLayoutEffect(() => {
@@ -28,53 +39,134 @@ export function ChatComposer({
     if (!el) return;
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [value]);
+  }, [value, ref]);
 
   const submit = () => {
     const text = value.trim();
     if (!text || disabled) return;
     onSend(text);
-    setValue('');
+    onValueChange('');
   };
 
+  const canSend = Boolean(value.trim()) && !disabled;
+
   return (
-    <div className="relative flex items-end gap-1 rounded-xl border border-border bg-card p-1.5 transition-colors focus-within:border-border-secondary">
-      <textarea
-        ref={ref}
-        disabled={disabled}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        placeholder={placeholder}
-        aria-label="Message"
-        rows={1}
-        className="max-h-[200px] min-h-[32px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[13.5px] leading-relaxed outline-none placeholder:text-content-disabled"
-      />
-      {busy ? (
-        <Button
-          variant="secondary"
-          size="icon-sm"
-          aria-label="Stop"
-          disabled={disabled}
-          onClick={onStop}
-        >
-          <Square className="size-3.5" />
-        </Button>
-      ) : (
-        <Button
-          size="icon-sm"
-          aria-label="Send"
-          disabled={disabled || !value.trim()}
-          onClick={submit}
-        >
-          <ArrowUp className="size-4" />
-        </Button>
-      )}
-    </div>
+    <motion.div
+      animate={focused && !reduce ? { y: -1 } : { y: 0 }}
+      transition={{ duration: 0.2, ease: EASE }}
+      className="group/composer relative"
+    >
+      <div
+        className={`relative flex flex-col rounded-2xl border bg-card/90 backdrop-blur-sm transition-[border-color,box-shadow] duration-300 ${
+          focused
+            ? 'border-brand/45 shadow-[0_0_0_4px_hsl(var(--brand)/0.07),0_12px_32px_-18px_hsl(var(--brand)/0.45)]'
+            : 'border-border hover:border-border-secondary'
+        }`}
+      >
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-brand/50 to-transparent transition-opacity duration-300 ${
+            focused ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+        <div className="flex items-end gap-1.5 p-2">
+          <textarea
+            ref={ref}
+            disabled={disabled}
+            value={value}
+            onChange={(e) => onValueChange(e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onKeyDown={(e) => {
+              if (
+                e.key === 'Enter' &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            placeholder={disabled ? 'Waiting for the service…' : placeholder}
+            aria-label="Message"
+            rows={1}
+            className="max-h-[200px] min-h-[34px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[13.5px] leading-relaxed outline-none placeholder:text-content-disabled disabled:cursor-not-allowed"
+          />
+          <div className="relative flex size-8 shrink-0 items-center justify-center">
+            <AnimatePresence mode="popLayout" initial={false}>
+              {busy ? (
+                <motion.div
+                  key="stop"
+                  initial={reduce ? false : { scale: 0.6, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={reduce ? undefined : { scale: 0.6, opacity: 0 }}
+                  transition={{ duration: 0.16, ease: EASE }}
+                >
+                  <Button
+                    variant="secondary"
+                    size="icon-sm"
+                    aria-label="Stop"
+                    disabled={disabled}
+                    className="relative overflow-visible"
+                    onClick={onStop}
+                  >
+                    <span className="absolute inset-0 animate-pulse-ring rounded-md border border-warning/40" />
+                    <Stop size={13} weight="fill" className="relative" />
+                  </Button>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="send"
+                  initial={reduce ? false : { scale: 0.6, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={reduce ? undefined : { scale: 0.6, opacity: 0 }}
+                  transition={{ duration: 0.16, ease: EASE }}
+                >
+                  <Button
+                    size="icon-sm"
+                    aria-label="Send"
+                    disabled={!canSend}
+                    className={`transition-[opacity,filter] ${
+                      canSend
+                        ? 'border-0 bg-brand-gradient text-brand-contrast shadow-brand hover:brightness-105 dark:hover:brightness-95'
+                        : 'border-transparent bg-surface-tertiary bg-none text-content-disabled shadow-none hover:bg-surface-tertiary'
+                    }`}
+                    onClick={submit}
+                  >
+                    <ArrowUp size={15} weight="bold" />
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+        <AnimatePresence initial={false}>
+          {focused && (
+            <motion.div
+              initial={reduce ? false : { height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={reduce ? undefined : { height: 0, opacity: 0 }}
+              transition={{ duration: 0.18, ease: EASE }}
+              className="overflow-hidden"
+            >
+              <div className="flex items-center gap-3 border-border border-t px-3.5 py-1.5 font-mono text-[10px] text-content-disabled">
+                <span className="flex items-center gap-1">
+                  <Kbd className="h-4 min-w-4 px-1 text-[9px]">↵</Kbd>
+                  send
+                </span>
+                <span className="flex items-center gap-1">
+                  <Kbd className="h-4 min-w-4 px-1 text-[9px]">⇧↵</Kbd>
+                  new line
+                </span>
+                <span className="ml-auto hidden items-center gap-1 sm:flex">
+                  <span className="size-1.5 rounded-full bg-content-secondary" />
+                  {busy ? 'working' : 'ready'}
+                </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
   );
 }
