@@ -213,7 +213,7 @@ Core Memory（`wake`）按 Token 预算渲染：默认每 Scope 1500 tokens，�
 
 ### 自动记忆提取（F03）
 
-`worker/memory-worker.ts` 在常驻服务内后台运行，不占用总管对话回合：Task 完成、会话空闲（watch 到 busy→idle，另有 5 分钟兑底 sweep）、用户纠正（`revise` / `forget` 强制触发）时，按 Scope 游标增量读取 History 派生索引，经 Extract → Classify → Deduplicate（与 `memory_fts` 比对）→ Resolve Conflicts → Persist 生成候选记忆。自动触发有 30 秒最小间隔节流；服务关闭/维护时暂停（`isPaused`）。
+`worker/memory-worker.ts` 在常驻服务内后台运行，不占用总管对话回合：Task 完成、会话空闲（watch 到 busy→idle，另有 5 分钟兜底 sweep）、用户纠正（`revise` / `forget` 强制触发）时，按 Scope 游标增量读取 History 派生索引，经 Extract → Classify → Deduplicate（与 `memory_fts` 比对）→ Resolve Conflicts → Persist 生成候选记忆。自动触发有 30 秒最小间隔节流；服务关闭/维护时暂停（`isPaused`）。
 
 - 候选一律为 `candidate` 状态、trust = agent_inferred，绝不进入 `wake()` 渲染与只读导出；提取与入库在同一事务，提取器抛异常则整体回滚、游标不动。
 - 候选与 active 记忆同 kind 且措辞高度重叠时记为取代候选（`supersedes`）；promote 时同事务取代旧记忆，矛盾不会同时留在 Core Memory。
