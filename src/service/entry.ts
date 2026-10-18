@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { ResidentServer } from './server.js';
 import { servicePaths } from '../shared/service-paths.js';
+import { telegramConfigFromEnv } from '../worker/telegram.js';
 
 const { values } = parseArgs({
   options: { 'data-dir': { type: 'string' } },
@@ -12,7 +13,11 @@ if (Number(process.versions.node.split('.')[0]) < 24)
 const paths = servicePaths(values['data-dir']);
 if (existsSync(paths.environmentPath))
   process.loadEnvFile(paths.environmentPath);
-const server = new ResidentServer(paths);
+// Channel configuration is read only here, after service.env is loaded; the
+// Service itself never inspects process.env, so tests cannot reach the network.
+const server = new ResidentServer(paths, {
+  telegram: { config: telegramConfigFromEnv() },
+});
 let shutdown: Promise<void> | null = null;
 function stop(): void {
   if (shutdown) return;

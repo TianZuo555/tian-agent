@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { lock } from 'proper-lockfile';
 import { Service } from '../worker/service.js';
+import type { TelegramSetup } from '../worker/telegram.js';
 import { commandHandlers } from '../worker/commands.js';
 import { validateCommand, type RuntimeMessage } from '../shared/contracts.js';
 import type { Emit, ServiceInfo } from '../shared/types.js';
@@ -19,6 +20,11 @@ interface Connection {
   peer: ReturnType<typeof jsonPeer>;
   clients: Map<number, number>;
   requests: Set<number>;
+}
+
+export interface ResidentOptions {
+  /** Telegram gateway setup; resolved by the entry from service.env. */
+  telegram?: TelegramSetup;
 }
 
 /** Owns one application service, independent of every desktop/client process. */
@@ -47,7 +53,10 @@ export class ResidentServer {
     startedAt: new Date().toISOString(),
   };
 
-  constructor(readonly paths: ServicePaths) {}
+  constructor(
+    readonly paths: ServicePaths,
+    private options: ResidentOptions = {},
+  ) {}
   get service(): Service {
     if (!this.application) throw new Error('Service has not started');
     return this.application;
@@ -95,7 +104,11 @@ export class ResidentServer {
       });
       // Both the storage and endpoint have an exclusive owner before stale cleanup.
       if (existsSync(this.paths.socketPath)) unlinkSync(this.paths.socketPath);
-      this.application = new Service(this.paths.dataDir, this.emit);
+      this.application = new Service(
+        this.paths.dataDir,
+        this.emit,
+        this.options.telegram ?? {},
+      );
       this.maintenance = existsSync(
         join(this.paths.installationDir, 'maintenance.json'),
       );

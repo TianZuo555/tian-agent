@@ -60,6 +60,13 @@ export function telegramConfigFromEnv(
   return { token, allowedChatIds };
 }
 
+export interface TelegramSetup {
+  /** Resolved from the service environment by the entry; absent = adapter off. */
+  config?: TelegramConfig | null;
+  api?: TelegramBotApi;
+  options?: Partial<TelegramOptions>;
+}
+
 export interface TelegramOptions {
   /** Bot API long-poll duration; 0 disables long polling (tests). */
   pollTimeoutMs: number;
@@ -214,10 +221,12 @@ export class TelegramAdapter {
   private running = false;
   private loop: Promise<void> | null = null;
   private epoch = 0;
-  private pollAbort: AbortController | null = null;
+  private abort: AbortController | null = null;
   private wakeSleep: (() => void) | null = null;
   private watches = new Map<string, WatchEntry>();
-  private forwardChains = new Map<string, Promise<void>>();
+  /** One forwarding pass per conversation, at most one queued re-run. */
+  private forwardRuns = new Map<string, Promise<void>>();
+  private forwardDirty = new Set<string>();
 
   constructor(
     private host: TelegramHost,
@@ -228,16 +237,23 @@ export class TelegramAdapter {
     this.options = { ...DEFAULT_OPTIONS, ...options };
   }
 
+  private allowed(chatId: string): boolean {
+    return this.config.allowedChatIds.includes(chatId);
+  }
+
   // ---- lifecycle
 
   /** Idempotent; never throws and never blocks on the polling loop itself. */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    this.abort = new AbortController();
     try {
       this.ensureSchema();
-      for (const chat of this.listChats())
+      for (const chat of this.listChats()) {
+        if (!this.allowed(chat.chatId)) continue;
         await this.attachWatch(chat.chatId, chat.conversationId);
+      }
       await this.forwardAll(); // catch up on anything missed while stopped
     } catch (error) {
       console.error('Telegram adapter start:', errorText(error));
@@ -245,27 +261,26 @@ export class TelegramAdapter {
     this.loop = this.pollLoop();
   }
 
-  /** Stop polling and watching; resolve once pending work has settled. */
+  /**
+   * Stop polling and watching and resolve only once in-flight work has fully
+   * settled: aborted Bot API calls fail fast, and the loop and forwarding
+   * passes are awaited, so maintenance cannot proceed with a submit mid-flight.
+   */
   async stop(): Promise<void> {
     if (!this.running && !this.loop) return;
     this.running = false;
     this.epoch += 1;
-    this.pollAbort?.abort();
-    this.pollAbort = null;
+    this.abort?.abort();
+    this.abort = null;
     this.wakeSleep?.();
     for (const watch of this.watches.values())
       await watch.stop().catch(() => {});
     this.watches.clear();
     const loop = this.loop;
     this.loop = null;
-    const timeout = new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 5_000);
-      timer.unref();
-    });
-    await Promise.race([
-      Promise.allSettled([loop ?? Promise.resolve()]),
-      timeout,
-    ]);
+    if (loop) await loop.catch(() => {});
+    while (this.forwardRuns.size > 0)
+      await Promise.allSettled(this.forwardRuns.values());
   }
 
   private sleep(ms: number): Promise<void> {
@@ -288,15 +303,12 @@ export class TelegramAdapter {
   private async pollLoop(): Promise<void> {
     let backoff = this.options.backoffMs;
     while (this.running) {
-      const controller = new AbortController();
-      this.pollAbort = controller;
       try {
         const updates = await this.api.getUpdates(
           this.loadOffset(),
           Math.max(0, Math.round(this.options.pollTimeoutMs / 1000)),
-          controller.signal,
+          this.abort?.signal,
         );
-        this.pollAbort = null;
         backoff = this.options.backoffMs;
         for (const update of updates) {
           if (!this.running) return;
@@ -306,7 +318,6 @@ export class TelegramAdapter {
         if (updates.length === 0 && this.options.pollTimeoutMs <= 0)
           await this.sleep(20); // no long poll: avoid a hot spin
       } catch (error) {
-        this.pollAbort = null;
         if (!this.running) return;
         console.error('Telegram polling failed:', errorText(error));
         await this.sleep(backoff);
@@ -349,7 +360,7 @@ export class TelegramAdapter {
     const message = update.message;
     if (!message || typeof message.text !== 'string') return;
     const chatId = String(message.chat.id);
-    if (!this.config.allowedChatIds.includes(chatId)) {
+    if (!this.allowed(chatId)) {
       console.log(`Telegram: ignoring unauthorized chat ${chatId}`);
       return;
     }
@@ -449,18 +460,30 @@ export class TelegramAdapter {
   /**
    * Forward every completed assistant text entry newer than the persisted
    * cursor of this conversation, then persist the cursor after each send.
-   * Serialized per conversation; failures leave the cursor behind and retry on
-   * the next trigger, so restarts neither drop nor duplicate messages.
+   * The allow-list is enforced here, on the single outbound path for
+   * conversation output. Passes are coalesced per conversation: at most one
+   * running and one queued re-run; extra triggers while one is pending only
+   * set the dirty flag. Failures leave the cursor behind and retry on the
+   * next trigger, so restarts neither drop nor duplicate messages.
    */
   private forwardChat(chatId: string, conversationId: string): Promise<void> {
-    const chain = (this.forwardChains.get(conversationId) ?? Promise.resolve())
-      .catch(() => {})
-      .then(() => this.forwardNow(chatId, conversationId))
+    if (!this.allowed(chatId)) return Promise.resolve();
+    const running = this.forwardRuns.get(conversationId);
+    if (running) {
+      this.forwardDirty.add(conversationId);
+      return running;
+    }
+    const run = this.forwardNow(chatId, conversationId)
       .catch((error) =>
         console.error(`Telegram forward to chat ${chatId}:`, errorText(error)),
-      );
-    this.forwardChains.set(conversationId, chain);
-    return chain;
+      )
+      .then(() => {
+        this.forwardRuns.delete(conversationId);
+        if (this.forwardDirty.delete(conversationId) && this.running)
+          void this.forwardChat(chatId, conversationId);
+      });
+    this.forwardRuns.set(conversationId, run);
+    return run;
   }
 
   private async forwardNow(
@@ -491,18 +514,13 @@ export class TelegramAdapter {
     if (!this.running) return;
     for (const chat of this.listChats()) {
       if (!this.running) return;
-      if (!this.config.allowedChatIds.includes(chat.chatId)) continue;
       await this.forwardChat(chat.chatId, chat.conversationId);
     }
   }
 
   private async send(chatId: string, text: string): Promise<void> {
     try {
-      await this.api.sendMessage(
-        chatId,
-        text,
-        this.pollAbort?.signal ?? undefined,
-      );
+      await this.api.sendMessage(chatId, text, this.abort?.signal);
     } catch (error) {
       throw new Error(`Telegram sendMessage failed: ${errorText(error)}`);
     }
@@ -514,6 +532,7 @@ export class TelegramAdapter {
     chatId: string,
     conversationId: string,
   ): Promise<void> {
+    if (!this.running || !this.allowed(chatId)) return;
     const current = this.watches.get(chatId);
     if (current?.conversationId === conversationId) return;
     const epoch = this.epoch;

@@ -21,9 +21,7 @@ import { workerExtension } from './worker-tools.js';
 import {
   TelegramAdapter,
   fetchBotApi,
-  telegramConfigFromEnv,
-  type TelegramBotApi,
-  type TelegramOptions,
+  type TelegramSetup,
 } from './telegram.js';
 import { toRows, type ConversationView } from '../shared/messages.js';
 import type {
@@ -64,10 +62,8 @@ export class Service {
   constructor(
     userDataDir: string,
     private emit: Emit,
-    private telegramSetup?: {
-      api?: TelegramBotApi;
-      options?: Partial<TelegramOptions>;
-    },
+    /** Telegram setup resolved by the service entry; absent = adapter off. */
+    private telegramSetup: TelegramSetup = {},
   ) {
     this.db = new Db(userDataDir);
     this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
@@ -162,7 +158,7 @@ export class Service {
   /** Start the Telegram gateway; without a configured token it stays off. */
   private async startTelegram(): Promise<void> {
     if (this.closing || this.maintenanceMode) return;
-    const config = telegramConfigFromEnv();
+    const config = this.telegramSetup.config;
     if (!config) return;
     if (!this.telegram)
       this.telegram = new TelegramAdapter(
@@ -176,8 +172,8 @@ export class Service {
           conversation: (id) => this.agents.conversation(id),
         },
         config,
-        this.telegramSetup?.api ?? fetchBotApi(config.token),
-        this.telegramSetup?.options,
+        this.telegramSetup.api ?? fetchBotApi(config.token),
+        this.telegramSetup.options,
       );
     await this.telegram.start();
   }
@@ -195,6 +191,10 @@ export class Service {
   async beginMaintenance() {
     this.maintenanceMode = true;
     try {
+      // Stop the gateway before the idle check: its internal submits bypass the
+      // server's maintenance gate, so a message accepted after the check would
+      // be work the upgrade never saw. stop() settles in-flight submits first.
+      await this.telegram?.stop();
       await this.delivery;
       const activity = await this.activity();
       if (
@@ -206,10 +206,10 @@ export class Service {
         throw new Error(
           'Tasks or conversations are still running. Wait for them to finish before stopping or updating the service.',
         );
-      await this.telegram?.stop();
       return activity;
     } catch (error) {
       this.maintenanceMode = false;
+      await this.startTelegram();
       throw error;
     }
   }
