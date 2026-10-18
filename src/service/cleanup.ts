@@ -1,12 +1,7 @@
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from 'node:fs';
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServicePaths } from '../shared/service-paths.js';
+import { hasKeys, readJsonFile } from '../shared/json-file.js';
 /** Called only after commit, when the old service has released all code and data handles. */
 export function pruneServiceArtifacts(
   paths: ServicePaths,
@@ -40,16 +35,15 @@ export function pruneAppUpdates(paths: ServicePaths, currentId: string) {
   const completed = readdirSync(directory)
     .filter((name) => {
       if (name === currentId || !/^[a-f0-9-]{36}$/.test(name)) return false;
-      const result = join(directory, name, 'result.json');
-      if (!existsSync(result)) return false;
-      try {
-        const { phase } = JSON.parse(readFileSync(result, 'utf8')) as {
-          phase: string;
-        };
-        return ['committed', 'rolled-back', 'failed'].includes(phase);
-      } catch {
-        return false;
-      }
+      const result = readJsonFile(
+        join(directory, name, 'result.json'),
+        (value): value is { phase: string } =>
+          hasKeys(value, { phase: 'string' }),
+      );
+      return (
+        !!result &&
+        ['committed', 'rolled-back', 'failed'].includes(result.phase)
+      );
     })
     .sort(
       (a, b) =>
@@ -57,13 +51,13 @@ export function pruneAppUpdates(paths: ServicePaths, currentId: string) {
         statSync(join(directory, a)).mtimeMs,
     );
   for (const name of completed.slice(1)) {
-    const pidFile = join(directory, name, 'helper.json');
-    if (existsSync(pidFile)) {
-      const { pid } = JSON.parse(readFileSync(pidFile, 'utf8')) as {
-        pid: number;
-      };
+    const helper = readJsonFile(
+      join(directory, name, 'helper.json'),
+      (value): value is { pid: number } => hasKeys(value, { pid: 'number' }),
+    );
+    if (helper) {
       try {
-        process.kill(pid, 0);
+        process.kill(helper.pid, 0);
         continue;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue;

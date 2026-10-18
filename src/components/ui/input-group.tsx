@@ -52,6 +52,10 @@ export function InputGroupAddon({
   VariantProps<typeof inputGroupAddonVariants>): React.ReactElement {
   return (
     <div
+      // The addon itself is decoration: clicking it forwards focus to the
+      // group's input. `presentation` keeps that convenience out of the
+      // accessibility tree while the input stays the real control.
+      role="presentation"
       className={cn(inputGroupAddonVariants({ align }), className)}
       data-align={align}
       data-slot="input-group-addon"

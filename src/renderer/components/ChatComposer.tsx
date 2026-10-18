@@ -5,6 +5,74 @@ import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { EASE } from './motion-primitives';
 
+/** Send ⇄ stop button pair that cross-fades as the run starts and ends. */
+function SendOrStop({
+  busy,
+  disabled,
+  canSend,
+  reduce,
+  onSend,
+  onStop,
+}: {
+  busy: boolean;
+  disabled: boolean;
+  canSend: boolean;
+  reduce: boolean;
+  onSend: () => void;
+  onStop: () => void;
+}) {
+  const transition = { duration: 0.16, ease: EASE };
+  return (
+    <div className="relative flex size-8 shrink-0 items-center justify-center">
+      <AnimatePresence mode="popLayout" initial={false}>
+        {busy ? (
+          <motion.div
+            key="stop"
+            initial={reduce ? false : { scale: 0.6, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={reduce ? undefined : { scale: 0.6, opacity: 0 }}
+            transition={transition}
+          >
+            <Button
+              variant="secondary"
+              size="icon-sm"
+              aria-label="Stop"
+              disabled={disabled}
+              className="relative overflow-visible"
+              onClick={onStop}
+            >
+              <span className="absolute inset-0 animate-pulse-ring rounded-md border border-warning/40" />
+              <Stop size={13} weight="fill" className="relative" />
+            </Button>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="send"
+            initial={reduce ? false : { scale: 0.6, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={reduce ? undefined : { scale: 0.6, opacity: 0 }}
+            transition={transition}
+          >
+            <Button
+              size="icon-sm"
+              aria-label="Send"
+              disabled={!canSend}
+              className={`transition-[opacity,filter] ${
+                canSend
+                  ? 'border-0 bg-brand-gradient text-brand-contrast shadow-brand hover:brightness-105 dark:hover:brightness-95'
+                  : 'border-transparent bg-surface-tertiary bg-none text-content-disabled shadow-none hover:bg-surface-tertiary'
+              }`}
+              onClick={onSend}
+            >
+              <ArrowUp size={15} weight="bold" />
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 /**
  * Plain composer: a self-sizing textarea with a send button. Enter sends,
  * Shift+Enter breaks the line. No token machinery, no suggestion popup.
@@ -92,80 +160,46 @@ export function ChatComposer({
             rows={1}
             className="max-h-[200px] min-h-[34px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[13.5px] leading-relaxed outline-none placeholder:text-content-disabled disabled:cursor-not-allowed"
           />
-          <div className="relative flex size-8 shrink-0 items-center justify-center">
-            <AnimatePresence mode="popLayout" initial={false}>
-              {busy ? (
-                <motion.div
-                  key="stop"
-                  initial={reduce ? false : { scale: 0.6, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={reduce ? undefined : { scale: 0.6, opacity: 0 }}
-                  transition={{ duration: 0.16, ease: EASE }}
-                >
-                  <Button
-                    variant="secondary"
-                    size="icon-sm"
-                    aria-label="Stop"
-                    disabled={disabled}
-                    className="relative overflow-visible"
-                    onClick={onStop}
-                  >
-                    <span className="absolute inset-0 animate-pulse-ring rounded-md border border-warning/40" />
-                    <Stop size={13} weight="fill" className="relative" />
-                  </Button>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="send"
-                  initial={reduce ? false : { scale: 0.6, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={reduce ? undefined : { scale: 0.6, opacity: 0 }}
-                  transition={{ duration: 0.16, ease: EASE }}
-                >
-                  <Button
-                    size="icon-sm"
-                    aria-label="Send"
-                    disabled={!canSend}
-                    className={`transition-[opacity,filter] ${
-                      canSend
-                        ? 'border-0 bg-brand-gradient text-brand-contrast shadow-brand hover:brightness-105 dark:hover:brightness-95'
-                        : 'border-transparent bg-surface-tertiary bg-none text-content-disabled shadow-none hover:bg-surface-tertiary'
-                    }`}
-                    onClick={submit}
-                  >
-                    <ArrowUp size={15} weight="bold" />
-                  </Button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          <SendOrStop
+            busy={busy}
+            disabled={disabled}
+            canSend={canSend}
+            reduce={Boolean(reduce)}
+            onSend={submit}
+            onStop={onStop}
+          />
         </div>
-        <AnimatePresence initial={false}>
-          {focused && (
-            <motion.div
-              initial={reduce ? false : { height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={reduce ? undefined : { height: 0, opacity: 0 }}
-              transition={{ duration: 0.18, ease: EASE }}
-              className="overflow-hidden"
-            >
-              <div className="flex items-center gap-3 border-border border-t px-3.5 py-1.5 font-mono text-[10px] text-content-disabled">
-                <span className="flex items-center gap-1">
-                  <Kbd className="h-4 min-w-4 px-1 text-[9px]">↵</Kbd>
-                  send
-                </span>
-                <span className="flex items-center gap-1">
-                  <Kbd className="h-4 min-w-4 px-1 text-[9px]">⇧↵</Kbd>
-                  new line
-                </span>
-                <span className="ml-auto hidden items-center gap-1 sm:flex">
-                  <span className="size-1.5 rounded-full bg-content-secondary" />
-                  {busy ? 'working' : 'ready'}
-                </span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <motion.div
+          layout={!reduce}
+          transition={{ duration: 0.18, ease: EASE }}
+          className="overflow-hidden"
+        >
+          <AnimatePresence initial={false}>
+            {focused && (
+              <motion.div
+                initial={reduce ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={reduce ? undefined : { opacity: 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+              >
+                <div className="flex items-center gap-3 border-border border-t px-3.5 py-1.5 font-mono text-[10px] text-content-disabled">
+                  <span className="flex items-center gap-1">
+                    <Kbd className="h-4 min-w-4 px-1 text-[9px]">↵</Kbd>
+                    send
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Kbd className="h-4 min-w-4 px-1 text-[9px]">⇧↵</Kbd>
+                    new line
+                  </span>
+                  <span className="ml-auto hidden items-center gap-1 sm:flex">
+                    <span className="size-1.5 rounded-full bg-content-secondary" />
+                    {busy ? 'working' : 'ready'}
+                  </span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
       </div>
     </motion.div>
   );

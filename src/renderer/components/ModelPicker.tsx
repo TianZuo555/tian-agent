@@ -34,20 +34,21 @@ interface ModelItem {
 export function ModelPicker() {
   const catalog = useStore((s) => s.catalog);
   const settings = useStore((s) => s.settings);
-  const models = catalog?.models ?? [];
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const reduce = useReducedMotion();
 
+  // Depend on the catalog itself: `catalog?.models ?? []` built a new array on
+  // every render, so the memo never hit.
   const items = useMemo<ModelItem[]>(
     () =>
-      models.map((m) => ({
+      (catalog?.models ?? []).map((m) => ({
         value: m.id,
         label: m.name,
         hint: `${contextLabel(m.contextWindow)} ctx`,
         model: m,
       })),
-    [models],
+    [catalog],
   );
 
   const selected =
@@ -94,7 +95,7 @@ export function ModelPicker() {
             </Badge>
           ) : (
             <Badge variant="outline" size="sm">
-              {models.length} models
+              {items.length} models
             </Badge>
           )}
           <Button

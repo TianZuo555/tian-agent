@@ -281,7 +281,7 @@ export class Service {
     await this.history.idle();
     await this.historyBackfill;
     await this.delivery;
-    for (const watch of this.watches.values()) await watch.stop();
+    await Promise.all([...this.watches.values()].map((watch) => watch.stop()));
     this.watches.clear();
     await this.agents.close();
     await this.runs.join();
@@ -390,13 +390,16 @@ export class Service {
           : Number(patch.allowInPlace),
     });
     const cwd = this.scopes.ensureDirs(id);
-    for (const conversation of this.db
-      .listConversations()
-      .filter((value) => value.scopeId === id)) {
-      await (
-        await this.agents.conversation(conversation.conversationId)
-      ).configure({ cwd }, BACKGROUND_CONTEXT);
-    }
+    await Promise.all(
+      this.db
+        .listConversations()
+        .filter((value) => value.scopeId === id)
+        .map(async (conversation) =>
+          (
+            await this.agents.conversation(conversation.conversationId)
+          ).configure({ cwd }, BACKGROUND_CONTEXT),
+        ),
+    );
     this.watchInbox(id);
     this.scanInbox(id);
     const scopes = this.listScopes();
@@ -522,11 +525,11 @@ export class Service {
     for (const [key, version] of this.watchVersions)
       if (key.startsWith(`${clientId}:`))
         this.watchVersions.set(key, version + 1);
-    for (const [key, watch] of this.watches)
-      if (watch.clientId === clientId) {
-        this.watches.delete(key);
-        await watch.stop();
-      }
+    const owned = [...this.watches].filter(
+      ([, watch]) => watch.clientId === clientId,
+    );
+    for (const [key] of owned) this.watches.delete(key);
+    await Promise.all(owned.map(([, watch]) => watch.stop()));
   }
 
   private watchInbox(scopeId: string): void {
@@ -663,11 +666,15 @@ export class Service {
   }
   async setModel(model: SettingsInfo['model']): Promise<void> {
     this.settings.setModel(model);
-    for (const conversation of this.db.listConversations()) {
-      await (
-        await this.agents.conversation(conversation.conversationId)
-      ).configure({ model }, BACKGROUND_CONTEXT);
-    }
+    await Promise.all(
+      this.db
+        .listConversations()
+        .map(async (conversation) =>
+          (
+            await this.agents.conversation(conversation.conversationId)
+          ).configure({ model }, BACKGROUND_CONTEXT),
+        ),
+    );
     this.emit('settings', this.settings.get());
   }
   taskList(scopeId: string | null) {

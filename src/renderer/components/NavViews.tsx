@@ -36,6 +36,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip';
 import type {
   GoalItem,
   GoalStatus,
+  InboxItem,
   TaskItem,
   TaskStatus,
 } from '@/shared/types';
@@ -480,11 +481,13 @@ function GoalCard({
           {pct !== null && (
             <div className="mb-2 flex items-center gap-2">
               <div className="h-1 flex-1 overflow-hidden rounded-full bg-secondary">
+                {/* Full-width bar scaled from the left: transform-only, so
+                    progress never triggers a layout pass. */}
                 <motion.div
-                  initial={reduce ? false : { width: 0 }}
-                  animate={{ width: `${pct}%` }}
+                  initial={reduce ? false : { scaleX: 0 }}
+                  animate={{ scaleX: pct / 100 }}
                   transition={{ duration: 0.6, ease: EASE }}
-                  className="h-full rounded-full bg-brand-gradient"
+                  className="h-full origin-left rounded-full bg-brand-gradient"
                 />
               </div>
               <span className="font-mono text-[9.5px] text-content-disabled tabular-nums">
@@ -877,6 +880,69 @@ export function GoalsView() {
   );
 }
 
+/** Inbox rows; a keyed motion list so reads and arrivals animate in place. */
+function InboxList({ inbox, reduce }: { inbox: InboxItem[]; reduce: boolean }) {
+  return (
+    <ul className="flex flex-col gap-2">
+      <AnimatePresence initial={false}>
+        {inbox.map((m, i) => {
+          const MsgIcon = inboxIcon(m.from);
+          return (
+            <motion.li
+              key={m.id}
+              layout={!reduce}
+              initial={reduce ? false : { opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? undefined : { opacity: 0 }}
+              transition={{
+                duration: 0.22,
+                ease: EASE,
+                delay: reduce ? 0 : Math.min(i, 8) * 0.03,
+              }}
+              className={`card-hover group relative overflow-hidden rounded-xl border px-3.5 py-3 ${
+                m.read
+                  ? 'border-border bg-card'
+                  : 'border-border-sky/50 bg-surface-sky/15'
+              }`}
+            >
+              {!m.read && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-3 left-0 w-0.5 rounded-full bg-info"
+                />
+              )}
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-secondary text-content-secondary">
+                  <MsgIcon size={11} />
+                </span>
+                <span className="truncate font-medium text-[12px]">
+                  {m.from}
+                </span>
+                {m.to && (
+                  <span className="truncate font-mono text-[9.5px] text-content-disabled">
+                    → {m.to}
+                  </span>
+                )}
+                {!m.read && (
+                  <Badge variant="info" size="sm" className="font-mono">
+                    new
+                  </Badge>
+                )}
+                <span className="ml-auto shrink-0 font-mono text-[9.5px] text-content-disabled">
+                  {m.ts.slice(5, 16).replace('T', ' ')}
+                </span>
+              </div>
+              <div className="whitespace-pre-wrap break-words text-[13px] text-content-secondary leading-relaxed">
+                {m.body}
+              </div>
+            </motion.li>
+          );
+        })}
+      </AnimatePresence>
+    </ul>
+  );
+}
+
 function inboxIcon(from: string): Icon {
   if (/telegram/i.test(from)) return ChatCircleText;
   if (/goal|chief|agent/i.test(from)) return Target;
@@ -915,63 +981,7 @@ export function InboxView() {
               </div>
             </div>
           ) : (
-            <ul className="flex flex-col gap-2">
-              <AnimatePresence initial={false}>
-                {inbox.map((m, i) => {
-                  const MsgIcon = inboxIcon(m.from);
-                  return (
-                    <motion.li
-                      key={m.id}
-                      layout={!reduce}
-                      initial={reduce ? false : { opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={reduce ? undefined : { opacity: 0 }}
-                      transition={{
-                        duration: 0.22,
-                        ease: EASE,
-                        delay: reduce ? 0 : Math.min(i, 8) * 0.03,
-                      }}
-                      className={`card-hover group relative overflow-hidden rounded-xl border px-3.5 py-3 ${
-                        m.read
-                          ? 'border-border bg-card'
-                          : 'border-border-sky/50 bg-surface-sky/15'
-                      }`}
-                    >
-                      {!m.read && (
-                        <span
-                          aria-hidden="true"
-                          className="absolute inset-y-3 left-0 w-0.5 rounded-full bg-info"
-                        />
-                      )}
-                      <div className="mb-1.5 flex items-center gap-2">
-                        <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-secondary text-content-secondary">
-                          <MsgIcon size={11} />
-                        </span>
-                        <span className="truncate font-medium text-[12px]">
-                          {m.from}
-                        </span>
-                        {m.to && (
-                          <span className="truncate font-mono text-[9.5px] text-content-disabled">
-                            → {m.to}
-                          </span>
-                        )}
-                        {!m.read && (
-                          <Badge variant="info" size="sm" className="font-mono">
-                            new
-                          </Badge>
-                        )}
-                        <span className="ml-auto shrink-0 font-mono text-[9.5px] text-content-disabled">
-                          {m.ts.slice(5, 16).replace('T', ' ')}
-                        </span>
-                      </div>
-                      <div className="whitespace-pre-wrap break-words text-[13px] text-content-secondary leading-relaxed">
-                        {m.body}
-                      </div>
-                    </motion.li>
-                  );
-                })}
-              </AnimatePresence>
-            </ul>
+            <InboxList inbox={inbox} reduce={Boolean(reduce)} />
           )}
         </div>
       </ScrollArea>

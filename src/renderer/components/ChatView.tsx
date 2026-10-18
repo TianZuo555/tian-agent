@@ -114,6 +114,48 @@ function toolIcon(name: string): Icon {
   return Wrench;
 }
 
+/** Status glyph in front of a tool name: running, failed, or done. */
+function ToolStatus({ status }: { status: ToolCallRow['status'] }) {
+  if (status === 'running')
+    return (
+      <CircleNotch size={11} className="animate-spin text-info-foreground" />
+    );
+  if (status === 'error')
+    return (
+      <WarningCircle
+        size={11}
+        weight="fill"
+        className="text-destructive-foreground"
+      />
+    );
+  return (
+    <CheckCircle size={11} weight="fill" className="text-content-secondary" />
+  );
+}
+
+/** Expanded args/output body of a tool chip. */
+function ToolBody({ tool, failed }: { tool: ToolCallRow; failed: boolean }) {
+  if (!tool.args && !tool.output) return null;
+  return (
+    <div className="border-border border-t">
+      {tool.args && (
+        <pre className="max-h-40 max-w-[42rem] overflow-auto bg-code px-2.5 py-1.5 whitespace-pre-wrap break-all font-mono text-[10.5px] text-content-secondary">
+          {tool.args.slice(0, 2000)}
+        </pre>
+      )}
+      {tool.output && (
+        <pre
+          className={`max-h-56 max-w-[42rem] overflow-auto bg-code px-2.5 py-1.5 whitespace-pre-wrap break-all font-mono text-[10.5px] ${
+            failed ? 'text-destructive-foreground' : 'text-content-secondary'
+          }`}
+        >
+          {tool.output.slice(0, 4000)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 /** One tool call as a compact chip; expand for args and output. */
 function ToolChip({ tool }: { tool: ToolCallRow }) {
   const [open, setOpen] = useState(false);
@@ -122,19 +164,23 @@ function ToolChip({ tool }: { tool: ToolCallRow }) {
   const expandable = Boolean(tool.args || tool.output);
   const IconComponent = toolIcon(tool.name);
   const reduce = useReducedMotion();
+  const tone = failed
+    ? 'border-border-destructive/40'
+    : running
+      ? 'border-border-sky/40'
+      : 'border-border';
+  const iconTone = failed
+    ? 'bg-destructive/10 text-destructive-foreground'
+    : running
+      ? 'bg-info/10 text-info-foreground'
+      : 'bg-surface-tertiary/60 text-content-secondary';
   return (
     <motion.div
       layout={!reduce}
       initial={reduce ? false : { opacity: 0, scale: 0.97 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.18, ease: EASE }}
-      className={`inline-flex max-w-full flex-col overflow-hidden rounded-lg border bg-secondary/50 align-top transition-colors ${
-        failed
-          ? 'border-border-destructive/40'
-          : running
-            ? 'border-border-sky/40'
-            : 'border-border'
-      }`}
+      className={`inline-flex max-w-full flex-col overflow-hidden rounded-lg border bg-secondary/50 align-top transition-colors ${tone}`}
     >
       <button
         type="button"
@@ -146,13 +192,7 @@ function ToolChip({ tool }: { tool: ToolCallRow }) {
         }`}
       >
         <span
-          className={`flex size-4.5 shrink-0 items-center justify-center rounded-[4px] ${
-            failed
-              ? 'bg-destructive/10 text-destructive-foreground'
-              : running
-                ? 'bg-info/10 text-info-foreground'
-                : 'bg-surface-tertiary/60 text-content-secondary'
-          }`}
+          className={`flex size-4.5 shrink-0 items-center justify-center rounded-[4px] ${iconTone}`}
         >
           <IconComponent size={10} weight="bold" />
         </span>
@@ -160,24 +200,7 @@ function ToolChip({ tool }: { tool: ToolCallRow }) {
           {tool.name}
         </span>
         <span className="ms-0.5 flex size-3.5 shrink-0 items-center justify-center">
-          {running ? (
-            <CircleNotch
-              size={11}
-              className="animate-spin text-info-foreground"
-            />
-          ) : failed ? (
-            <WarningCircle
-              size={11}
-              weight="fill"
-              className="text-destructive-foreground"
-            />
-          ) : (
-            <CheckCircle
-              size={11}
-              weight="fill"
-              className="text-content-secondary"
-            />
-          )}
+          <ToolStatus status={tool.status} />
         </span>
         {expandable && (
           <CaretRight
@@ -189,24 +212,7 @@ function ToolChip({ tool }: { tool: ToolCallRow }) {
         )}
       </button>
       <Reveal open={open}>
-        <div className="border-border border-t">
-          {tool.args && (
-            <pre className="max-h-40 max-w-[42rem] overflow-auto bg-code px-2.5 py-1.5 whitespace-pre-wrap break-all font-mono text-[10.5px] text-content-secondary">
-              {tool.args.slice(0, 2000)}
-            </pre>
-          )}
-          {tool.output && (
-            <pre
-              className={`max-h-56 max-w-[42rem] overflow-auto bg-code px-2.5 py-1.5 whitespace-pre-wrap break-all font-mono text-[10.5px] ${
-                failed
-                  ? 'text-destructive-foreground'
-                  : 'text-content-secondary'
-              }`}
-            >
-              {tool.output.slice(0, 4000)}
-            </pre>
-          )}
-        </div>
+        <ToolBody tool={tool} failed={failed} />
       </Reveal>
     </motion.div>
   );
@@ -283,8 +289,7 @@ function AssistantBubble({ row }: { row: MessageRow }) {
     }
   };
   return (
-    <div
-      role="article"
+    <article
       aria-label="Assistant message"
       className="group/assistant flex w-full max-w-[52rem] flex-col gap-2"
     >
@@ -308,7 +313,7 @@ function AssistantBubble({ row }: { row: MessageRow }) {
             type="button"
             onClick={() => void copy()}
             aria-label={copied ? 'Copied' : 'Copy message'}
-            className="ml-auto flex size-6 cursor-pointer items-center justify-center rounded-md text-content-disabled opacity-0 transition-all hover:bg-secondary hover:text-foreground group-hover/assistant:opacity-100 focus-visible:opacity-100"
+            className="ml-auto flex size-6 cursor-pointer items-center justify-center rounded-md text-content-disabled opacity-0 transition-[opacity,background-color,color] hover:bg-secondary hover:text-foreground group-hover/assistant:opacity-100 focus-visible:opacity-100"
           >
             {copied ? (
               <Check
@@ -368,21 +373,17 @@ function AssistantBubble({ row }: { row: MessageRow }) {
           <span className="shimmer-text">thinking…</span>
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
 function UserBubble({ row }: { row: MessageRow }) {
   return (
-    <div
-      role="article"
-      aria-label="User message"
-      className="flex w-full justify-end"
-    >
+    <article aria-label="User message" className="flex w-full justify-end">
       <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-xl rounded-br-md border border-border border-b-border-secondary/70 bg-secondary px-3.5 py-2 text-[13px] text-secondary-foreground leading-relaxed shadow-[0_1px_0_hsl(0_0%_100%/0.04)_inset]">
         {row.text}
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -551,6 +552,152 @@ function EmptyConversation({
   );
 }
 
+/** "working…" row that fades in while the steward is busy. */
+function WorkingIndicator({
+  working,
+  reduce,
+}: {
+  working: boolean;
+  reduce: boolean;
+}) {
+  return (
+    <AnimatePresence>
+      {working && (
+        <motion.div
+          key="working"
+          initial={reduce ? false : { opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduce ? undefined : { opacity: 0 }}
+          transition={{ duration: 0.2, ease: EASE }}
+          role="status"
+          className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5"
+        >
+          <BrandMark size="sm" />
+          <TypingDots className="text-content-secondary" />
+          <span className="shimmer-text font-mono text-[11px]">working…</span>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/** Floating "latest" affordance shown when the reader scrolled up. */
+function JumpToLatest({
+  show,
+  reduce,
+  onClick,
+}: {
+  show: boolean;
+  reduce: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <AnimatePresence>
+      {show && (
+        <div className="pointer-events-none absolute bottom-[7.5rem] left-1/2 z-10 -translate-x-1/2">
+          <motion.button
+            key="jump"
+            type="button"
+            initial={reduce ? false : { opacity: 0, y: 8, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduce ? undefined : { opacity: 0, y: 8, scale: 0.9 }}
+            transition={{ duration: 0.18, ease: EASE }}
+            onClick={onClick}
+            className="pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card/95 px-2.5 py-1 font-mono text-[10px] text-content-secondary shadow-lg/5 backdrop-blur transition-colors hover:border-border-secondary hover:text-foreground"
+          >
+            <ArrowDown size={11} />
+            latest
+          </motion.button>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/** The message log plus the composer, mounted only for a real conversation. */
+function Transcript({
+  rows,
+  busy,
+  connected,
+  scopeName,
+  atBottom,
+  reduce,
+  viewportRef,
+  composerRef,
+  draft,
+  onDraftChange,
+  onSend,
+  onPick,
+  onScrollToLatest,
+}: {
+  rows: MessageRow[];
+  busy: boolean;
+  connected: boolean;
+  scopeName: string | null;
+  atBottom: boolean;
+  reduce: boolean;
+  viewportRef: React.RefObject<HTMLDivElement | null>;
+  composerRef: React.RefObject<HTMLTextAreaElement | null>;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onSend: (text: string) => void;
+  onPick: (prompt: string) => void;
+  onScrollToLatest: () => void;
+}) {
+  const working =
+    busy && rows.every((r) => r.role !== 'assistant' || !r.streaming);
+  const showJump = !atBottom && rows.length > 0;
+  return (
+    <>
+      <ScrollArea
+        className="min-h-0 flex-1"
+        viewportRef={viewportRef}
+        scrollbarGutter
+        scrollFade
+      >
+        {rows.length === 0 ? (
+          <EmptyConversation scopeName={scopeName} onPick={onPick} />
+        ) : (
+          <div
+            role="log"
+            aria-label="Messages"
+            aria-live="polite"
+            className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-5 py-7"
+          >
+            {rows.map((r) => (
+              <MessageIn key={r.id} animate={!r.streaming}>
+                <Row row={r} />
+              </MessageIn>
+            ))}
+            <WorkingIndicator working={working} reduce={reduce} />
+            <div className="h-px" />
+          </div>
+        )}
+      </ScrollArea>
+
+      <JumpToLatest
+        show={showJump}
+        reduce={reduce}
+        onClick={onScrollToLatest}
+      />
+
+      <div className="shrink-0 bg-gradient-to-t from-background via-background to-transparent px-5 pt-2 pb-4">
+        <div className="mx-auto w-full max-w-3xl">
+          <ChatComposer
+            disabled={!connected}
+            busy={busy}
+            value={draft}
+            onValueChange={onDraftChange}
+            onSend={onSend}
+            onStop={() => void actions.abort()}
+            textareaRef={composerRef}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function ChatView() {
   const view = useStore((s) => s.view);
   const conversations = useStore((s) => s.conversations);
@@ -696,91 +843,21 @@ export function ChatView() {
           onPalette={() => actions.setPaletteOpen(true)}
         />
       ) : (
-        <>
-          <ScrollArea
-            className="min-h-0 flex-1"
-            viewportRef={viewportRef}
-            scrollbarGutter
-            scrollFade
-          >
-            {rows.length === 0 ? (
-              <EmptyConversation
-                scopeName={scope?.name ?? null}
-                onPick={useSuggestion}
-              />
-            ) : (
-              <div
-                role="log"
-                aria-label="Messages"
-                aria-live="polite"
-                className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-5 py-7"
-              >
-                {rows.map((r) => (
-                  <MessageIn key={r.id} animate={!r.streaming}>
-                    <Row row={r} />
-                  </MessageIn>
-                ))}
-                <AnimatePresence>
-                  {busy &&
-                    rows.every(
-                      (r) => r.role !== 'assistant' || !r.streaming,
-                    ) && (
-                      <motion.div
-                        key="working"
-                        initial={reduce ? false : { opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={reduce ? undefined : { opacity: 0 }}
-                        transition={{ duration: 0.2, ease: EASE }}
-                        role="status"
-                        className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5"
-                      >
-                        <BrandMark size="sm" />
-                        <TypingDots className="text-content-secondary" />
-                        <span className="shimmer-text font-mono text-[11px]">
-                          working…
-                        </span>
-                      </motion.div>
-                    )}
-                </AnimatePresence>
-                <div className="h-px" />
-              </div>
-            )}
-          </ScrollArea>
-
-          <AnimatePresence>
-            {!atBottom && rows.length > 0 && (
-              <div className="pointer-events-none absolute bottom-[7.5rem] left-1/2 z-10 -translate-x-1/2">
-                <motion.button
-                  key="jump"
-                  type="button"
-                  initial={reduce ? false : { opacity: 0, y: 8, scale: 0.9 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={reduce ? undefined : { opacity: 0, y: 8, scale: 0.9 }}
-                  transition={{ duration: 0.18, ease: EASE }}
-                  onClick={() => scrollToLatest()}
-                  className="pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card/95 px-2.5 py-1 font-mono text-[10px] text-content-secondary shadow-lg/5 backdrop-blur transition-colors hover:border-border-secondary hover:text-foreground"
-                >
-                  <ArrowDown size={11} />
-                  latest
-                </motion.button>
-              </div>
-            )}
-          </AnimatePresence>
-
-          <div className="shrink-0 bg-gradient-to-t from-background via-background to-transparent px-5 pt-2 pb-4">
-            <div className="mx-auto w-full max-w-3xl">
-              <ChatComposer
-                disabled={!connected}
-                busy={busy}
-                value={draft}
-                onValueChange={setDraft}
-                onSend={send}
-                onStop={() => void actions.abort()}
-                textareaRef={composerRef}
-              />
-            </div>
-          </div>
-        </>
+        <Transcript
+          rows={rows}
+          busy={busy}
+          connected={connected}
+          scopeName={scope?.name ?? null}
+          atBottom={atBottom}
+          reduce={Boolean(reduce)}
+          viewportRef={viewportRef}
+          composerRef={composerRef}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSend={send}
+          onPick={useSuggestion}
+          onScrollToLatest={scrollToLatest}
+        />
       )}
     </main>
   );

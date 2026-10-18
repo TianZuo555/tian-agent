@@ -674,18 +674,30 @@ function ReviseMemoryDialog({
   item: MemoryItem | null;
   onClose: () => void;
 }) {
-  const [text, setText] = useState('');
+  return (
+    <Dialog open={item !== null} onOpenChange={(o) => !o && onClose()}>
+      {/* Keyed by memory so the form starts from the selected item instead of
+          an effect copying props into state after the first paint. */}
+      {item && (
+        <ReviseMemoryForm key={item.seq} item={item} onClose={onClose} />
+      )}
+    </Dialog>
+  );
+}
+
+function ReviseMemoryForm({
+  item,
+  onClose,
+}: {
+  item: MemoryItem;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(item.content);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (item) {
-      setText(item.content);
-      setReason('');
-    }
-  }, [item]);
 
   const submit = async () => {
-    if (!item || !text.trim() || !reason.trim() || busy) return;
+    if (!text.trim() || !reason.trim() || busy) return;
     setBusy(true);
     try {
       await actions.memoryRevise(item.seq, text.trim(), reason.trim());
@@ -696,10 +708,10 @@ function ReviseMemoryDialog({
   };
 
   return (
-    <Dialog open={item !== null} onOpenChange={(o) => !o && onClose()}>
+    <>
       <DialogPopup className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Revise memory #{item?.seq}</DialogTitle>
+          <DialogTitle>Revise memory #{item.seq}</DialogTitle>
           <DialogDescription>
             The old memory is kept as history but leaves Core Memory.
           </DialogDescription>
@@ -738,7 +750,7 @@ function ReviseMemoryDialog({
           </Button>
         </DialogFooter>
       </DialogPopup>
-    </Dialog>
+    </>
   );
 }
 
@@ -749,14 +761,27 @@ function ForgetMessageDialog({
   item: MemoryItem | null;
   onClose: () => void;
 }) {
+  return (
+    <Dialog open={item !== null} onOpenChange={(o) => !o && onClose()}>
+      {item && (
+        <ForgetMemoryForm key={item.seq} item={item} onClose={onClose} />
+      )}
+    </Dialog>
+  );
+}
+
+function ForgetMemoryForm({
+  item,
+  onClose,
+}: {
+  item: MemoryItem;
+  onClose: () => void;
+}) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (item) setReason('');
-  }, [item]);
 
   const submit = async () => {
-    if (!item || !reason.trim() || busy) return;
+    if (!reason.trim() || busy) return;
     setBusy(true);
     try {
       await actions.memoryForget(item.seq, reason.trim());
@@ -767,42 +792,40 @@ function ForgetMessageDialog({
   };
 
   return (
-    <Dialog open={item !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogPopup className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Forget memory #{item?.seq}</DialogTitle>
-          <DialogDescription>
-            It is marked deleted and leaves Core Memory; the record is kept in
-            the version history.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="grid gap-3">
-          <Field>
-            <FieldLabel>Reason</FieldLabel>
-            <Input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Why should this be forgotten?"
-              aria-label="Forget reason"
-            />
-          </Field>
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button variant="ghost" size="sm" />}>
-            Cancel
-          </DialogClose>
-          <Button
-            size="sm"
-            variant="destructive"
-            loading={busy}
-            disabled={!reason.trim()}
-            onClick={() => void submit()}
-          >
-            Forget
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+    <DialogPopup className="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>Forget memory #{item.seq}</DialogTitle>
+        <DialogDescription>
+          It is marked deleted and leaves Core Memory; the record is kept in the
+          version history.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel className="grid gap-3">
+        <Field>
+          <FieldLabel>Reason</FieldLabel>
+          <Input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Why should this be forgotten?"
+            aria-label="Forget reason"
+          />
+        </Field>
+      </DialogPanel>
+      <DialogFooter>
+        <DialogClose render={<Button variant="ghost" size="sm" />}>
+          Cancel
+        </DialogClose>
+        <Button
+          size="sm"
+          variant="destructive"
+          loading={busy}
+          disabled={!reason.trim()}
+          onClick={() => void submit()}
+        >
+          Forget
+        </Button>
+      </DialogFooter>
+    </DialogPopup>
   );
 }
 

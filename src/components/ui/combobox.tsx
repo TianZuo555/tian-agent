@@ -26,8 +26,10 @@ export function Combobox<
   props: ComboboxPrimitive.Root.Props<Value, Multiple, Item>,
 ): React.ReactElement {
   const chipsRef = React.useRef<Element | null>(null);
+  const multiple = !!props.multiple;
+  const context = React.useMemo(() => ({ chipsRef, multiple }), [multiple]);
   return (
-    <ComboboxContext.Provider value={{ chipsRef, multiple: !!props.multiple }}>
+    <ComboboxContext.Provider value={context}>
       <ComboboxPrimitive.Root {...props} />
     </ComboboxContext.Provider>
   );

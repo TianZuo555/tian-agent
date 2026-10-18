@@ -137,8 +137,7 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
           </span>
         ))}
       </div>
-      <div
-        role="list"
+      <ul
         aria-label={`Model usage in the last ${WEEKS} weeks`}
         className="mx-auto grid w-full max-w-[440px] grid-flow-col grid-rows-7 gap-[3px]"
         style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }}
@@ -147,8 +146,7 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
           <Tooltip key={cell.key}>
             <TooltipTrigger
               render={
-                <div
-                  role="listitem"
+                <li
                   aria-label={`${formatDate(cell.date)}: ${
                     cell.day
                       ? `${cell.day.totalTokens} tokens, ${formatCost(cell.day.cost)}`
@@ -178,7 +176,7 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
             </TooltipPopup>
           </Tooltip>
         ))}
-      </div>
+      </ul>
       <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
         <span aria-live="polite" className="min-w-0 truncate">
           {error ??

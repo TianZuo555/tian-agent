@@ -90,9 +90,6 @@ function Toasts({
         data-slot="toast-viewport"
       >
         {toasts.map((toast) => {
-          const Icon = toast.type
-            ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS]
-            : null;
           const toastData = toast.data as ToastData | undefined;
 
           return (
@@ -149,41 +146,54 @@ function Toasts({
               toast={toast}
             >
               <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm transition-opacity duration-250 data-behind:not-data-expanded:pointer-events-none data-behind:opacity-0 data-expanded:opacity-100">
-                <div className="flex gap-2">
-                  {Icon && (
-                    <div
-                      className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
-                      data-slot="toast-icon"
-                    >
-                      <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
-                    </div>
-                  )}
-
-                  <div className="flex flex-col gap-0.5">
-                    <Toast.Title
-                      className="font-medium"
-                      data-slot="toast-title"
-                    />
-                    <Toast.Description
-                      className="text-muted-foreground"
-                      data-slot="toast-description"
-                    />
-                  </div>
-                </div>
-                {toast.actionProps && (
-                  <Toast.Action
-                    className={buttonVariants({ size: 'xs' })}
-                    data-slot="toast-action"
-                  >
-                    {toast.actionProps.children}
-                  </Toast.Action>
-                )}
+                <ToastBody toast={toast} />
               </Toast.Content>
             </Toast.Root>
           );
         })}
       </Toast.Viewport>
     </Toast.Portal>
+  );
+}
+
+/** Icon, title, description, and action — shared by stacked and anchored toasts. */
+function ToastBody({
+  toast,
+}: {
+  toast: ReturnType<typeof Toast.useToastManager>['toasts'][number];
+}) {
+  const Icon = toast.type
+    ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS]
+    : null;
+  return (
+    <>
+      <div className="flex gap-2">
+        {Icon && (
+          <div
+            className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
+            data-slot="toast-icon"
+          >
+            <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
+          </div>
+        )}
+
+        <div className="flex flex-col gap-0.5">
+          <Toast.Title className="font-medium" data-slot="toast-title" />
+          <Toast.Description
+            className="text-muted-foreground"
+            data-slot="toast-description"
+          />
+        </div>
+      </div>
+      {toast.actionProps && (
+        <Toast.Action
+          className={buttonVariants({ size: 'xs' })}
+          data-slot="toast-action"
+        >
+          {toast.actionProps.children}
+        </Toast.Action>
+      )}
+    </>
   );
 }
 
@@ -201,9 +211,6 @@ function AnchoredToasts({
         data-slot="toast-viewport-anchored"
       >
         {toasts.map((toast) => {
-          const Icon = toast.type
-            ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS]
-            : null;
           const toastData = toast.data as ToastData | undefined;
           const tooltipStyle = toastData?.tooltipStyle ?? false;
           const positionerProps = toast.positionerProps;
@@ -238,35 +245,7 @@ function AnchoredToasts({
                   </Toast.Content>
                 ) : (
                   <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm">
-                    <div className="flex gap-2">
-                      {Icon && (
-                        <div
-                          className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
-                          data-slot="toast-icon"
-                        >
-                          <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
-                        </div>
-                      )}
-
-                      <div className="flex flex-col gap-0.5">
-                        <Toast.Title
-                          className="font-medium"
-                          data-slot="toast-title"
-                        />
-                        <Toast.Description
-                          className="text-muted-foreground"
-                          data-slot="toast-description"
-                        />
-                      </div>
-                    </div>
-                    {toast.actionProps && (
-                      <Toast.Action
-                        className={buttonVariants({ size: 'xs' })}
-                        data-slot="toast-action"
-                      >
-                        {toast.actionProps.children}
-                      </Toast.Action>
-                    )}
+                    <ToastBody toast={toast} />
                   </Toast.Content>
                 )}
               </Toast.Root>

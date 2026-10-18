@@ -219,6 +219,109 @@ function MetaRef({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Promote / resolve / dismiss / reopen controls for one entry. */
+function EntryActions({ entry }: { entry: ImprovementSummary }) {
+  const canPromote = entry.status === 'open';
+  const canClose = entry.status === 'open' || entry.status === 'promoted';
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      {canPromote && (
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void actions.promoteImprovement(entry.id)}
+        >
+          <ArrowRight size={11} />
+          Promote
+        </Button>
+      )}
+      {canClose && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Resolve"
+            title="Resolve"
+            className="text-content-secondary"
+            onClick={() =>
+              void actions.setImprovementStatus(entry.id, 'resolved')
+            }
+          >
+            <CheckCircle size={12} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Dismiss"
+            title="Dismiss"
+            className="text-content-secondary"
+            onClick={() =>
+              void actions.setImprovementStatus(entry.id, 'dismissed')
+            }
+          >
+            <X size={12} />
+          </Button>
+        </>
+      )}
+      {!canClose && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Reopen"
+          title="Reopen"
+          className="text-content-secondary"
+          onClick={() => void actions.setImprovementStatus(entry.id, 'open')}
+        >
+          <ArrowClockwise size={12} />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Status, severity, scope, source, and recency chips for one entry. */
+function EntryMeta({
+  entry,
+  scopes,
+}: {
+  entry: ImprovementSummary;
+  scopes: ScopeInfo[];
+}) {
+  const status = STATUS_META[entry.status];
+  const severity = SEVERITY_META[entry.severity];
+  const kind = KIND_META[entry.kind];
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Badge variant={status.variant} size="sm" className="font-mono">
+        {status.label}
+      </Badge>
+      <span className="inline-flex items-center gap-1 font-mono text-[9.5px] text-content-disabled">
+        <span className={`size-1.5 rounded-full ${severity.dot}`} />
+        {severity.label}
+      </span>
+      <Badge variant="outline" size="sm" className="font-mono">
+        {scopeLabel(scopes, entry.scopeId)}
+      </Badge>
+      <span className="font-mono text-[9.5px] text-content-disabled">
+        {kind.label} · {sourceLabel(entry)}
+      </span>
+      {entry.area && entry.source === 'system' && (
+        <span className="font-mono text-[9.5px] text-content-disabled">
+          {entry.area}
+        </span>
+      )}
+      {entry.occurrences > 1 && (
+        <Badge variant="secondary" size="sm" className="font-mono">
+          ×{entry.occurrences}
+        </Badge>
+      )}
+      <span className="ms-auto font-mono text-[9.5px] text-content-disabled">
+        {ago(entry.lastSeenAt)}
+      </span>
+    </span>
+  );
+}
+
 function EntryRow({
   entry,
   scopes,
@@ -235,11 +338,7 @@ function EntryRow({
   reduce: boolean;
 }) {
   const kind = KIND_META[entry.kind];
-  const status = STATUS_META[entry.status];
-  const severity = SEVERITY_META[entry.severity];
   const KindIcon = kind.icon;
-  const canPromote = entry.status === 'open';
-  const canClose = entry.status === 'open' || entry.status === 'promoted';
   return (
     <motion.li
       layout={!reduce}
@@ -266,131 +365,59 @@ function EntryRow({
             <span className="block break-words font-medium text-[12px] text-foreground leading-snug">
               {entry.summary}
             </span>
-            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-              <Badge variant={status.variant} size="sm" className="font-mono">
-                {status.label}
-              </Badge>
-              <span className="inline-flex items-center gap-1 font-mono text-[9.5px] text-content-disabled">
-                <span className={`size-1.5 rounded-full ${severity.dot}`} />
-                {severity.label}
-              </span>
-              <Badge variant="outline" size="sm" className="font-mono">
-                {scopeLabel(scopes, entry.scopeId)}
-              </Badge>
-              <span className="font-mono text-[9.5px] text-content-disabled">
-                {kind.label} · {sourceLabel(entry)}
-              </span>
-              {entry.area && entry.source === 'system' && (
-                <span className="font-mono text-[9.5px] text-content-disabled">
-                  {entry.area}
-                </span>
-              )}
-              {entry.occurrences > 1 && (
-                <Badge variant="secondary" size="sm" className="font-mono">
-                  ×{entry.occurrences}
-                </Badge>
-              )}
-              <span className="ms-auto font-mono text-[9.5px] text-content-disabled">
-                {ago(entry.lastSeenAt)}
-              </span>
-            </span>
+            <EntryMeta entry={entry} scopes={scopes} />
           </span>
         </button>
-        <div className="flex shrink-0 items-center gap-0.5">
-          {canPromote && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() => void actions.promoteImprovement(entry.id)}
-            >
-              <ArrowRight size={11} />
-              Promote
-            </Button>
-          )}
-          {canClose && (
-            <>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Resolve"
-                title="Resolve"
-                className="text-content-secondary"
-                onClick={() =>
-                  void actions.setImprovementStatus(entry.id, 'resolved')
-                }
-              >
-                <CheckCircle size={12} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Dismiss"
-                title="Dismiss"
-                className="text-content-secondary"
-                onClick={() =>
-                  void actions.setImprovementStatus(entry.id, 'dismissed')
-                }
-              >
-                <X size={12} />
-              </Button>
-            </>
-          )}
-          {!canClose && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Reopen"
-              title="Reopen"
-              className="text-content-secondary"
-              onClick={() =>
-                void actions.setImprovementStatus(entry.id, 'open')
-              }
-            >
-              <ArrowClockwise size={12} />
-            </Button>
-          )}
-        </div>
+        <EntryActions entry={entry} />
       </div>
 
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            key="detail"
-            initial={reduce ? false : { height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={reduce ? undefined : { height: 0, opacity: 0 }}
-            transition={{ duration: 0.18, ease: EASE }}
-            className="overflow-hidden border-border border-t"
-          >
-            <div className="flex flex-col gap-2.5 bg-surface-secondary/20 px-3 py-2.5">
-              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[10.5px] text-content-secondary leading-relaxed">
-                {detail === undefined
-                  ? 'Loading…'
-                  : detail.trim() || 'No detail recorded.'}
-              </pre>
-              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                {entry.taskId != null && (
-                  <MetaRef label="task" value={`#${entry.taskId}`} />
-                )}
-                {entry.runId && <MetaRef label="run" value={entry.runId} />}
-                {entry.conversationId && (
-                  <MetaRef label="conv" value={entry.conversationId} />
-                )}
-                {entry.eventId && (
-                  <MetaRef label="event" value={entry.eventId} />
-                )}
-                {entry.fingerprint && (
-                  <MetaRef label="fp" value={entry.fingerprint} />
-                )}
-                <MetaRef
-                  label="first"
-                  value={entry.firstSeenAt.slice(0, 16).replace('T', ' ')}
-                />
+      {/* `layout` animates the size change with a transform; an animated
+          `height` would reflow the whole log on every frame. */}
+      <motion.div
+        layout={!reduce}
+        transition={{ duration: 0.18, ease: EASE }}
+        className="overflow-hidden"
+      >
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              key="detail"
+              initial={reduce ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={reduce ? undefined : { opacity: 0 }}
+              transition={{ duration: 0.18, ease: EASE }}
+              className="border-border border-t"
+            >
+              <div className="flex flex-col gap-2.5 bg-surface-secondary/20 px-3 py-2.5">
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[10.5px] text-content-secondary leading-relaxed">
+                  {detail === undefined
+                    ? 'Loading…'
+                    : detail.trim() || 'No detail recorded.'}
+                </pre>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {entry.taskId != null && (
+                    <MetaRef label="task" value={`#${entry.taskId}`} />
+                  )}
+                  {entry.runId && <MetaRef label="run" value={entry.runId} />}
+                  {entry.conversationId && (
+                    <MetaRef label="conv" value={entry.conversationId} />
+                  )}
+                  {entry.eventId && (
+                    <MetaRef label="event" value={entry.eventId} />
+                  )}
+                  {entry.fingerprint && (
+                    <MetaRef label="fp" value={entry.fingerprint} />
+                  )}
+                  <MetaRef
+                    label="first"
+                    value={entry.firstSeenAt.slice(0, 16).replace('T', ' ')}
+                  />
+                </div>
               </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
     </motion.li>
   );
 }

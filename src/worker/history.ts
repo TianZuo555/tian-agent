@@ -235,8 +235,9 @@ export class HistoryIndex {
   async syncAll(scopeIds?: readonly string[]): Promise<void> {
     if (this.stopped || !this.enabled()) return;
     const all = this.knownConversations();
-    const selected = scopeIds
-      ? all.filter((row) => scopeIds.includes(row.scopeId))
+    const wanted = scopeIds ? new Set(scopeIds) : null;
+    const selected = wanted
+      ? all.filter((row) => wanted.has(row.scopeId))
       : all;
     await Promise.all(
       selected.map((row) =>

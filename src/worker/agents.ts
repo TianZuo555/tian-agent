@@ -57,28 +57,32 @@ export class AgentRuntime implements WorkerRuntime {
       BACKGROUND_CONTEXT,
     );
     // Existing chief conversations must also lose implicitly inherited coding tools.
-    for (const row of this.db.listConversations()) {
-      const conversation = await this.harness.conversation(
-        Number(row.conversationId) as ConversationId,
-        BACKGROUND_CONTEXT,
-      );
-      await conversation?.configure(
-        { extensions: [chief] },
-        BACKGROUND_CONTEXT,
-      );
-    }
+    await Promise.all(
+      this.db.listConversations().map(async (row) => {
+        const conversation = await this.harness.conversation(
+          Number(row.conversationId) as ConversationId,
+          BACKGROUND_CONTEXT,
+        );
+        await conversation?.configure(
+          { extensions: [chief] },
+          BACKGROUND_CONTEXT,
+        );
+      }),
+    );
     // Existing worker conversations gain the messaging tools after an upgrade.
-    for (const run of this.db.listRuns(null)) {
-      if (!run.conversationId || run.reviewStatus === 'discarded') continue;
-      const conversation = await this.harness.conversation(
-        Number(run.conversationId) as ConversationId,
-        BACKGROUND_CONTEXT,
-      );
-      await conversation?.configure(
-        { extensions: [CodingTools, worker] },
-        BACKGROUND_CONTEXT,
-      );
-    }
+    await Promise.all(
+      this.db.listRuns(null).map(async (run) => {
+        if (!run.conversationId || run.reviewStatus === 'discarded') return;
+        const conversation = await this.harness.conversation(
+          Number(run.conversationId) as ConversationId,
+          BACKGROUND_CONTEXT,
+        );
+        await conversation?.configure(
+          { extensions: [CodingTools, worker] },
+          BACKGROUND_CONTEXT,
+        );
+      }),
+    );
   }
 
   async conversation(id: string): Promise<Conversation> {

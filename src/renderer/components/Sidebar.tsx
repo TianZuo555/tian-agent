@@ -231,6 +231,258 @@ function ScopeSection(props: {
   );
 }
 
+/** Brand block with the two global entry points: palette and settings. */
+function SidebarBrand() {
+  return (
+    <div className="relative flex items-center gap-2.5 bg-[radial-gradient(18rem_6rem_at_18%_0%,hsl(var(--brand)/0.1),transparent_70%)] px-3 pt-1 pb-3">
+      <BrandMark glow />
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-semibold text-[13px] text-foreground leading-tight tracking-tight">
+          Tian
+        </div>
+        <div className="truncate font-mono text-[10px] text-content-secondary leading-tight">
+          大内总管
+        </div>
+      </div>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Open command palette"
+              className="text-content-secondary"
+              onClick={() => actions.setPaletteOpen(true)}
+            />
+          }
+        >
+          <MagnifyingGlass size={15} />
+        </TooltipTrigger>
+        <TooltipPopup>
+          Command palette <Kbd className="ml-1.5">⌘K</Kbd>
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Open settings"
+              className="text-content-secondary"
+              onClick={() => actions.setSettingsOpen(true)}
+            />
+          }
+        >
+          <SlidersHorizontal size={15} />
+        </TooltipTrigger>
+        <TooltipPopup>Settings</TooltipPopup>
+      </Tooltip>
+    </div>
+  );
+}
+
+/** Chat / Goals / Inbox / Log destinations with their unread and pending badges. */
+function PrimaryNav({
+  nav,
+  pendingTasks,
+  unread,
+  openImprovements,
+}: {
+  nav: 'chat' | 'goals' | 'inbox' | 'log';
+  pendingTasks: number;
+  unread: number;
+  openImprovements: number;
+}) {
+  return (
+    <nav aria-label="Primary" className="flex flex-col gap-0.5 px-2 pb-3">
+      <NavItem
+        icon={ChatCircleDots}
+        label="Chat"
+        active={nav === 'chat'}
+        onClick={() => actions.setNav('chat')}
+      />
+      <NavItem
+        icon={Target}
+        label="Goals"
+        active={nav === 'goals'}
+        badge={pendingTasks}
+        onClick={() => actions.setNav('goals')}
+      />
+      <NavItem
+        icon={Tray}
+        label="Inbox"
+        active={nav === 'inbox'}
+        badge={unread}
+        onClick={() => actions.setNav('inbox')}
+      />
+      <NavItem
+        icon={Notebook}
+        label="Log"
+        active={nav === 'log'}
+        badge={openImprovements}
+        onClick={() => actions.setNav('log')}
+      />
+    </nav>
+  );
+}
+
+/** Conversation filter field. */
+function ConversationSearch({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="px-2.5 pb-2">
+      <div className="group relative">
+        <MagnifyingGlass
+          size={13}
+          className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-content-disabled transition-colors group-focus-within:text-content-secondary"
+        />
+        <Input
+          placeholder="Search conversations"
+          aria-label="Search conversations"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          size="sm"
+          className="h-7 bg-transparent pr-7 pl-8 text-[11.5px]"
+        />
+        {value && (
+          <button
+            type="button"
+            aria-label="Clear search"
+            onClick={() => onChange('')}
+            className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-content-disabled transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Service connection footer. */
+function ServiceStatus({
+  status,
+}: {
+  status: 'ready' | 'starting' | 'disconnected' | 'failed';
+}) {
+  const connected = status === 'ready';
+  const label = connected
+    ? 'service connected'
+    : status === 'starting'
+      ? 'connecting…'
+      : status === 'disconnected'
+        ? 'reconnecting…'
+        : 'service unavailable';
+  const dot = connected
+    ? 'bg-foreground'
+    : status === 'starting' || status === 'disconnected'
+      ? 'animate-pulse bg-warning'
+      : 'bg-destructive';
+  return (
+    <div className="flex items-center gap-2 border-border border-t px-3 py-2.5">
+      <span className="relative flex size-2 shrink-0">
+        {connected && (
+          <span className="absolute inset-0 animate-ping rounded-full bg-foreground opacity-30 motion-reduce:animate-none" />
+        )}
+        <span className={`relative size-2 rounded-full ${dot}`} />
+      </span>
+      <span className="truncate font-mono text-[10px] text-content-disabled">
+        {label}
+      </span>
+      <Sparkle
+        size={11}
+        weight="fill"
+        className="ml-auto text-content-disabled/60"
+      />
+    </div>
+  );
+}
+
+/** Register a local directory as a project scope. */
+function AddProjectDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [name, setName] = useState('');
+  const [path, setPath] = useState('');
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="flex size-7 items-center justify-center rounded-lg bg-brand/12 text-brand">
+              <FolderPlus size={15} />
+            </span>
+            New project
+          </DialogTitle>
+          <DialogDescription>
+            Register a directory as a scope for the steward.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="contents"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!name.trim() || !path.trim()) return;
+            await actions.addProject(name.trim(), path.trim());
+            setName('');
+            setPath('');
+            onOpenChange(false);
+          }}
+        >
+          <DialogPanel className="grid gap-3">
+            <Input
+              placeholder="Name"
+              aria-label="Project name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <Input
+                placeholder="/path/to/project"
+                aria-label="Project path"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  const picked = await window.tian.pickDir();
+                  if (picked) {
+                    setPath(picked);
+                    if (!name.trim())
+                      setName(picked.split('/').filter(Boolean).pop() ?? '');
+                  }
+                }}
+              >
+                Browse
+              </Button>
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose render={<Button variant="ghost" />}>
+              Cancel
+            </DialogClose>
+            <Button type="submit" disabled={!name.trim() || !path.trim()}>
+              Add project
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 export function Sidebar() {
   const scopes = useStore((s) => s.scopes);
   const conversations = useStore((s) => s.conversations);
@@ -242,8 +494,6 @@ export function Sidebar() {
   const improvements = useStore((s) => s.improvements);
   const runtimeStatus = useStore((s) => s.runtimeStatus);
   const [query, setQuery] = useState('');
-  const [name, setName] = useState('');
-  const [path, setPath] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const reduce = useReducedMotion();
@@ -260,16 +510,6 @@ export function Sidebar() {
     (entry) => entry.status === 'open',
   ).length;
 
-  const connected = runtimeStatus === 'ready';
-  const statusLabel =
-    runtimeStatus === 'ready'
-      ? 'service connected'
-      : runtimeStatus === 'starting'
-        ? 'connecting…'
-        : runtimeStatus === 'disconnected'
-          ? 'reconnecting…'
-          : 'service unavailable';
-
   return (
     <aside
       aria-label="Navigation"
@@ -281,51 +521,7 @@ export function Sidebar() {
         className="h-9 shrink-0 [-webkit-app-region:drag]"
       />
 
-      <div className="relative flex items-center gap-2.5 bg-[radial-gradient(18rem_6rem_at_18%_0%,hsl(var(--brand)/0.1),transparent_70%)] px-3 pt-1 pb-3">
-        <BrandMark glow />
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-[13px] text-foreground leading-tight tracking-tight">
-            Tian
-          </div>
-          <div className="truncate font-mono text-[10px] text-content-secondary leading-tight">
-            大内总管
-          </div>
-        </div>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open command palette"
-                className="text-content-secondary"
-                onClick={() => actions.setPaletteOpen(true)}
-              />
-            }
-          >
-            <MagnifyingGlass size={15} />
-          </TooltipTrigger>
-          <TooltipPopup>
-            Command palette <Kbd className="ml-1.5">⌘K</Kbd>
-          </TooltipPopup>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open settings"
-                className="text-content-secondary"
-                onClick={() => actions.setSettingsOpen(true)}
-              />
-            }
-          >
-            <SlidersHorizontal size={15} />
-          </TooltipTrigger>
-          <TooltipPopup>Settings</TooltipPopup>
-        </Tooltip>
-      </div>
+      <SidebarBrand />
 
       <div className="px-2 pb-2">
         <Button
@@ -345,35 +541,12 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <nav aria-label="Primary" className="flex flex-col gap-0.5 px-2 pb-3">
-        <NavItem
-          icon={ChatCircleDots}
-          label="Chat"
-          active={nav === 'chat'}
-          onClick={() => actions.setNav('chat')}
-        />
-        <NavItem
-          icon={Target}
-          label="Goals"
-          active={nav === 'goals'}
-          badge={pendingTasks}
-          onClick={() => actions.setNav('goals')}
-        />
-        <NavItem
-          icon={Tray}
-          label="Inbox"
-          active={nav === 'inbox'}
-          badge={unread}
-          onClick={() => actions.setNav('inbox')}
-        />
-        <NavItem
-          icon={Notebook}
-          label="Log"
-          active={nav === 'log'}
-          badge={openImprovements}
-          onClick={() => actions.setNav('log')}
-        />
-      </nav>
+      <PrimaryNav
+        nav={nav}
+        pendingTasks={pendingTasks}
+        unread={unread}
+        openImprovements={openImprovements}
+      />
 
       <div className="mx-3 border-border border-t" />
 
@@ -417,32 +590,7 @@ export function Sidebar() {
         </Tooltip>
       </div>
 
-      <div className="px-2.5 pb-2">
-        <div className="group relative">
-          <MagnifyingGlass
-            size={13}
-            className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-content-disabled transition-colors group-focus-within:text-content-secondary"
-          />
-          <Input
-            placeholder="Search conversations"
-            aria-label="Search conversations"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            size="sm"
-            className="h-7 bg-transparent pr-7 pl-8 text-[11.5px]"
-          />
-          {query && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => setQuery('')}
-              className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-content-disabled transition-colors hover:bg-secondary hover:text-foreground"
-            >
-              <X size={11} />
-            </button>
-          )}
-        </div>
-      </div>
+      <ConversationSearch value={query} onChange={setQuery} />
 
       <ScrollArea
         className="min-h-0 flex-1 px-2 pb-2"
@@ -483,97 +631,9 @@ export function Sidebar() {
         <div className="h-2" />
       </ScrollArea>
 
-      <div className="flex items-center gap-2 border-border border-t px-3 py-2.5">
-        <span className="relative flex size-2 shrink-0">
-          {connected && (
-            <span className="absolute inset-0 animate-ping rounded-full bg-foreground opacity-30 motion-reduce:animate-none" />
-          )}
-          <span
-            className={`relative size-2 rounded-full ${
-              connected
-                ? 'bg-foreground'
-                : runtimeStatus === 'starting' ||
-                    runtimeStatus === 'disconnected'
-                  ? 'animate-pulse bg-warning'
-                  : 'bg-destructive'
-            }`}
-          />
-        </span>
-        <span className="truncate font-mono text-[10px] text-content-disabled">
-          {statusLabel}
-        </span>
-        <Sparkle
-          size={11}
-          weight="fill"
-          className="ml-auto text-content-disabled/60"
-        />
-      </div>
+      <ServiceStatus status={runtimeStatus} />
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogPopup className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <span className="flex size-7 items-center justify-center rounded-lg bg-brand/12 text-brand">
-                <FolderPlus size={15} />
-              </span>
-              New project
-            </DialogTitle>
-            <DialogDescription>
-              Register a directory as a scope for the steward.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="contents"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!name.trim() || !path.trim()) return;
-              await actions.addProject(name.trim(), path.trim());
-              setName('');
-              setPath('');
-              setDialogOpen(false);
-            }}
-          >
-            <DialogPanel className="grid gap-3">
-              <Input
-                placeholder="Name"
-                aria-label="Project name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoFocus
-              />
-              <div className="flex gap-2">
-                <Input
-                  placeholder="/path/to/project"
-                  aria-label="Project path"
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                />
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    const picked = await window.tian.pickDir();
-                    if (picked) {
-                      setPath(picked);
-                      if (!name.trim())
-                        setName(picked.split('/').filter(Boolean).pop() ?? '');
-                    }
-                  }}
-                >
-                  Browse
-                </Button>
-              </div>
-            </DialogPanel>
-            <DialogFooter>
-              <DialogClose render={<Button variant="ghost" />}>
-                Cancel
-              </DialogClose>
-              <Button type="submit" disabled={!name.trim() || !path.trim()}>
-                Add project
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogPopup>
-      </Dialog>
+      <AddProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </aside>
   );
 }

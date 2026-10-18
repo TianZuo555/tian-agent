@@ -50,16 +50,18 @@ export async function addWorktree(
   const worktreePath = join(worktreeBase, runId);
   const branch = `tian/${runId}`;
   if (existsSync(worktreePath)) {
-    const actual = await checked(worktreePath, ['branch', '--show-current']);
-    const commonDir = await checked(worktreePath, [
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-common-dir',
-    ]);
-    const expected = await checked(rootPath, [
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-common-dir',
+    const [actual, commonDir, expected] = await Promise.all([
+      checked(worktreePath, ['branch', '--show-current']),
+      checked(worktreePath, [
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-common-dir',
+      ]),
+      checked(rootPath, [
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-common-dir',
+      ]),
     ]);
     if (actual !== branch || resolve(commonDir) !== resolve(expected))
       throw new Error(`Worktree path is occupied: ${worktreePath}`);

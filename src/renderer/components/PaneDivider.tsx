@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from 'react';
 import { DotsSixVertical } from '@phosphor-icons/react';
 
 /**
@@ -31,18 +37,26 @@ export function PaneDivider({
     (value: number) => Math.min(max, Math.max(min, value)),
     [min, max],
   );
+  // Read the latest props from inside the listeners without re-subscribing
+  // (and without re-running the effect) on every parent render.
+  const resizeTo = useEffectEvent((next: number) => onResize(clamp(next)));
+  const reportDragging = useEffectEvent((value: boolean) =>
+    onDraggingChange?.(value),
+  );
 
   useEffect(() => {
-    onDraggingChange?.(dragging);
     if (!dragging) return;
     const onMove = (e: PointerEvent) => {
       const delta =
         side === 'left'
           ? e.clientX - start.current.x
           : start.current.x - e.clientX;
-      onResize(clamp(start.current.width + delta));
+      resizeTo(start.current.width + delta);
     };
-    const onUp = () => setDragging(false);
+    const onUp = () => {
+      setDragging(false);
+      reportDragging(false);
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp, { once: true });
     document.body.style.cursor = 'col-resize';
@@ -53,7 +67,7 @@ export function PaneDivider({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [dragging, side, clamp, onResize, onDraggingChange]);
+  }, [dragging, side]);
 
   const active = dragging || hover;
 
@@ -70,6 +84,7 @@ export function PaneDivider({
         e.preventDefault();
         start.current = { x: e.clientX, width };
         setDragging(true);
+        onDraggingChange?.(true);
       }}
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => setHover(false)}

@@ -44,21 +44,28 @@ export function Reveal({
   children: ReactNode;
 }) {
   const reduce = useReducedMotion();
+  // `layout` animates the size change with a transform, so opening and closing
+  // never triggers a per-frame reflow the way an animated `height` would.
   return (
-    <AnimatePresence initial={false}>
-      {open && (
-        <motion.div
-          key="body"
-          initial={reduce ? false : { height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={reduce ? undefined : { height: 0, opacity: 0 }}
-          transition={{ duration: DURATION, ease: EASE }}
-          className="overflow-hidden"
-        >
-          {children}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <motion.div
+      layout={!reduce}
+      transition={{ duration: DURATION, ease: EASE }}
+      className="overflow-hidden"
+    >
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="body"
+            initial={reduce ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={reduce ? undefined : { opacity: 0 }}
+            transition={{ duration: DURATION, ease: EASE }}
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 

@@ -262,8 +262,11 @@ export class TelegramAdapter {
     this.abort = new AbortController();
     try {
       this.ensureSchema();
+      // Ordered on purpose: each chat binds its own conversation, and a
+      // failure in one must not abandon the rest of the allow-list.
       for (const chat of this.listChats()) {
         if (!this.allowed(chat.chatId)) continue;
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop
         await this.attachWatch(chat.chatId, chat.conversationId);
       }
       await this.forwardAll(); // catch up on anything missed while stopped
@@ -285,8 +288,9 @@ export class TelegramAdapter {
     this.abort?.abort();
     this.abort = null;
     this.wakeSleep?.();
-    for (const watch of this.watches.values())
-      await watch.stop().catch(() => {});
+    await Promise.all(
+      [...this.watches.values()].map((watch) => watch.stop().catch(() => {})),
+    );
     this.watches.clear();
     const loop = this.loop;
     this.loop = null;
@@ -324,8 +328,11 @@ export class TelegramAdapter {
           this.abort?.signal,
         );
         backoff = this.options.backoffMs;
+        // Updates must be processed in delivery order: each one advances the
+        // persisted offset and may switch the chat's scope.
         for (const update of updates) {
           if (!this.running) return;
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop
           await this.processUpdate(update);
         }
         await this.forwardAll();
@@ -526,6 +533,9 @@ export class TelegramAdapter {
       for (const entry of page.items) {
         const text = assistantText(entry);
         if (text)
+          // Telegram delivers in order, and the cursor is saved per entry:
+          // parallel sends would reorder the transcript or skip a message.
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop
           for (const part of splitMessage(text)) await this.send(chatId, part);
         this.saveCursor(conversationId, entry.id);
       }
@@ -535,8 +545,11 @@ export class TelegramAdapter {
 
   private async forwardAll(): Promise<void> {
     if (!this.running) return;
+    // Sequential on purpose: forwarding advances a persisted per-chat cursor,
+    // and a stop() between chats must be able to interrupt it.
     for (const chat of this.listChats()) {
       if (!this.running) return;
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop
       await this.forwardChat(chat.chatId, chat.conversationId);
     }
   }

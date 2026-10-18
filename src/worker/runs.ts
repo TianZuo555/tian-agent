@@ -159,20 +159,22 @@ export class RunOrchestrator {
 
   async recover(): Promise<void> {
     // Finish previously authorized review operations before restoring executions.
-    for (const run of this.db.unsettledReviews()) {
-      try {
-        if (run.reviewStatus === 'discarding') await this.discard(run.id);
-        else if (run.reviewStatus === 'landing') await this.land(run.id);
-        else await this.ship(run.id);
-      } catch (error) {
-        this.db.patchRun(run.id, { error: String(error) });
-        this.onIssue?.('run.recovery', error, {
-          scopeId: run.projectId,
-          runId: run.id,
-          taskId: run.taskId ?? undefined,
-        });
-      }
-    }
+    await Promise.all(
+      this.db.unsettledReviews().map(async (run) => {
+        try {
+          if (run.reviewStatus === 'discarding') await this.discard(run.id);
+          else if (run.reviewStatus === 'landing') await this.land(run.id);
+          else await this.ship(run.id);
+        } catch (error) {
+          this.db.patchRun(run.id, { error: String(error) });
+          this.onIssue?.('run.recovery', error, {
+            scopeId: run.projectId,
+            runId: run.id,
+            taskId: run.taskId ?? undefined,
+          });
+        }
+      }),
+    );
     for (const run of this.db.activeRuns()) {
       if (run.reviewStatus === 'pending') this.launch(run.id);
     }

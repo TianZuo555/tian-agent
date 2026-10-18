@@ -4,7 +4,6 @@ import {
   mkdirSync,
   openSync,
   closeSync,
-  readFileSync,
   rmSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -18,6 +17,7 @@ import type { Emit } from '../shared/types.js';
 import type { Args, CommandName, Result } from '../shared/contracts.js';
 import type { ServicePaths } from '../shared/service-paths.js';
 import { APP_VERSION } from '../shared/version.js';
+import { hasKeys, readJsonFile } from '../shared/json-file.js';
 import { atomicWrite } from '../worker/files.js';
 import { ServiceClient } from '../service/client.js';
 import {
@@ -58,9 +58,12 @@ export class DesktopController {
     private emit: Emit,
   ) {
     const file = this.preferencePath();
-    this.preferences = existsSync(file)
-      ? JSON.parse(readFileSync(file, 'utf8'))
-      : { connectOnLaunch: true };
+    const saved = readJsonFile(
+      file,
+      (value): value is { connectOnLaunch: boolean } =>
+        hasKeys(value, { connectOnLaunch: 'boolean' }),
+    );
+    this.preferences = saved ?? { connectOnLaunch: true };
   }
   private preferencePath() {
     return join(this.environment.paths.installationDir, 'desktop.json');
@@ -141,21 +144,30 @@ export class DesktopController {
       ? { phase: journal.phase, message: journal.message }
       : null;
     const pointer = join(paths.installationDir, 'last-app-update.json');
-    if (existsSync(pointer)) {
-      const { directory } = JSON.parse(readFileSync(pointer, 'utf8')) as {
-        directory: string;
-      };
+    const pointerData = readJsonFile(
+      pointer,
+      (value): value is { directory: string } =>
+        hasKeys(value, { directory: 'string' }),
+    );
+    if (
+      pointerData &&
+      pointerData.directory.startsWith(
+        join(paths.installationDir, 'app-updates') + '/',
+      )
+    ) {
+      const result = join(pointerData.directory, 'result.json');
       if (
-        directory.startsWith(join(paths.installationDir, 'app-updates') + '/')
+        (!journal ||
+          (['committed', 'rolled-back'].includes(journal.phase) &&
+            !journal.message)) &&
+        existsSync(result)
       ) {
-        const result = join(directory, 'result.json');
-        if (
-          existsSync(result) &&
-          (!journal ||
-            (['committed', 'rolled-back'].includes(journal.phase) &&
-              !journal.message))
-        )
-          lastUpdate = JSON.parse(readFileSync(result, 'utf8'));
+        const recorded = readJsonFile(
+          result,
+          (value): value is { phase: string; message?: string } =>
+            hasKeys(value, { phase: 'string' }),
+        );
+        if (recorded) lastUpdate = recorded;
       }
     }
     return {
@@ -185,9 +197,17 @@ export class DesktopController {
       )
     )
       throw new Error('Invalid update health-check path');
-    const request = JSON.parse(
-      readFileSync(join(directory, 'request.json'), 'utf8'),
-    ) as AppUpdateRequest;
+    const request = readJsonFile(
+      join(directory, 'request.json'),
+      (value): value is AppUpdateRequest =>
+        hasKeys(value, {
+          directory: 'string',
+          destination: 'string',
+          includeService: 'boolean',
+        }),
+    );
+    if (!request)
+      throw new Error('The application update request is missing or corrupt');
     if (
       request.destination !== this.environment.appBundle ||
       request.directory !== directory
@@ -210,10 +230,12 @@ export class DesktopController {
   }
   private async launchUpdater(request: AppUpdateRequest, recover = false) {
     const previous = join(request.directory, 'helper.json');
-    if (existsSync(previous)) {
-      const { pid } = JSON.parse(readFileSync(previous, 'utf8')) as {
-        pid: number;
-      };
+    const helperRecord = readJsonFile(
+      previous,
+      (value): value is { pid: number } => hasKeys(value, { pid: 'number' }),
+    );
+    if (helperRecord) {
+      const { pid } = helperRecord;
       try {
         process.kill(pid, 0);
         throw new Error('The application updater is still running');
@@ -222,15 +244,16 @@ export class DesktopController {
       }
     }
     const fd = openSync(join(request.directory, 'helper.log'), 'a', 0o600);
+    // Fixed executable and argv; the only variable is the staged directory,
+    // which stageApp created under the app-updates root.
+    const nodePath = join(request.directory, 'node');
+    const entryPath = join(request.directory, 'updater/updater.cjs');
+    const stagedDirectory = request.directory;
     try {
       await new Promise<void>((resolve, reject) => {
         const helper = spawn(
-          join(request.directory, 'node'),
-          [
-            join(request.directory, 'updater/updater.cjs'),
-            request.directory,
-            ...(recover ? ['recover'] : []),
-          ],
+          nodePath,
+          [entryPath, stagedDirectory, ...(recover ? ['recover'] : [])],
           { detached: true, stdio: ['ignore', fd, fd] },
         );
         helper.once('error', reject);
@@ -303,10 +326,13 @@ export class DesktopController {
             this.environment.paths.installationDir,
             'last-app-update.json',
           );
-          if (existsSync(pointer)) {
-            const { directory } = JSON.parse(readFileSync(pointer, 'utf8')) as {
-              directory: string;
-            };
+          const pointerData = readJsonFile(
+            pointer,
+            (value): value is { directory: string } =>
+              hasKeys(value, { directory: 'string' }),
+          );
+          if (pointerData) {
+            const { directory } = pointerData;
             if (
               !directory.startsWith(
                 join(this.environment.paths.installationDir, 'app-updates') +
@@ -314,19 +340,28 @@ export class DesktopController {
               )
             )
               throw new Error('Invalid application recovery path');
-            const result = join(directory, 'result.json');
-            const phase = existsSync(result)
-              ? (JSON.parse(readFileSync(result, 'utf8')) as { phase: string })
-                  .phase
-              : 'prepared';
+            const recorded = readJsonFile(
+              join(directory, 'result.json'),
+              (value): value is { phase: string } =>
+                hasKeys(value, { phase: 'string' }),
+            );
+            const phase = recorded?.phase ?? 'prepared';
             if (!['committed', 'failed', 'rolled-back'].includes(phase)) {
               if (await updateLocked(this.environment.paths))
                 throw new Error(
                   'The updater is still running or its lease has not expired yet',
                 );
-              const request = JSON.parse(
-                readFileSync(join(directory, 'request.json'), 'utf8'),
-              ) as AppUpdateRequest;
+              const request = readJsonFile(
+                join(directory, 'request.json'),
+                (value): value is AppUpdateRequest =>
+                  hasKeys(value, {
+                    directory: 'string',
+                    destination: 'string',
+                    includeService: 'boolean',
+                  }),
+              );
+              if (!request)
+                throw new Error('The application update request is corrupt');
               if (request.destination !== this.environment.appBundle)
                 throw new Error(
                   'Open the installed application to recover its update',
