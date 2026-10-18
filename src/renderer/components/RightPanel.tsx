@@ -23,6 +23,16 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { tian } from '../api';
@@ -162,7 +172,7 @@ const statusVariant: Record<
   done: 'default',
   failed: 'destructive',
   interrupted: 'destructive',
-  discarded: 'outline',
+  collecting: 'secondary',
 };
 
 function RunTextDialog({
@@ -228,8 +238,15 @@ function RunTextDialog({
 function FollowUpDialog({ run }: { run: RunInfo }) {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   return (
-    <Dialog>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) setOpen(next);
+      }}
+    >
       <DialogTrigger
         render={
           <Button
@@ -257,6 +274,11 @@ function FollowUpDialog({ run }: { run: RunInfo }) {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
+          {error && (
+            <div role="alert" className="mt-2 text-destructive text-xs">
+              {error}
+            </div>
+          )}
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" size="sm" />}>
@@ -268,8 +290,12 @@ function FollowUpDialog({ run }: { run: RunInfo }) {
             disabled={!prompt.trim() || busy}
             onClick={async () => {
               setBusy(true);
+              setError(null);
               try {
                 await actions.followUpRun(run.id, prompt.trim());
+                setOpen(false);
+              } catch (reason) {
+                setError(String(reason));
               } finally {
                 setBusy(false);
               }
@@ -296,13 +322,20 @@ function ConfirmAction({
   confirm: string;
   action: () => Promise<unknown>;
 }) {
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <Dialog>
-      <DialogTrigger
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) setOpen(next);
+      }}
+    >
+      <AlertDialogTrigger
         render={
           <Button
+            type="button"
             variant="ghost"
             size="xs"
             className="h-5 gap-1 px-1.5 text-[10px]"
@@ -312,54 +345,56 @@ function ConfirmAction({
       >
         {icon}
         {label}
-      </DialogTrigger>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>{label}</DialogTitle>
-          <DialogDescription>{confirm}</DialogDescription>
-        </DialogHeader>
+      </AlertDialogTrigger>
+      <AlertDialogPopup>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{label}</AlertDialogTitle>
+          <AlertDialogDescription>{confirm}</AlertDialogDescription>
+        </AlertDialogHeader>
         {error && (
-          <DialogPanel>
-            <div role="alert" className="text-destructive text-xs">
-              {error}
-            </div>
-          </DialogPanel>
+          <div role="alert" className="px-6 pb-4 text-destructive text-xs">
+            {error}
+          </div>
         )}
-        <DialogFooter>
-          <DialogClose render={<Button variant="ghost" size="sm" />}>
-            Cancel
-          </DialogClose>
-          <DialogClose
+        <AlertDialogFooter>
+          <AlertDialogClose
             render={
-              <Button
-                size="sm"
-                aria-label={`Confirm ${label}`}
-                disabled={busy}
-              />
+              <Button type="button" variant="ghost" size="sm" disabled={busy} />
             }
+          >
+            Cancel
+          </AlertDialogClose>
+          <Button
+            type="button"
+            size="sm"
+            variant={label === 'Discard' ? 'destructive' : 'default'}
+            aria-label={`Confirm ${label}`}
+            disabled={busy}
             onClick={async () => {
               setBusy(true);
               setError(null);
               try {
                 await action();
-              } catch (e) {
-                setError(e instanceof Error ? e.message : String(e));
+                setOpen(false);
+              } catch (reason) {
+                setError(String(reason));
               } finally {
                 setBusy(false);
               }
             }}
           >
-            {label}
-          </DialogClose>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+            {busy ? 'Working…' : label}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogPopup>
+    </AlertDialog>
   );
 }
 
 function RunCard({ run }: { run: RunInfo }) {
-  const live = run.status === 'running' || run.status === 'queued';
-  const reviewable = run.status === 'done' || run.status === 'failed';
+  const live = ['running', 'queued', 'collecting'].includes(run.status);
+  const reviewable =
+    !live && run.reviewStatus !== 'discarded' && run.reviewStatus !== 'landed';
   return (
     <div
       role="article"
@@ -374,13 +409,19 @@ function RunCard({ run }: { run: RunInfo }) {
           variant={statusVariant[run.status]}
           className="font-normal text-[10px]"
         >
-          {run.status}
+          {run.reviewStatus === 'pending' ? run.status : run.reviewStatus} ·
+          round {run.attempt}
         </Badge>
       </div>
       <div className="mt-1.5 line-clamp-2">{run.prompt}</div>
       <div className="mt-1 text-[10px] text-muted-foreground">
         {run.agentKind} · {run.startedAt.slice(0, 16).replace('T', ' ')}
       </div>
+      {run.error && (
+        <div role="status" className="mt-1 text-destructive">
+          {run.error}
+        </div>
+      )}
       <div className="mt-1.5 flex flex-wrap items-center gap-0.5">
         <RunTextDialog
           run={run}
@@ -398,26 +439,34 @@ function RunCard({ run }: { run: RunInfo }) {
             fetchText={() => tian.runDiff(run.id)}
           />
         )}
-        {!live && run.status !== 'discarded' && <FollowUpDialog run={run} />}
+        {reviewable && run.reviewStatus === 'pending' && run.conversationId && (
+          <FollowUpDialog run={run} />
+        )}
         {reviewable && run.branch && (
           <>
-            <ConfirmAction
-              label="Land"
-              icon={<GitMerge className="size-3" />}
-              ariaLabel={`Land run ${run.id.slice(0, 8)}`}
-              confirm={`Merge ${run.branch} into the project's current branch? The worktree is removed after.`}
-              action={() => actions.landRun(run.id)}
-            />
-            <ConfirmAction
-              label="Ship"
-              icon={<Ship className="size-3" />}
-              ariaLabel={`Ship run ${run.id.slice(0, 8)}`}
-              confirm={`Push ${run.branch} and open a PR with gh?`}
-              action={() => actions.shipRun(run.id)}
-            />
+            {['pending', 'shipped', 'landing'].includes(run.reviewStatus) && (
+              <ConfirmAction
+                label="Land"
+                icon={<GitMerge className="size-3" />}
+                ariaLabel={`Land run ${run.id.slice(0, 8)}`}
+                confirm={`Merge ${run.branch} into ${run.baseBranch}? The worktree is removed after.`}
+                action={() => actions.landRun(run.id)}
+              />
+            )}
+            {['pending', 'shipping'].includes(run.reviewStatus) && (
+              <ConfirmAction
+                label="Ship"
+                icon={<Ship className="size-3" />}
+                ariaLabel={`Ship run ${run.id.slice(0, 8)}`}
+                confirm={`Push ${run.branch} and open a PR with gh?`}
+                action={() => actions.shipRun(run.id)}
+              />
+            )}
           </>
         )}
-        {run.status !== 'discarded' && (
+        {!['discarded', 'landed', 'landing', 'shipping'].includes(
+          run.reviewStatus,
+        ) && (
           <ConfirmAction
             label="Discard"
             icon={<Trash2 className="size-3" />}

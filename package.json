@@ -3,6 +3,7 @@
   "productName": "Tian Agent",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Personal chief-of-staff agent",
   "keywords": [],
   "license": "MIT",
@@ -18,7 +19,18 @@
     "release": "electron-forge release",
     "lint": "oxlint && oxfmt --check",
     "lint:fix": "oxlint --fix && oxfmt --write",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm build:service && tsx --test tests/*.test.ts",
+    "test:runtime": "tsx scripts/e2e-runtime.mts",
+    "test:launchd": "pnpm build:service && tsx scripts/e2e-service.mts",
+    "build:service": "vite build --config vite.service.config.mts",
+    "service:run": "node dist/service/service.cjs",
+    "service:install": "pnpm build:service && tsx scripts/service.mts install",
+    "service:start": "tsx scripts/service.mts start",
+    "service:stop": "tsx scripts/service.mts stop",
+    "service:restart": "tsx scripts/service.mts restart",
+    "service:status": "tsx scripts/service.mts status",
+    "service:uninstall": "tsx scripts/service.mts uninstall"
   },
   "devDependencies": {
     "@electron-forge/cli": "^8.0.1",
@@ -32,12 +44,14 @@
     "@electron-forge/shared-types": "^8.0.1",
     "@electron/fuses": "^2.1.3",
     "@types/electron-squirrel-startup": "^1.0.2",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "electron": "44.9.0",
     "oxfmt": "^0.41.0",
     "oxlint": "^1.88.0",
+    "tsx": "^4.23.15",
     "tw-animate-css": "^1.4.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.4"
@@ -58,9 +72,11 @@
     "cn": "^0.5.0",
     "electron-squirrel-startup": "^1.0.1",
     "lucide-react": "^1.58.0",
+    "proper-lockfile": "^4.1.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tailwind-merge": "^3.7.0",
-    "tailwindcss": "4.3.3"
+    "tailwindcss": "4.3.3",
+    "typebox": "1.3.27"
   }
 }

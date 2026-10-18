@@ -2,6 +2,7 @@ nodeLinker: hoisted
 allowBuilds:
   '@google/genai': false
   electron-winstaller: true
+  esbuild: true
   protobufjs: true
 minimumReleaseAgeExclude:
   - electron@44.9.0

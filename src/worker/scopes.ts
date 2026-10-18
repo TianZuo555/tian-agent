@@ -5,11 +5,12 @@ import {
   writeFileSync,
   readdirSync,
   appendFileSync,
-  statSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { MemoryStore } from './memory.js';
 import type { Db, ProjectRow } from './db.js';
+import type { InboxItem } from '../shared/types.js';
+import { atomicWrite } from './files.js';
 
 export const GLOBAL_SCOPE = 'global';
 
@@ -20,7 +21,7 @@ export const GLOBAL_SCOPE = 'global';
  *   notes/         user-facing markdown
  *   .tian/inbox/   one .md file per message
  *   .tian/runs/    dispatch reports
- *   .tian/inbox/.read  timestamp of last read (file-based, agent-accessible)
+ * Inbox read state and delivery records live in SQLite, keyed by message ID.
  */
 export class Scopes {
   private memories = new Map<string, MemoryStore>();
@@ -45,6 +46,10 @@ export class Scopes {
       return fallback === GLOBAL_SCOPE ? GLOBAL_SCOPE : (input ?? fallback);
     const p = this.db.getProject(input) ?? this.db.projectByName(input);
     return p ? p.id : input;
+  }
+
+  forget(scopeId: string): void {
+    this.memories.delete(scopeId);
   }
 
   project(scopeId: string): ProjectRow | undefined {
@@ -135,10 +140,13 @@ export class Scopes {
     body: string,
     to?: string,
     thread?: string,
+    messageId?: string,
   ): string {
     const dir = this.inboxDir(scopeId);
     const ts = new Date().toISOString();
-    const id = `${ts.replace(/[:.]/g, '')}-${Math.random().toString(36).slice(2, 8)}`;
+    const id =
+      messageId ??
+      `${ts.replace(/[:.]/g, '')}-${Math.random().toString(36).slice(2, 8)}`;
     const front = [
       `---`,
       `from: ${from}`,
@@ -149,54 +157,49 @@ export class Scopes {
       `---`,
       ``,
     ].join('\n');
-    writeFileSync(join(dir, `${id}.md`), front + body, 'utf8');
+    atomicWrite(join(dir, `${id}.md`), front + body);
     return id;
   }
 
-  listMessages(scopeId: string): {
-    id: string;
-    from: string;
-    to: string;
-    ts: string;
-    thread: string;
-    body: string;
-    read: boolean;
-  }[] {
+  listMessages(scopeId: string): InboxItem[] {
     const dir = this.inboxDir(scopeId);
-    const readMarker = join(dir, '.read');
-    const lastRead = existsSync(readMarker) ? statSync(readMarker).mtimeMs : 0;
-    return readdirSync(dir)
-      .filter((f) => f.endsWith('.md'))
-      .sort()
-      .map((f) => {
-        const raw = readFileSync(join(dir, f), 'utf8');
-        const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
-        const meta: Record<string, string> = {};
-        if (m)
-          for (const line of m[1].split('\n')) {
-            const i = line.indexOf(':');
-            if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-          }
-        const body = m ? m[2] : raw;
-        return {
-          id: meta.id ?? f.replace(/\.md$/, ''),
-          from: meta.from ?? '?',
-          to: meta.to ?? '',
-          ts: meta.ts ?? f.slice(0, 20),
-          thread: meta.thread ?? '',
-          body,
-          read: statSync(join(dir, f)).mtimeMs <= lastRead,
-        };
+    for (const file of readdirSync(dir)
+      .filter((name) => name.endsWith('.md'))
+      .sort()) {
+      let raw: string;
+      try {
+        raw = readFileSync(join(dir, file), 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
+      const meta: Record<string, string> = {};
+      if (match)
+        for (const line of match[1].split(/\r?\n/)) {
+          const index = line.indexOf(':');
+          if (index > 0)
+            meta[line.slice(0, index).trim()] = line.slice(index + 1).trim();
+        }
+      this.db.importMessage(scopeId, {
+        id: meta.id || file.replace(/\.md$/, ''),
+        from: meta.from || '?',
+        to: meta.to || '',
+        ts: meta.ts || file.slice(0, 20),
+        thread: meta.thread || '',
+        body: match ? match[2] : raw,
+        read: false,
       });
+    }
+    return this.db.listMessages(scopeId);
   }
 
-  unreadMessages(scopeId: string) {
-    return this.listMessages(scopeId).filter((m) => !m.read);
+  unreadMessages(scopeId: string): InboxItem[] {
+    return this.listMessages(scopeId).filter((message) => !message.read);
   }
 
-  markInboxRead(scopeId: string): void {
-    const marker = join(this.inboxDir(scopeId), '.read');
-    writeFileSync(marker, new Date().toISOString(), 'utf8');
+  markInboxRead(scopeId: string, ids: string[]): void {
+    this.db.markMessagesRead(scopeId, ids);
   }
 
   runsDir(scopeId: string): string {

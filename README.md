@@ -1,188 +1,175 @@
 # Tian Agent
 
-基于 Pi 的个人助理（大内总管）。长期目标是完整桌面应用，结合云端常驻能力与本机工具；第一阶段目标为可日常使用的 macOS 私人测试版。
+一个总管、按项目划分的 scope，以及在 worktree 中执行任务的无头工兵。总管运行在独立的本机常驻 Node 服务中；Electron App 是它的桌面客户端。
 
-本文件记录当前技术选型、feature 模型和实现范围。项目目前只有规划文档，尚未搭建应用代码。
+当前已实现聊天、项目注册、记忆、任务、Inbox、Run 派发与验收，以及多渠道独立 Session 的后端接口。
 
-## 产品模型
+## 开发与验证
 
-一个总管 + 若干 scope + 一支无头工兵 fleet。
-
-- **总管**：唯一的 agent，Pi Durable 驱动，住在聊天里。它记得你是谁、各项目发生了什么，负责收信、派发、验收、汇报。
-- **Scope**：`General` + 手动注册的 project。project = `{id, name, rootPath, settings}`。每个会话固定绑定一个 scope，侧边栏按 scope 分组。总管的工具都能带 scope 参数跨 scope 查询。
-- **工兵**：蹲在 git worktree 里干活的无头 coding agent（v1 只接 Pi）。总管 dispatch 派活，跑完收报告+diff，用户验收后落地。
-
-分工原则：**总管是指挥官不是工兵**。总管没有通用 shell，要动代码的活一律 dispatch，保证"派发→验收"回路不被腐蚀。
-
-## 数据对象
-
-| 对象   | 形态                                    | 写手         | 位置                                       | 粒度                             |
-| ------ | --------------------------------------- | ------------ | ------------------------------------------ | -------------------------------- |
-| Memory | OptMem 格式：`LOG.txt` + `TREE/` 摘要树 | **只有总管** | `rootPath/memory/`；global 在 app 数据目录 | 一行一事实，≤280B                |
-| Notes  | markdown 文档                           | 用户+总管    | `rootPath/notes/`；global 在 app 数据目录  | 文档级                           |
-| Tasks  | SQLite todo 行                          | 用户+总管    | Durable 库，带 scope 字段                  | `{title, status, due?}`          |
-| Inbox  | `.tian/inbox/*.md`，一消息一文件        | 任何参与者   | 各 scope 目录                              | `{from, to?, body, ts, thread?}` |
-| Runs   | 派发记录                                | app          | Durable 库                                 | 见下                             |
-
-判据：memory 记"事实"（一句话），notes 存"内容"（文档），tasks 记"承诺"（要做的事），inbox 传"消息"（一次性），run 是"派发中的活"。
-
-### 记忆流程
-
-- 新会话自动 `wake`：全局记忆 + 当前 scope 记忆双挂载，由系统注入，不经 agent 选择。
-- `note(target: "global"|"project")`：总管自己判断"这条是关于项目的还是关于这个人的"，默认写当前 scope。
-- `recall`/`zoom`：正则逐字搜 + 摘要树下钻。
-- 合并压缩（OptMem 的 nap 语义）由总管在会话内完成。
-- UI 只读查看。**子 agent 永远不碰 memory**（它判断不了什么已知、什么重复）；记忆的唯一写手是总管。
-- memory 是文本文件放在项目目录里：外部 coding agent 可读同一份记忆，共享基座免费获得。
-
-### Dispatch 回路
-
-```
-dispatch(project, prompt) → worktree 里 spawn 无头 agent → 跑
-→ 报告写 .tian/runs/<id>.md → 进程退出 → inbox 给总管丢消息
-→ 自动唤起总管收信 → 写 memory + 更新 task + 汇报摘要
-→ 用户看报告+diff → land / follow_up / discard / ship
+```sh
+pnpm install
+pnpm service:install
+pnpm start
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm package
+pnpm test:runtime
+pnpm test:launchd
 ```
 
+- `pnpm test`：临时数据库、真实临时 Git 仓库和可控工兵；覆盖权限、记忆、Inbox、Run 状态、前端同步和多客户端服务。不调用模型。
+- `pnpm test:runtime`：验证打包后的服务产物可以离开 checkout、通过普通 Node 运行，并连接 sandbox preload 和真实 renderer；退出 Electron 后服务继续运行。不使用用户数据或模型。
+- `pnpm test:launchd`：安装独立测试 LaunchAgent，强制结束其进程，验证系统自动重启、持久化恢复和客户端重连，随后删除测试服务。
+- `scripts/e2e-dispatch.mts`：需要模型凭据的手工集成检查，会执行真实工兵任务。
+
+## 本机常驻服务
+
+要求 Node.js 24 或更新版本。首次安装或更新后端时运行 `pnpm service:install`。安装器将完整构建产物复制到应用数据目录中的独立 release，LaunchAgent 不依赖开发 checkout、终端或 Electron 进程存活。
+
+| 操作                 | 命令                                          |
+| -------------------- | --------------------------------------------- |
+| 安装／更新并启动     | `pnpm service:install`                        |
+| 查看状态与 PID       | `pnpm service:status`                         |
+| 启动／停止           | `pnpm service:start` / `pnpm service:stop`    |
+| 重启                 | `pnpm service:restart`                        |
+| 移除自启动，保留数据 | `pnpm service:uninstall`                      |
+| 前台调试             | `pnpm build:service`，然后 `pnpm service:run` |
+
+默认位置：
+
+- 应用数据：`~/Library/Application Support/Tian Agent/`，复用已有数据库和 Memory。
+- LaunchAgent：`~/Library/LaunchAgents/dev.tian.agent.plist`。
+- 服务产物：`<dataDir>/service/releases/<hash>/`。
+- 日志：`<dataDir>/service/logs/service.log`。
+- 连接：`<dataDir>/agent.sock`，Unix socket 权限为 `0600`，数据目录为 `0700`。
+
+使用 `TIAN_AGENT_DATA_DIR` 或 CLI 的 `--data-dir` 指定其他数据目录，`TIAN_AGENT_SOCKET_PATH` 可指定 socket 路径；App 与服务必须使用相同配置。存储和 socket 都有独占锁。旧版 App 仍占用数据库时，新服务会拒绝打开存储，需要先退出旧版 App。
+
+LaunchAgent 保存安装时 Node 的绝对路径与 PATH。更换或删除该 Node 安装后需要重新安装服务。环境变量密钥可以写入 `<dataDir>/service.env`，文件权限应为 `0600`，然后重启服务；已有 Pi API key 配置仍可使用。安装器不将模型密钥写入 plist。
+
+服务登录时自动启动，崩溃后由 launchd 重启。App 启动时会启动已安装的服务并连接它；退出 App 只断开连接，任务与工兵继续运行。系统休眠或关机期间无法执行任务，登录后恢复。
+
+## 渠道与独立 Session
+
+所有入口共享一个后端及 scope 记忆。`openSession({channel, externalId, scopeId})` 为渠道会话查找或创建稳定的内部 conversation。不同渠道、外部会话或 scope 得到不同 conversation；绑定持久化，重启后仍可复用。
+
+例如 App 与 Telegram 都绑定 `global`，拥有独立聊天上下文，但每次请求加载同一份全局 Memory。仅存在于聊天记录、没有沉淀为 Memory 的内容不会自动进入其他 Session。外部输入可以向 `submit` 提供稳定的 `requestId`，由 Durable 去重。
+
+当前提供多渠道 Session 接口，尚未接入 Telegram Bot 的收发与账号授权。后续 adapter 负责外部身份、收发和会话映射，复用现有工具及记忆。
+
+## 进程与模块
+
+- **Renderer**：React + Tailwind + coss，维护展示状态与订阅，拒绝过时响应。聊天使用应用自己的 `ChatSnapshot`。
+- **Preload**：通过 `contextBridge` 暴露共享类型的命令和可取消订阅；保持 sandbox、context isolation，关闭 Node integration。
+- **Main**：管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库。
+- **常驻服务**：唯一持有应用数据库和 Pi storage，执行模型、工具、Inbox、通知和 Run。客户端重连后重新获取快照及订阅。
+
+| 模块                  | 职责                                              |
+| --------------------- | ------------------------------------------------- |
+| `service/server.ts`   | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
+| `service/client.ts`   | 请求、事件、自动重连；关闭客户端不停止服务        |
+| `service/launchd.ts`  | 安装、启动、停止及移除 LaunchAgent                |
+| `shared/contracts.ts` | IPC / socket 参数 schema、返回类型和消息合约      |
+| `shared/messages.ts`  | Pi transcript 转换为聊天快照                      |
+| `worker/service.ts`   | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
+| `worker/commands.ts`  | 各 transport 共用的业务命令                       |
+| `worker/agents.ts`    | Pi API 适配和总管／工兵能力配置                   |
+| `worker/runs.ts`      | Run 状态、attempt、收集、恢复及验收               |
+| `worker/data.ts`      | task、memory、Inbox 操作和更新事件                |
+| `worker/db.ts`        | 业务数据、渠道绑定、通知 outbox、幂等记录         |
+| `worker/scopes.ts`    | scope 目录、notes 和 Inbox 文件导入               |
+| `worker/memory.ts`    | 文件记忆与摘要树                                  |
+| `worker/dispatch.ts`  | worktree、commit、diff、merge 和 PR 命令          |
+
+总管和工兵共用常驻服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵当前是 Durable 会话，生命周期与桌面客户端独立。
+
+## 权限与 scope
+
+总管只启用 chief extension：task、memory、notes、Inbox、dispatch 和 Run 查询，没有 `bash/read/write/edit`。读取结果使用 `read_run_report` / `read_run_diff`。启动时也会重新限制已有总管会话的 extension。
+
+工兵只启用 CodingTools，默认在 Git worktree 中工作，没有总管的 memory 写入工具。指令要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，当前不提供操作系统文件访问沙箱。
+
+Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。
+
+## Memory
+
+参考 OptMem 结构的 TypeScript 实现：
+
+```text
+<scope root>/memory/
+  LOG.txt
+  TREE/
+    0-1.txt
+    2-3.txt
+    0-3.txt
 ```
-Run = { id, project, agentKind, prompt, worktreePath, branch,
-        status: queued|running|done|failed|interrupted,
-        reportPath, exitCode, startedAt, finishedAt }
+
+- `LOG.txt`：追加事实，一行一条，正文最多 280 UTF-8 字节，附时间；保留原始内容。
+- `TREE/<lo>-<hi>.txt`：对齐二叉区间摘要，父节点需要两个子摘要，使用原子 rename 发布。
+- `note`：记住事实，返回待压缩区间。
+- `nap`：总管写区间摘要；并发压缩不覆盖已存在的节点。
+- `recall`：对原始日志逐字正则搜索。
+- `zoom`：展开摘要的两个子区间。
+- 每次请求注入全局与当前项目记忆，重新提示未完成的压缩及目标 scope。
+- UI 只读，note/nap 完成后自动刷新。
+
+项目记忆位于 `<project root>/memory/`；全局记忆位于 `<dataDir>/scopes/global/memory/`。较长内容存入 `<scope root>/notes/` 的 Markdown 文档。
+
+记什么、如何摘要由总管模型负责。当前没有向量索引、语义去重、自动纠错或独立后台压缩服务。
+
+## Run 生命周期
+
+```text
+dispatch → queued → running → collecting → done / failed
+                            ↘ discard → interrupted
 ```
 
-- **worktree 默认隔离**（`git worktree add`）：无头 agent 用无人值守模式自动接受编辑，爆炸半径限在 worktree 分支。非 git 目录退化为"只有报告没有 diff"。
-- **报告契约**：app 在派发 prompt 后自动附加"做完把 ≤1 页报告写到 `.tian/runs/<id>.md`；不要碰 `memory/`"。子 agent 只读 `notes/`、`memory/` 取上下文。
-- **完成通知**：进程退出 → run 标 done/failed → inbox 消息 → **app 自动唤起总管在对应 scope 会话里收信汇报**，不等用户开口。
-- **超时**：每 run 有上限（per-project `runTimeoutMin`，默认 30）。app 退出时子进程跟着死，重启后孤儿 run 标 `interrupted`（Durable 存储兜住）。
-- **review 动作**：`land`（worktree 分支合回，冲突标记给用户）、`follow_up`（同 worktree 续跑一轮）、`discard`（删 worktree）、`ship`（`gh pr create`）。land/discard 默认需用户确认；per-project `autoLand` 可免确认。
+执行与验收状态分别记录。验收状态包括 `pending / landing / landed / shipping / shipped / discarding / discarded`。
 
-## 能力边界
+- Git 项目必须成功创建 worktree；隔离失败终止派发并保留记录。
+- 非 Git 项目默认拒绝，明确开启 `allowInPlace` 后才可修改原目录。
+- Run 保存派发时的目录、base branch、执行模式及截止时间。
+- follow-up 每轮有独立 attempt、输入、结果和报告，复用工兵会话与 worktree。
+- 派发用稳定操作 ID，各轮输入用稳定 `requestId`。
+- 成功依据 Durable submission 结果；空闲不代表成功，Git 提交失败会进入失败状态。
+- 同一 Run 的状态转换与验收串行。discard 先停止工兵，collector 不覆盖其结果。
+- land 合入保存的 base branch，要求主 checkout 位于该分支且无已跟踪文件的未提交修改；land 后不能 follow-up。
+- ship 推送分支，再查询或创建 PR，重复请求复用 PR URL。
+- 已开始的 land/ship/discard 先入库，启动时继续或核对。
 
-- **总管包络（窄）**：scope 目录读写 + git 只读 + dispatch/inbox/task/memory/note 工具。无通用 shell。最大破坏面 = 写错一条 memory/note。
-- **跨 scope 可见**：wake 只挂全局+当前两份，但 `list_runs`/`list_tasks`/`recall`/读 notes/inbox 都可指定任意 scope——"各项目进展如何"在 General 会话也能答。
-- **跨 scope 写**：`note` 带 target，`send_msg` 带目标 scope。
+报告从 `TIAN_REPORT.md` 收集到 `<project root>/.tian/runs/`，每轮独立保留，报告不进入代码提交。
 
-## 技术栈
+## 持久化、恢复与通知
 
-| 部分       | 选择                                 | 用途                                               |
-| ---------- | ------------------------------------ | -------------------------------------------------- |
-| 桌面框架   | Electron                             | 窗口、应用生命周期、系统集成                       |
-| 工程模板   | Electron Forge + Vite + TypeScript   | 开发、构建和打包                                   |
-| UI         | React + Tailwind CSS + shadcn/ui     | 设置、任务列表、结果卡片                           |
-| 聊天组件   | assistant-ui                         | 消息、输入框、工具结果；通过自定义 runtime 对接 Pi |
-| Agent 核心 | `@earendil-works/pi-durable`         | 会话、工具任务、状态持久化和中断恢复               |
-| 模型接入   | `@earendil-works/pi-ai`              | 模型及 provider 接入                               |
-| 记忆引擎   | OptMem `memo` 脚本（python3 子进程） | LOG/TREE 管理；开工先查 license，不行就 TS 重写    |
-| 存储       | Pi Durable 自带 SQLite backend       | 会话、运行状态、tasks、runs                        |
-| 本机执行   | 独立 Node worker                     | Pi Durable、工具、dispatch 子进程，与界面分开      |
-| 第一版分发 | macOS 安装包，手动更新               | 私人测试使用                                       |
+- `tian.db`：项目、会话、渠道绑定、tasks、runs、attempts、Inbox 及已读状态、通知和幂等记录。
+- `pi-session.sqlite`：Pi Durable 会话、任务及 transcript。
+- 文件：memory、notes、Inbox 输入和报告。
 
-Electron 自带 Node 运行时。worker 的具体启动方式、依赖打包和 SQLite 兼容性，在第一天的工程验证中确定。
+只有常驻服务写数据库，前端不是权威来源。服务收到 SIGTERM 后有序关闭；下次启动恢复会话、collector 和原截止时间。恢复遵循工具自己的 replay 策略，不保证任意外部操作恰好一次。
 
-## 为什么选 Electron
+Run 结果与完成通知在同一个业务数据库事务中记录。通知用稳定 `requestId` 提交给总管，再标记 delivered；崩溃后可重投并由 Durable 去重。总管忙时进入 follow-up 队列。两个数据库通过操作 ID 与启动核对衔接，没有跨库原子事务。
 
-比较过 Electron、Tauri 和 AppKit，按交付速度选择 Electron。
+## Inbox
 
-| 方案             | 优点                                                        | 不优先原因                                     |
-| ---------------- | ----------------------------------------------------------- | ---------------------------------------------- |
-| Electron         | React UI 和 Pi 都能用 TypeScript；自带 Node；桌面工具链成熟 | 安装包和内存占用较大，首版接受                 |
-| Tauri + React    | 复用 Web UI，系统 WebView，跨平台                           | Pi 仍需 Node sidecar，还要处理 Rust/Node 通信  |
-| AppKit + SwiftUI | macOS 原生集成直接                                          | 需要 Swift/Node 桥接；聊天和复杂内容展示成本高 |
+外部参与者向 `<scope root>/.tian/inbox/*.md` 发布：
 
-后续若原生 macOS 交互成为产品核心再评估 AppKit。
+```md
+---
+id: external-message-123
+from: external-agent
+to: chief
+ts: 2026-01-01T00:00:00Z
+thread: optional-thread
+---
 
-考虑过 fork stablyai/orca（MIT，Electron 系，自带 fleet+worktree+orchestration）。结论是**不 fork**：它的核心是实时终端/ADE 能力（PTY、状态检测、流式画面），而本设计只要"无头跑+收报告+看 diff"，那部分自建成本远低于消化 15k commit 的代码库。它的 agent 适配器和 orchestration 层可作参考实现。
+消息正文
+```
 
-## 第一版架构
+先写非 `.md` 临时文件，再 rename 发布。服务按 `(scopeId, messageId)` 导入 SQLite，逐条记已读。`fs.watch`、启动扫描与定期扫描共同处理遗漏。外部消息生成持久化通知；总管自身和 Run 完成消息不重复唤醒。
 
-- **Renderer**：React 界面。左栏 scope+会话，中间聊天，右栏 tabs（Tasks/Memory/Runs/Inbox），run 详情带 diff 视图，独立设置页。通过受控 IPC 发操作。
-- **Main/preload**：窗口、生命周期、worker 管理、有限 IPC。Renderer 不直接执行 shell 或持有任意文件访问。
-- **Node worker**：Pi Durable、模型调用、全部工具、dispatch 子进程、SQLite。
-- **状态归属**：Durable 持久化状态是权威来源；前端状态仅展示。前端先从快照恢复再订阅更新。
+## 后续
 
-### 生命周期
+当前使用 Pi API key 或环境变量接入 Anthropic、OpenAI、DeepSeek。Keychain、Telegram adapter、远程服务、本机／云端协议、更多工兵类型、定时简报、自动更新、签名与公证仍待实现。
 
-- 关闭窗口：应用驻留，worker 与 run 继续。
-- 退出应用：worker 停止，run 子进程被杀；下次启动孤儿 run 标 `interrupted`，恢复可恢复的工作。
-- 休眠/关机：本机无法持续执行。退出后独立后台服务不做。
-
-## Pi Durable 与 Pi SDK 的边界
-
-Pi Durable 与 `@earendil-works/pi-coding-agent` SDK 是不同运行框架。**第一版总管只用 Pi Durable + pi-ai**；读写笔记、搜索等直接实现为工具。
-
-被 dispatch 的工兵是独立进程（`pi` headless/SDK 模式），它的内部持久化与总管的 Durable 恢复无关——对总管来说工兵只是"子进程 + 报告文件"。app 记录 run ID 与 worktree 路径，恢复策略 = 进程死了就标 interrupted，不尝试接管工兵内部状态。
-
-## v1 范围
-
-**留下**：
-
-- 聊天、流式回复、按 scope 分组的会话列表。
-- scope 体系 + 手动注册 project（含 per-project settings：`autoLand`/`agentKind`/`runTimeoutMin`/`baseBranch`/`promptPreamble`）。
-- OptMem 记忆：wake 双挂载、note/recall/zoom、只读查看器。
-- tasks：add/list/done 工具 + UI 面板。
-- inbox：文件总线 + fs-watch + check_inbox/send_msg 工具。
-- dispatch：Pi 无头、worktree 默认、run 生命周期、报告契约、超时与 interrupted。
-- review：报告+diff stat+完整 diff 视图；land/follow_up/discard/ship；land 默认确认。
-- run 完成等事件自动唤起总管汇报。
-- 新会话开头自动汇报"你不在期间"（prompt 层面实现，免费）。
-- 全局设置（模型、keychain 密钥）+ per-project 设置。
-- macOS 打包。
-
-**砍掉**：
-
-- notes 专用 UI 面板（文件即真相，编辑器打开）。
-- agent↔agent 专用入口（总线已支持，先观察）。
-- Pi 以外 agentKind 适配（接口就是 `{cmd,args,cwd}`，后加便宜）。
-- Devin 云端 session 派发（是 API 不是子进程，归云端阶段）。
-- 系统推送/定时简报、云端常驻、跨设备、多 agent 编排、语音、向量库、自动更新。
-
-## 交付计划（2–3 周）
-
-| 阶段          | 验收结果                                                                                          |
-| ------------- | ------------------------------------------------------------------------------------------------- |
-| P1 工程验证   | Electron 启动；worker 内 Pi Durable 流式回复；SQLite 与打包依赖验证；memo 脚本 license/可用性确认 |
-| P2 记忆骨架   | scope/项目注册；wake 双挂载；note/recall/zoom；只读查看器                                         |
-| P3 会话与数据 | 聊天 UI、会话列表、tasks 工具+面板、inbox 文件总线+fs-watch                                       |
-| P4 dispatch   | worktree 创建、无头 Pi spawn、run 生命周期、报告契约、超时/interrupted                            |
-| P5 验收回路   | run 完成事件→自动唤起；diff 视图；land/follow_up/discard/ship+确认                                |
-| P6 收尾       | 设置页+keychain、真实任务试用、macOS 打包                                                         |
-
-以 agent 辅助开发为前提。对外分发时另行安排签名与公证。
-
-## 实现时必须确认的边界
-
-- **版本**：固定 Pi Durable 及相关依赖版本；升级前验证状态读取与任务恢复。
-- **恢复**：中断的模型请求可能重新发起；工具是否重跑取决于 replay 策略。恢复不等于外部操作只执行一次。
-- **外部操作**：land/ship/发消息等需要稳定操作 ID、执行记录和去重。
-- **确认流程**：land/discard 等确认状态与结果入库，不只依赖前端弹窗。
-- **存储**：一个 Pi storage 由一个进程持有；不让多个 worker 同时写同一份存储。run 子进程不碰总管 storage。
-- **UI 状态**：先快照恢复再应用后续更新；前端聊天记录不是权威状态。
-- **子进程**：dispatch 的工兵随 app 退出被杀是特性不是 bug；`interrupted` 是正常状态。
-
-## 后续：云端 + 本机
-
-长期保留混合部署：
-
-| 部分       | 后续候选                                            |
-| ---------- | --------------------------------------------------- |
-| 云端服务   | Node.js LTS + Hono                                  |
-| 主 Agent   | Pi Durable + pi-ai                                  |
-| 云端持久化 | SQLite + 持久卷与备份                               |
-| 部署       | 单台 VPS + Docker Compose                           |
-| 客户端通信 | HTTPS + WebSocket                                   |
-| 本机执行   | 桌面端 worker；工兵按需接更多 agentKind / Devin API |
-
-云端保存权威任务状态，本机主动连接云端。设备身份、认证、历史迁移另行设计。
-
-### Cloudflare 备选
-
-Cloudflare 有 `agents/harness/pi` 集成（Durable Objects SQLite）。云端主要为 HTTP API 且想减服务器维护时可重估；当前选 VPS。
-
-## 参考资料
-
-- [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable)
-- [Pi SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md)
-- [OptMem](https://github.com/VictorTaelin/OptMem)
-- [assistant-ui ExternalStoreRuntime](https://www.assistant-ui.com/docs/runtimes/custom/external-store)
-- [Orca](https://github.com/stablyai/orca)（参考实现，不 fork）
-- [Electron Forge](https://www.electronforge.io/)
+参考：[Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable)、[OptMem](https://github.com/VictorTaelin/OptMem)、[launchd](https://www.launchd.info/)、[coss](https://coss.com/ui)。

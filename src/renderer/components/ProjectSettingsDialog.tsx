@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -14,23 +14,48 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import type { ScopeInfo } from '@/shared/types';
 import { actions } from '../store';
 
 export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
-  const s = scope.settings;
-  const [autoLand, setAutoLand] = useState(s?.autoLand ?? false);
-  const [agentKind, setAgentKind] = useState(s?.agentKind ?? 'durable-worker');
-  const [timeoutMin, setTimeoutMin] = useState(String(s?.runTimeoutMin ?? 30));
-  const [baseBranch, setBaseBranch] = useState(s?.baseBranch ?? 'main');
-  const [preamble, setPreamble] = useState(s?.promptPreamble ?? '');
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [autoLand, setAutoLand] = useState(scope.settings?.autoLand ?? false);
+  const [allowInPlace, setAllowInPlace] = useState(
+    scope.settings?.allowInPlace ?? false,
+  );
+  const [timeoutMin, setTimeoutMin] = useState(
+    String(scope.settings?.runTimeoutMin ?? 30),
+  );
+  const [baseBranch, setBaseBranch] = useState(
+    scope.settings?.baseBranch ?? 'main',
+  );
+  const [preamble, setPreamble] = useState(
+    scope.settings?.promptPreamble ?? '',
+  );
 
   return (
-    <Dialog>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (busy) return;
+        if (next) {
+          setAutoLand(scope.settings?.autoLand ?? false);
+          setAllowInPlace(scope.settings?.allowInPlace ?? false);
+          setTimeoutMin(String(scope.settings?.runTimeoutMin ?? 30));
+          setBaseBranch(scope.settings?.baseBranch ?? 'main');
+          setPreamble(scope.settings?.promptPreamble ?? '');
+          setError(null);
+        }
+        setOpen(next);
+      }}
+    >
       <DialogTrigger
         render={
           <Button
+            type="button"
             variant="ghost"
             size="icon-xs"
             aria-label={`Settings for ${scope.name}`}
@@ -39,89 +64,106 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
       >
         <Settings className="size-3.5" />
       </DialogTrigger>
-      <DialogPopup className="sm:max-w-md">
+      <DialogPopup className="sm:max-w-md" showCloseButton={!busy}>
         <DialogHeader>
           <DialogTitle>{scope.name} settings</DialogTitle>
           <DialogDescription>{scope.rootPath}</DialogDescription>
         </DialogHeader>
-        <DialogPanel className="grid gap-3">
-          <label
-            className="flex items-center gap-2 text-sm"
-            htmlFor="proj-autoland"
-          >
-            <Checkbox
-              id="proj-autoland"
-              aria-label="Auto-land finished runs"
-              checked={autoLand}
-              onCheckedChange={(c) => setAutoLand(c === true)}
-            />
-            Auto-land runs when they finish (merge without asking)
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5">
-              <span className="font-medium text-xs text-muted-foreground">
-                Agent kind
-              </span>
-              <Input
-                aria-label="Agent kind"
-                value={agentKind}
-                onChange={(e) => setAgentKind(e.target.value)}
+        <form
+          className="contents"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setBusy(true);
+            setError(null);
+            try {
+              await actions.updateProject(scope.id, {
+                autoLand,
+                allowInPlace,
+                runTimeoutMin: Number(timeoutMin),
+                baseBranch: baseBranch.trim(),
+                promptPreamble: preamble,
+              });
+              setOpen(false);
+            } catch (reason) {
+              setError(String(reason));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <DialogPanel className="grid gap-3">
+            <label
+              className="flex items-center gap-2 text-sm"
+              htmlFor={`${id}-autoland`}
+            >
+              <Checkbox
+                id={`${id}-autoland`}
+                checked={autoLand}
+                onCheckedChange={(value) => setAutoLand(value === true)}
               />
-            </div>
-            <div className="grid gap-1.5">
-              <span className="font-medium text-xs text-muted-foreground">
-                Run timeout (min)
-              </span>
+              Auto-land finished runs
+            </label>
+            <label
+              className="flex items-center gap-2 text-sm"
+              htmlFor={`${id}-inplace`}
+            >
+              <Checkbox
+                id={`${id}-inplace`}
+                checked={allowInPlace}
+                onCheckedChange={(value) => setAllowInPlace(value === true)}
+              />
+              Allow execution in the original directory for non-Git projects
+            </label>
+            <label className="grid gap-1.5 text-xs text-muted-foreground">
+              Run timeout (minutes)
               <Input
                 aria-label="Run timeout minutes"
                 type="number"
                 min={1}
+                max={1440}
+                required
                 value={timeoutMin}
-                onChange={(e) => setTimeoutMin(e.target.value)}
+                onChange={(event) => setTimeoutMin(event.target.value)}
               />
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <span className="font-medium text-xs text-muted-foreground">
+            </label>
+            <label className="grid gap-1.5 text-xs text-muted-foreground">
               Base branch
-            </span>
-            <Input
-              aria-label="Base branch"
-              value={baseBranch}
-              onChange={(e) => setBaseBranch(e.target.value)}
-              placeholder="main"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <span className="font-medium text-xs text-muted-foreground">
-              Worker prompt preamble
-            </span>
-            <Textarea
-              aria-label="Worker prompt preamble"
-              value={preamble}
-              onChange={(e) => setPreamble(e.target.value)}
-              placeholder="Extra instructions appended to every dispatched worker…"
-              className="min-h-20"
-            />
-          </div>
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-          <DialogClose
-            render={<Button aria-label={`Save settings for ${scope.name}`} />}
-            onClick={() =>
-              void actions.updateProject(scope.id, {
-                autoLand: autoLand ? 1 : 0,
-                agentKind: agentKind.trim() || 'durable-worker',
-                runTimeoutMin: Math.max(1, Number(timeoutMin) || 30),
-                baseBranch: baseBranch.trim() || 'main',
-                promptPreamble: preamble,
-              })
-            }
-          >
-            Save
-          </DialogClose>
-        </DialogFooter>
+              <Input
+                aria-label="Base branch"
+                required
+                value={baseBranch}
+                onChange={(event) => setBaseBranch(event.target.value)}
+              />
+            </label>
+            <label className="grid gap-1.5 text-xs text-muted-foreground">
+              Worker instructions
+              <Input
+                aria-label="Worker instructions"
+                value={preamble}
+                onChange={(event) => setPreamble(event.target.value)}
+              />
+            </label>
+            {error && (
+              <div role="alert" className="text-destructive text-xs">
+                {error}
+              </div>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose
+              render={<Button type="button" variant="ghost" disabled={busy} />}
+            >
+              Cancel
+            </DialogClose>
+            <Button
+              type="submit"
+              disabled={busy}
+              aria-label={`Save settings for ${scope.name}`}
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogPopup>
     </Dialog>
   );

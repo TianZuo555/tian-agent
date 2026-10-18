@@ -1,257 +1,173 @@
-import {
-  Harness,
-  createRegistry,
-  type Conversation,
-  type ConversationId,
-} from '@earendil-works/pi-durable';
-import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
-import { CodingTools } from '@earendil-works/pi-durable/tools';
-import { createModels } from '@earendil-works/pi-ai/models';
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
-import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
-import { createProvider } from '@earendil-works/pi-ai/models';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { createHash, randomUUID } from 'node:crypto';
 import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  unlinkSync,
+  realpathSync,
+  statSync,
   watch as fsWatch,
-  writeFileSync,
   type FSWatcher,
 } from 'node:fs';
-import { execFile } from 'node:child_process';
-import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { Db, type RunRow } from './db.js';
+import { join, isAbsolute } from 'node:path';
+import { Db } from './db.js';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
+import { Settings } from './settings.js';
+import { DataService } from './data.js';
+import { AgentRuntime } from './agents.js';
+import { RunOrchestrator, type DispatchInput } from './runs.js';
 import { chiefExtension } from './tools.js';
-import * as D from './dispatch.js';
+import { toRows, type ConversationView } from '../shared/messages.js';
+import type {
+  Emit,
+  ProjectPatch,
+  ScopeInfo,
+  SettingsInfo,
+  SessionBinding,
+  ConversationInfo,
+} from '../shared/types.js';
 
-export interface ModelChoice {
-  provider: string;
-  modelId: string;
-}
-
-export interface AppSettings {
-  model: ModelChoice;
-}
-
-const DEFAULT_SETTINGS: AppSettings = {
-  model: { provider: 'anthropic', modelId: 'claude-sonnet-5-5' },
-};
-
-const PROVIDERS: Record<string, () => ReturnType<typeof createProvider>> = {
-  anthropic: anthropicProvider,
-  openai: openaiProvider,
-  deepseek: deepseekProvider,
-};
-
-const PROVIDER_ENV: Record<string, string[]> = {
-  anthropic: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'],
-  openai: ['OPENAI_API_KEY'],
-  deepseek: ['DEEPSEEK_API_KEY'],
-};
-
-const DEFAULT_MODELS: Record<string, string> = {
-  anthropic: 'claude-sonnet-5-5',
-  openai: 'gpt-5',
-  deepseek: 'deepseek-v4-pro',
-};
-
-/**
- * pi keeps provider credentials in ~/.pi/agent/auth.json; import api-key
- * entries into env. Returns the providers that got a key — keys refreshed by
- * pi's login flow are more trustworthy than possibly stale env copies.
- */
-function loadPiAuth(): string[] {
-  const injected: string[] = [];
-  try {
-    const home = process.env.HOME;
-    if (!home) return injected;
-    const path = join(home, '.pi/agent/auth.json');
-    if (!existsSync(path)) return injected;
-    const auth = JSON.parse(readFileSync(path, 'utf8')) as Record<
-      string,
-      { type?: string; key?: string }
-    >;
-    for (const [provider, envNames] of Object.entries(PROVIDER_ENV)) {
-      const entry = auth[provider];
-      if (
-        (entry?.type === 'api_key' || entry?.type === 'api-key') &&
-        entry.key
-      ) {
-        for (const name of envNames) process.env[name] = entry.key;
-        injected.push(provider);
-      }
-    }
-  } catch {
-    // auth file unreadable — rely on env only
-  }
-  return injected;
-}
-
-function providerAvailable(provider: string): boolean {
-  return (PROVIDER_ENV[provider] ?? []).some((name) =>
-    Boolean(process.env[name]),
-  );
-}
-
-function defaultSettings(preferred: string[] = []): AppSettings {
-  const order = [
-    ...preferred,
-    ...Object.keys(PROVIDERS).filter((p) => !preferred.includes(p)),
-  ];
-  for (const provider of order) {
-    if (providerAvailable(provider)) {
-      return {
-        model: { provider, modelId: DEFAULT_MODELS[provider] },
-      };
-    }
-  }
-  return DEFAULT_SETTINGS;
-}
-
-export type Emit = (channel: string, payload: unknown) => void;
-
-/** Worker-side service: owns the harness, app state, scopes, and view watchers. */
+/** Application composition and conversation/project operations; owned by one resident service. */
 export class Service {
   readonly db: Db;
   readonly scopes: Scopes;
-  private harness!: Harness;
-  private registry = createRegistry();
-  private watches = new Map<string, { stop: () => Promise<unknown> }>();
-  private settingsPath: string;
-  private settings: AppSettings;
+  readonly data: DataService;
+  readonly runs: RunOrchestrator;
+  private agents: AgentRuntime;
+  private settings: Settings;
   private globalDir: string;
+  private watches = new Map<
+    string,
+    { clientId: number; stop: () => Promise<void> }
+  >();
+  private watchVersions = new Map<string, number>();
+  private inboxWatches = new Map<string, FSWatcher>();
+  private inboxTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private maintenance?: ReturnType<typeof setInterval>;
+  private delivery: Promise<void> | null = null;
+  private closing = false;
+  private openingSessions = new Map<string, Promise<ConversationInfo>>();
 
   constructor(
-    private userDataDir: string,
+    userDataDir: string,
     private emit: Emit,
   ) {
-    this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
     this.db = new Db(userDataDir);
+    this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
     this.scopes = new Scopes(this.globalDir, this.db);
-    this.settingsPath = join(userDataDir, 'settings.json');
-    this.piAuthProviders = loadPiAuth();
-    this.settings = this.loadSettings();
-  }
-
-  private loadSettings(): AppSettings {
-    const fallback = defaultSettings(this.piAuthProviders);
-    try {
-      if (existsSync(this.settingsPath)) {
-        const saved = {
-          ...fallback,
-          ...JSON.parse(readFileSync(this.settingsPath, 'utf8')),
-        };
-        if (providerAvailable(saved.model.provider)) return saved;
-      }
-    } catch {
-      // fall through to defaults
-    }
-    return fallback;
-  }
-
-  private piAuthProviders: string[] = [];
-
-  getSettings(): AppSettings {
-    return this.settings;
-  }
-
-  setModel(model: ModelChoice): void {
-    this.settings.model = model;
-    writeFileSync(
-      this.settingsPath,
-      JSON.stringify(this.settings, null, 2),
-      'utf8',
+    this.settings = new Settings(userDataDir);
+    this.data = new DataService(this.db, this.scopes, emit);
+    this.agents = new AgentRuntime(
+      userDataDir,
+      this.globalDir,
+      this.settings,
+      this.db,
+    );
+    this.runs = new RunOrchestrator(
+      this.db,
+      this.scopes,
+      this.agents,
+      userDataDir,
+      emit,
+      () => this.deliverNotifications(),
     );
   }
 
   async init(): Promise<void> {
-    // Orphaned runs from a dead process get marked; a rerun is a fresh dispatch.
-    for (const run of this.db.interruptedOrphans()) {
-      this.db.setRunStatus(run.id, 'interrupted');
-    }
-
-    const models = createModels();
-    for (const make of Object.values(PROVIDERS)) {
-      try {
-        models.setProvider(make());
-      } catch {
-        // provider without credentials — skip
-      }
-    }
-
-    this.registry.install(CodingTools);
-    this.registry.install(
+    await this.agents.open(
       chiefExtension({
         scopes: this.scopes,
         db: this.db,
-        dispatch: (o) => this.dispatchRun(o),
+        data: this.data,
+        dispatch: (input) => this.runs.dispatch(input),
+        runReport: (id) => this.runs.report(id),
+        runDiff: (id) => this.runs.diff(id),
       }),
     );
-
-    const storage = await openNodeSqliteStorage(
-      join(this.userDataDir, 'pi-session.sqlite'),
-    );
-    this.harness = await Harness.open(
-      storage,
-      {
-        models,
-        registry: this.registry,
-        env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? this.globalDir }),
-      },
-      BACKGROUND_CONTEXT,
-    );
-    this.harness.resume();
-
-    // inbox watches: global + every registered project
-    this.watchInbox(GLOBAL_SCOPE);
-    for (const p of this.db.listProjects()) this.watchInbox(p.id);
+    await this.runs.recover();
+    for (const scope of this.listScopes()) {
+      this.watchInbox(scope.id);
+      this.scanInbox(scope.id);
+    }
+    await this.deliverNotifications();
+    this.agents.harness.resume();
+    // Scans repair missed filesystem events and retry durable notification delivery.
+    this.maintenance = setInterval(() => {
+      for (const scope of this.listScopes()) {
+        try {
+          this.watchInbox(scope.id);
+          this.scanInbox(scope.id);
+        } catch (error) {
+          console.error(`Inbox ${scope.id}:`, error);
+        }
+      }
+      void this.deliverNotifications();
+    }, 10_000);
+    this.maintenance.unref();
   }
 
   async close(): Promise<void> {
-    for (const w of this.watches.values()) await w.stop().catch(() => {});
-    this.watches.clear();
-    for (const w of this.inboxWatches.values()) w.close();
+    if (this.closing) return;
+    this.closing = true;
+    this.runs.pause();
+    clearInterval(this.maintenance);
+    for (const timer of this.inboxTimers.values()) clearTimeout(timer);
+    for (const watcher of this.inboxWatches.values()) watcher.close();
+    this.inboxTimers.clear();
     this.inboxWatches.clear();
-    for (const t of this.runTimers.values()) clearTimeout(t);
-    this.runTimers.clear();
-    await this.harness.close(BACKGROUND_CONTEXT);
+    await this.delivery;
+    for (const watch of this.watches.values()) await watch.stop();
+    this.watches.clear();
+    await this.agents.close();
+    await this.runs.join();
     this.db.close();
   }
 
-  // ---- scopes & projects
-
-  listScopes() {
-    const projects = this.db.listProjects();
+  listScopes(): ScopeInfo[] {
     return [
       {
         id: GLOBAL_SCOPE,
-        kind: 'global' as const,
+        kind: 'global',
         name: 'General',
         rootPath: this.globalDir,
       },
-      ...projects.map((p) => ({
-        id: p.id,
-        kind: 'project' as const,
-        name: p.name,
-        rootPath: p.rootPath,
-        settings: this.projectSettings(p.id),
-      })),
+      ...this.db.listProjects().map(
+        (project): ScopeInfo => ({
+          id: project.id,
+          kind: 'project',
+          name: project.name,
+          rootPath: project.rootPath,
+          settings: {
+            autoLand: project.autoLand === 1,
+            allowInPlace: project.allowInPlace === 1,
+            agentKind: 'durable-worker',
+            runTimeoutMin: project.runTimeoutMin,
+            baseBranch: project.baseBranch,
+            promptPreamble: project.promptPreamble,
+          },
+        }),
+      ),
     ];
   }
-
-  addProject(name: string, rootPath: string) {
-    const id = `p-${randomUUID().slice(0, 8)}`;
+  private projectRoot(rootPath: string): string {
+    if (!isAbsolute(rootPath)) throw new Error('Project path must be absolute');
+    const root = realpathSync(rootPath);
+    if (!statSync(root).isDirectory())
+      throw new Error('Project path must be a directory');
+    return root;
+  }
+  addProject(name: string, rootPath: string): ScopeInfo[] {
+    const root = this.projectRoot(rootPath);
+    if (
+      !name.trim() ||
+      this.db.projectByName(name.trim()) ||
+      this.db.listProjects().some((project) => project.rootPath === root)
+    )
+      throw new Error('Project name and directory must be unique');
+    const id = `p-${randomUUID()}`;
     this.db.addProject({
       id,
-      name,
-      rootPath,
+      name: name.trim(),
+      rootPath: root,
       autoLand: 0,
+      allowInPlace: 0,
       agentKind: 'durable-worker',
       runTimeoutMin: 30,
       baseBranch: 'main',
@@ -259,525 +175,332 @@ export class Service {
     });
     this.scopes.ensureDirs(id);
     this.watchInbox(id);
-    return this.listScopes();
+    this.scanInbox(id);
+    const scopes = this.listScopes();
+    this.emit('scopes', scopes);
+    return scopes;
   }
-
-  updateProject(id: string, patch: Record<string, unknown>) {
-    this.db.updateProject(id, patch);
-    return this.listScopes();
+  async updateProject(id: string, patch: ProjectPatch): Promise<ScopeInfo[]> {
+    const existing = this.db.getProject(id);
+    if (!existing) throw new Error(`Unknown project: ${id}`);
+    if (
+      patch.rootPath &&
+      patch.rootPath !== existing.rootPath &&
+      this.db.projectHasRuns(id)
+    )
+      throw new Error(
+        'Finish and clean up project runs before changing its directory',
+      );
+    const rootPath = patch.rootPath
+      ? this.projectRoot(patch.rootPath)
+      : existing.rootPath;
+    const name = patch.name?.trim() ?? existing.name;
+    if (
+      !name ||
+      this.db
+        .listProjects()
+        .some(
+          (project) =>
+            project.id !== id &&
+            (project.name === name || project.rootPath === rootPath),
+        )
+    )
+      throw new Error('Project name and directory must be unique');
+    this.stopInbox(id);
+    this.scopes.forget(id);
+    this.db.updateProject(id, {
+      ...patch,
+      name,
+      rootPath,
+      autoLand:
+        patch.autoLand === undefined
+          ? existing.autoLand
+          : Number(patch.autoLand),
+      allowInPlace:
+        patch.allowInPlace === undefined
+          ? existing.allowInPlace
+          : Number(patch.allowInPlace),
+    });
+    const cwd = this.scopes.ensureDirs(id);
+    for (const conversation of this.db
+      .listConversations()
+      .filter((value) => value.scopeId === id)) {
+      await (
+        await this.agents.conversation(conversation.conversationId)
+      ).configure({ cwd }, BACKGROUND_CONTEXT);
+    }
+    this.watchInbox(id);
+    this.scanInbox(id);
+    const scopes = this.listScopes();
+    this.emit('scopes', scopes);
+    return scopes;
   }
-
-  removeProject(id: string) {
+  removeProject(id: string): ScopeInfo[] {
+    if (this.db.projectHasRuns(id))
+      throw new Error(
+        'Finish and clean up project runs before removing this project',
+      );
+    if (
+      this.db
+        .listConversations()
+        .some((conversation) => conversation.scopeId === id)
+    )
+      throw new Error('A project with conversations cannot be removed');
+    this.stopInbox(id);
+    this.scopes.forget(id);
     this.db.removeProject(id);
-    return this.listScopes();
+    const scopes = this.listScopes();
+    this.emit('scopes', scopes);
+    return scopes;
   }
-
-  projectSettings(id: string) {
-    const p = this.db.getProject(id);
-    if (!p) return null;
-    return {
-      autoLand: p.autoLand === 1,
-      agentKind: p.agentKind,
-      runTimeoutMin: p.runTimeoutMin,
-      baseBranch: p.baseBranch,
-      promptPreamble: p.promptPreamble,
-    };
-  }
-
-  // ---- conversations
 
   listConversations() {
-    return this.db
-      .listConversations()
-      .map((c) => ({ ...c, scopeId: c.scopeId }));
+    return this.db.listConversations();
   }
-
   async createConversation(scopeId: string) {
-    const cwd = this.scopes.ensureDirs(scopeId);
-    const conv = await this.harness.createConversation(
-      {
-        ownership: { kind: 'ownerless' },
-        agent: { model: this.settings.model, cwd },
-      },
-      BACKGROUND_CONTEXT,
+    const conversation = await this.agents.createChief(
+      this.scopes.ensureDirs(scopeId),
     );
-    this.db.mapConversation(String(conv.id), scopeId);
-    return {
-      conversationId: String(conv.id),
-      scopeId,
-      title: null as string | null,
-    };
-  }
-
-  async submit(conversationId: string, content: string) {
-    const conv = await this.requireConversation(conversationId);
-    const submission = await conv.submit(
-      { type: 'input', content },
-      BACKGROUND_CONTEXT,
-    );
-    const scope = this.db.conversationScope(conversationId);
-    this.db.setConversationTitle(
-      conversationId,
-      content.split('\n')[0].slice(0, 60),
-    );
+    const result = this.db.mapConversation(String(conversation.id), scopeId);
     this.emit('conversations', this.listConversations());
-    return { submissionId: String(submission.id), scope };
+    return result;
+  }
+  async openSession(binding: SessionBinding): Promise<ConversationInfo> {
+    this.scopes.root(binding.scopeId);
+    const existing = this.db.channelSession(binding);
+    if (existing) return existing;
+    const key = JSON.stringify([
+      binding.channel,
+      binding.externalId,
+      binding.scopeId,
+    ]);
+    const pending = this.openingSessions.get(key);
+    if (pending) return pending;
+    const opening = (async () => {
+      const conversation = await this.createConversation(binding.scopeId);
+      this.db.bindSession(binding, conversation.conversationId);
+      return conversation;
+    })();
+    this.openingSessions.set(key, opening);
+    try {
+      return await opening;
+    } finally {
+      this.openingSessions.delete(key);
+    }
   }
 
-  async abort(conversationId: string) {
-    const conv = await this.requireConversation(conversationId);
-    await conv.abort(BACKGROUND_CONTEXT);
+  async submit(id: string, content: string, requestId?: string) {
+    this.db.conversationScope(id);
+    const submission = await (
+      await this.agents.conversation(id)
+    ).submit({ type: 'input', content, requestId }, BACKGROUND_CONTEXT);
+    this.db.setConversationTitle(id, content.split('\n')[0].slice(0, 60));
+    this.emit('conversations', this.listConversations());
+    return { submissionId: String(submission.id) };
   }
-
-  private async requireConversation(id: string) {
-    const conv = await this.harness.conversation(
-      Number(id) as ConversationId,
-      BACKGROUND_CONTEXT,
-    );
-    if (!conv) throw new Error(`unknown conversation ${id}`);
-    return conv;
+  async abort(id: string): Promise<void> {
+    this.db.conversationScope(id);
+    await (await this.agents.conversation(id)).abort(BACKGROUND_CONTEXT);
   }
-
-  // ---- watching
-
-  async watch(conversationId: string) {
-    if (this.watches.has(conversationId)) return;
-    const conv = await this.requireConversation(conversationId);
-    const watch = await conv.watch(BACKGROUND_CONTEXT);
-    this.emit('view', { conversationId, view: watch.value });
+  async watch(id: string, clientId = 0): Promise<void> {
+    this.db.conversationScope(id);
+    const key = `${clientId}:${id}`;
+    const stopping = this.unwatch(id, clientId);
+    const version = this.watchVersions.get(key);
+    await stopping;
+    const watch = await (
+      await this.agents.conversation(id)
+    ).watch(BACKGROUND_CONTEXT);
+    const current = () =>
+      !this.closing && this.watchVersions.get(key) === version;
+    if (!current()) {
+      await watch.stop();
+      return;
+    }
+    const publish = (value: unknown) => {
+      if (current())
+        this.emit(
+          'view',
+          { conversationId: id, view: toRows(value as ConversationView) },
+          clientId,
+        );
+    };
+    publish(watch.value);
     await watch.start(async (value) => {
-      this.emit('view', { conversationId, view: value });
+      publish(value);
     });
-    this.watches.set(conversationId, {
+    if (!current()) {
+      await watch.stop();
+      return;
+    }
+    this.watches.set(key, {
+      clientId,
       stop: async () => {
         await watch.stop();
       },
     });
   }
-
-  async unwatch(conversationId: string) {
-    const w = this.watches.get(conversationId);
-    if (w) {
-      this.watches.delete(conversationId);
-      await w.stop();
-    }
+  async unwatch(id: string, clientId = 0): Promise<void> {
+    const key = `${clientId}:${id}`;
+    this.watchVersions.set(key, (this.watchVersions.get(key) ?? 0) + 1);
+    const watch = this.watches.get(key);
+    this.watches.delete(key);
+    await watch?.stop();
   }
-
-  // ---- dispatch: worktree + durable-worker conversation + collect
-
-  private runConvs = new Map<string, Conversation>();
-  private runTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private inboxWatches = new Map<string, FSWatcher>();
-
-  /**
-   * Spawn a headless worker run for a project: isolated git worktree when the
-   * project is a repo (in-place otherwise), a CodingTools-equipped conversation
-   * under the same model, report contract baked into instructions. Returns at
-   * once; `collectRun` finishes the lifecycle asynchronously.
-   */
-  async dispatchRun(input: {
-    projectRef: string;
-    prompt: string;
-    chiefConversationId: string | null;
-  }): Promise<RunRow> {
-    const project =
-      this.db.getProject(input.projectRef) ??
-      this.db.projectByName(input.projectRef);
-    if (!project) throw new Error(`unknown project: ${input.projectRef}`);
-
-    const runId = `r-${randomUUID().slice(0, 8)}`;
-    this.scopes.ensureDirs(project.id);
-    const reportPath = join(this.scopes.runsDir(project.id), `${runId}.md`);
-
-    let worktreePath: string | null = null;
-    let branch: string | null = null;
-    if (await D.isGitRepo(project.rootPath)) {
-      try {
-        const wt = await D.addWorktree(
-          project.rootPath,
-          project.baseBranch || 'main',
-          runId,
-          join(this.userDataDir, 'worktrees'),
-        );
-        worktreePath = wt.worktreePath;
-        branch = wt.branch;
-      } catch {
-        // baseBranch missing or worktree refused — fall back to in-place
+  async releaseClient(clientId: number): Promise<void> {
+    for (const [key, version] of this.watchVersions)
+      if (key.startsWith(`${clientId}:`))
+        this.watchVersions.set(key, version + 1);
+    for (const [key, watch] of this.watches)
+      if (watch.clientId === clientId) {
+        this.watches.delete(key);
+        await watch.stop();
       }
-    }
-
-    this.db.addRun({
-      id: runId,
-      projectId: project.id,
-      conversationId: null,
-      chiefConversationId: input.chiefConversationId,
-      agentKind: project.agentKind || 'durable-worker',
-      prompt: input.prompt,
-      worktreePath,
-      branch,
-      reportPath,
-    });
-
-    const cwd = worktreePath ?? project.rootPath;
-    const conv = await this.harness.createConversation(
-      {
-        ownership: { kind: 'ownerless' },
-        agent: {
-          model: this.settings.model,
-          cwd,
-          extensions: [CodingTools],
-          instructions: [
-            "You are a worker agent dispatched by Tian's chief of staff. You run unattended — there is no human watching, so never ask questions.",
-            'Do the task from the user message inside the current directory only.',
-            'Never write to memory/ — memory belongs to the chief, not to you.',
-            'When done, write a short report (under a page) to TIAN_REPORT.md in the worktree root: what you did, key decisions, anything the chief should know.',
-            'Do not run git commit; the harness commits the worktree itself when you finish.',
-            project.promptPreamble
-              ? `Project instructions:\n${project.promptPreamble}`
-              : '',
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-        },
-      },
-      BACKGROUND_CONTEXT,
-    );
-    this.db.setRunConversation(runId, String(conv.id));
-    this.db.setRunStatus(runId, 'running');
-    this.runConvs.set(runId, conv);
-
-    await conv.submit(
-      { type: 'input', content: input.prompt },
-      BACKGROUND_CONTEXT,
-    );
-    this.emit('runs', this.runList(null));
-    void this.collectRun(runId);
-    return this.db.getRun(runId)!;
   }
-
-  /** Wait for the worker to go idle, then collect: report, commit, diff stat,
-   * status, inbox record, and a wake message to the dispatching chief. */
-  private async collectRun(runId: string): Promise<void> {
-    const run = this.db.getRun(runId);
-    if (!run?.conversationId) return;
-    const project = this.db.getProject(run.projectId);
-    const conv =
-      this.runConvs.get(runId) ??
-      (await this.harness.conversation(
-        Number(run.conversationId) as ConversationId,
-        BACKGROUND_CONTEXT,
-      ));
-    if (!conv) {
-      this.db.setRunStatus(runId, 'interrupted');
-      return;
-    }
-    this.runConvs.set(runId, conv);
-
-    const timeoutMs = Math.max(1, project?.runTimeoutMin ?? 30) * 60_000;
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      void conv.abort(BACKGROUND_CONTEXT).catch(() => {});
-    }, timeoutMs);
-    this.runTimers.set(runId, timer);
-    try {
-      await conv.waitForIdle(BACKGROUND_CONTEXT);
-    } catch {
-      // aborted — still collect whatever the worker left
-    } finally {
-      clearTimeout(timer);
-      this.runTimers.delete(runId);
-    }
-
-    // collect the report: TIAN_REPORT.md in the worktree, else last reply
-    let reportText = '';
-    if (run.worktreePath) {
-      const inTree = join(run.worktreePath, 'TIAN_REPORT.md');
-      if (existsSync(inTree)) {
-        reportText = readFileSync(inTree, 'utf8').trim();
-        unlinkSync(inTree);
-      }
-      await D.commitAll(run.worktreePath, `tian run ${runId}`).catch(() => {});
-    }
-    if (!reportText)
-      reportText =
-        (await this.lastAssistantText(run.conversationId)) ?? '(no report)';
-    if (run.reportPath) {
-      mkdirSync(join(run.reportPath, '..'), { recursive: true });
-      writeFileSync(run.reportPath, reportText, 'utf8');
-    }
-
-    let diffstat = '';
-    if (run.worktreePath && run.branch && project) {
-      diffstat = await D.diffStat(
-        project.rootPath,
-        project.baseBranch || 'main',
-        run.branch,
-      );
-    }
-    this.db.setRunStatus(runId, timedOut ? 'failed' : 'done');
-
-    let landNote = '';
-    if (!timedOut && project?.autoLand === 1 && run.branch) {
-      const m = await D.merge(project.rootPath, run.branch);
-      landNote =
-        m.code === 0
-          ? `\nlanded: merged ${run.branch}`
-          : `\nland failed: ${m.output.slice(0, 300)}`;
-    }
-
-    // record on the project inbox
-    const summary = reportText.split('\n').slice(0, 12).join('\n');
-    this.scopes.sendMessage(
-      run.projectId,
-      `run:${runId}`,
-      `[run ${timedOut ? 'timed out' : 'done'}] ${run.prompt.split('\n')[0].slice(0, 120)}\n\n${summary}${landNote}`,
-      undefined,
-      `run-${runId}`,
-    );
-
-    // wake the dispatching chief conversation
-    const wake = [
-      `[run ${runId} finished${timedOut ? ' (timed out)' : ''}] project=${project?.name ?? run.projectId}`,
-      `report: ${run.reportPath ?? '(none)'}`,
-      diffstat ? `diffstat:\n${diffstat}` : '',
-      landNote.trim(),
-      'Collect the report, note what matters with note, and tell Tian briefly.',
-    ]
-      .filter(Boolean)
-      .join('\n');
-    if (run.chiefConversationId) {
-      const chief = await this.harness
-        .conversation(
-          Number(run.chiefConversationId) as ConversationId,
-          BACKGROUND_CONTEXT,
-        )
-        .catch(() => undefined);
-      await chief
-        ?.submit({ type: 'input', content: wake }, BACKGROUND_CONTEXT)
-        .catch(() => {});
-    }
-
-    this.emit('runs', this.runList(null));
-    this.emit('inbox', run.projectId);
-  }
-
-  /** Extra instruction round on the same worker conversation/worktree. */
-  async followUpRun(runId: string, prompt: string): Promise<RunRow> {
-    const run = this.db.getRun(runId);
-    if (!run) throw new Error(`unknown run ${runId}`);
-    if (run.status === 'running' || run.status === 'queued')
-      throw new Error(`run ${runId} still ${run.status}`);
-    if (!run.conversationId) throw new Error(`run ${runId} has no worker`);
-    const conv = await this.requireConversation(run.conversationId);
-    this.db.reopenRun(runId);
-    await conv.submit({ type: 'input', content: prompt }, BACKGROUND_CONTEXT);
-    this.emit('runs', this.runList(null));
-    void this.collectRun(runId);
-    return this.db.getRun(runId)!;
-  }
-
-  /** Merge the run's branch into the project's checkout. */
-  async landRun(runId: string): Promise<string> {
-    const run = this.db.getRun(runId);
-    const project = run && this.db.getProject(run.projectId);
-    if (!run?.branch || !project)
-      throw new Error(`run ${runId} has no branch to land`);
-    const m = await D.merge(project.rootPath, run.branch);
-    if (m.code !== 0) throw new Error(m.output.slice(0, 500));
-    // landed — the worktree is spent
-    await D.discardWorktree(project.rootPath, run.worktreePath, null);
-    this.emit('runs', this.runList(null));
-    return m.output;
-  }
-
-  /** Abort (if live) and throw the worktree + branch away. */
-  async discardRun(runId: string): Promise<void> {
-    const run = this.db.getRun(runId);
-    const project = run && this.db.getProject(run.projectId);
-    if (!run || !project) throw new Error(`unknown run ${runId}`);
-    if (run.status === 'running' || run.status === 'queued') {
-      const t = this.runTimers.get(runId);
-      if (t) clearTimeout(t);
-      const conv = run.conversationId
-        ? await this.harness
-            .conversation(
-              Number(run.conversationId) as ConversationId,
-              BACKGROUND_CONTEXT,
-            )
-            .catch(() => undefined)
-        : undefined;
-      await conv?.abort(BACKGROUND_CONTEXT).catch(() => {});
-    }
-    await D.discardWorktree(project.rootPath, run.worktreePath, run.branch);
-    this.db.setRunStatus(runId, 'discarded');
-    this.emit('runs', this.runList(null));
-  }
-
-  /** Push the branch and open a PR with gh. */
-  async shipRun(runId: string): Promise<string> {
-    const run = this.db.getRun(runId);
-    const project = run && this.db.getProject(run.projectId);
-    if (!run?.branch || !run.worktreePath || !project)
-      throw new Error(`run ${runId} has no branch to ship`);
-    const push = await D.git(run.worktreePath, [
-      'push',
-      '-u',
-      'origin',
-      run.branch,
-    ]);
-    if (push.code !== 0) throw new Error(`push: ${push.stderr.slice(0, 300)}`);
-    return await new Promise<string>((resolve, reject) => {
-      execFile(
-        'gh',
-        [
-          'pr',
-          'create',
-          '--fill',
-          '--base',
-          project.baseBranch || 'main',
-          '--head',
-          run.branch!,
-        ],
-        { cwd: run.worktreePath ?? project.rootPath },
-        (e, stdout, stderr) =>
-          e ? reject(new Error(String(stderr || e))) : resolve(String(stdout)),
-      );
-    });
-  }
-
-  async runReport(runId: string): Promise<string> {
-    const run = this.db.getRun(runId);
-    if (!run) throw new Error(`unknown run ${runId}`);
-    if (run.reportPath && existsSync(run.reportPath))
-      return readFileSync(run.reportPath, 'utf8');
-    return '(no report written yet)';
-  }
-
-  async runDiff(runId: string): Promise<string> {
-    const run = this.db.getRun(runId);
-    const project = run && this.db.getProject(run.projectId);
-    if (!run?.branch || !project)
-      return '(no diff — run was not in a worktree)';
-    return D.diff(project.rootPath, project.baseBranch || 'main', run.branch);
-  }
-
-  private async lastAssistantText(
-    conversationId: string,
-  ): Promise<string | undefined> {
-    const conv = await this.requireConversation(conversationId);
-    const page = await conv.entries(
-      { order: 'descending' },
-      20,
-      undefined,
-      BACKGROUND_CONTEXT,
-    );
-    for (const e of page.items ?? []) {
-      if (e.kind !== 'pi.assistant') continue;
-      const t = (e.model ?? [])
-        .map((msg) =>
-          typeof msg.content === 'string'
-            ? msg.content
-            : (msg.content ?? [])
-                .map((c: { text?: string }) => c?.text ?? '')
-                .join(''),
-        )
-        .join('')
-        .trim();
-      if (t) return t;
-    }
-    return undefined;
-  }
-
-  // ---- inbox fs-watch → renderer refresh + chief wake
 
   private watchInbox(scopeId: string): void {
-    if (this.inboxWatches.has(scopeId)) return;
-    let dir: string;
-    try {
-      dir = join(this.scopes.ensureDirs(scopeId), '.tian', 'inbox');
-    } catch {
-      return;
-    }
-    let debounce: ReturnType<typeof setTimeout> | undefined;
-    const w = fsWatch(dir, { persistent: false }, (_e, file) => {
-      if (!file?.endsWith('.md')) return;
-      clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        this.emit('inbox', scopeId);
-        this.onInboxFile(scopeId, file).catch(() => {});
-      }, 300);
+    if (this.inboxWatches.has(scopeId) || this.closing) return;
+    const directory = join(this.scopes.ensureDirs(scopeId), '.tian', 'inbox');
+    const watcher = fsWatch(directory, { persistent: false }, () => {
+      clearTimeout(this.inboxTimers.get(scopeId));
+      this.inboxTimers.set(
+        scopeId,
+        setTimeout(() => {
+          this.inboxTimers.delete(scopeId);
+          try {
+            this.scanInbox(scopeId);
+          } catch (error) {
+            console.error(`Inbox ${scopeId}:`, error);
+          }
+        }, 200),
+      );
     });
-    w.on('error', () => {
-      w.close();
-      this.inboxWatches.delete(scopeId);
+    watcher.on('error', (error) => {
+      this.stopInbox(scopeId);
+      console.error(`Inbox ${scopeId}:`, error);
     });
-    this.inboxWatches.set(scopeId, w);
+    this.inboxWatches.set(scopeId, watcher);
   }
-
-  /** Wake the scope's chief conversation on external inbox mail. Chief's own
-   * posts and run-finish records don't wake (runs wake via chiefConversationId). */
-  private async onInboxFile(scopeId: string, file: string): Promise<void> {
-    const dir = join(this.scopes.root(scopeId), '.tian', 'inbox');
-    const raw = readFileSync(join(dir, file), 'utf8');
-    const m = /^---\n([\s\S]*?)\n---/.exec(raw);
-    const meta: Record<string, string> = {};
-    if (m)
-      for (const line of m[1].split('\n')) {
-        const i = line.indexOf(':');
-        if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  private stopInbox(scopeId: string): void {
+    clearTimeout(this.inboxTimers.get(scopeId));
+    this.inboxTimers.delete(scopeId);
+    this.inboxWatches.get(scopeId)?.close();
+    this.inboxWatches.delete(scopeId);
+  }
+  private scanInbox(scopeId: string): void {
+    if (this.closing) return;
+    for (const message of this.scopes.listMessages(scopeId)) {
+      if (message.from === 'chief' || message.thread.startsWith('run-'))
+        continue;
+      this.db.queueNotification({
+        id: `inbox:${scopeId}:${message.id}`,
+        scopeId,
+        conversationId: null,
+        content: `[inbox message ${message.id} from ${message.from}]\n${message.body.slice(0, 12_000)}\nRead with check_inbox and tell Tian what came in.`,
+      });
+    }
+    this.emit('inbox', scopeId);
+    void this.deliverNotifications();
+  }
+  private deliverNotifications(): Promise<void> {
+    if (this.closing) return Promise.resolve();
+    if (this.delivery) return this.delivery;
+    this.delivery = (async () => {
+      for (const notification of this.db.pendingNotifications()) {
+        if (this.closing) break;
+        try {
+          let conversationId = notification.conversationId;
+          if (!conversationId) {
+            conversationId =
+              this.db.latestConversation(notification.scopeId)
+                ?.conversationId ??
+              (await this.createConversation(notification.scopeId))
+                .conversationId;
+            this.db.targetNotification(notification.id, conversationId);
+          }
+          if (notification.id.startsWith('run:')) {
+            const messageId = `run-${createHash('sha256').update(notification.id).digest('hex')}`;
+            this.scopes.sendMessage(
+              notification.scopeId,
+              'run',
+              notification.content,
+              undefined,
+              messageId,
+              messageId,
+            );
+          }
+          await (
+            await this.agents.conversation(conversationId)
+          ).submit(
+            {
+              type: 'input',
+              content: notification.content,
+              requestId: notification.id,
+              whenBusy: 'followUp',
+            },
+            BACKGROUND_CONTEXT,
+          );
+          this.db.deliveredNotification(notification.id);
+          this.emit('inbox', notification.scopeId);
+        } catch (error) {
+          console.error(`Notification ${notification.id}:`, error);
+        }
       }
-    const from = meta.from ?? '?';
-    if (from === 'chief' || (meta.thread ?? '').startsWith('run-')) return;
-    await this.wakeScope(
-      scopeId,
-      `[inbox] new message in this scope from ${from}:\n${raw.slice(0, 2000)}\n\nRead it with check_inbox and tell Tian what came in.`,
-    );
+    })().finally(() => {
+      this.delivery = null;
+    });
+    return this.delivery;
   }
 
-  /** Submit a wake input to the scope's latest conversation, creating one when
-   * the scope has never been chatted in. */
-  private async wakeScope(scopeId: string, text: string): Promise<void> {
-    let convId = this.db.latestConversation(scopeId)?.conversationId;
-    if (!convId) {
-      const c = await this.createConversation(scopeId);
-      convId = c.conversationId;
+  getSettings() {
+    return this.settings.get();
+  }
+  async setModel(model: SettingsInfo['model']): Promise<void> {
+    this.settings.setModel(model);
+    for (const conversation of this.db.listConversations()) {
+      await (
+        await this.agents.conversation(conversation.conversationId)
+      ).configure({ model }, BACKGROUND_CONTEXT);
     }
-    const conv = await this.harness
-      .conversation(Number(convId) as ConversationId, BACKGROUND_CONTEXT)
-      .catch(() => undefined);
-    await conv
-      ?.submit({ type: 'input', content: text }, BACKGROUND_CONTEXT)
-      .catch(() => {});
+    this.emit('settings', this.settings.get());
   }
-
-  // ---- data panels (read paths for the renderer)
-
   taskList(scopeId: string | null) {
     return this.db.listTasks(scopeId);
   }
-
   addTaskItem(scopeId: string, title: string, due: string | null) {
-    const id = this.db.addTask(scopeId, title, due);
-    this.emit('tasks', this.taskList(null));
-    return id;
+    return this.data.addTask(scopeId, title, due);
   }
-
   doneTaskItem(id: number, done: boolean) {
-    if (done) this.db.doneTask(id);
-    else this.db.reopenTask(id);
-    this.emit('tasks', this.taskList(null));
+    this.data.doneTask(id, done);
   }
-
   memoryDump(scopeId: string) {
     return this.scopes.memory(scopeId).dump();
   }
-
   inboxList(scopeId: string) {
     return this.scopes.listMessages(scopeId);
   }
-
   runList(scopeId: string | null) {
     return this.db.listRuns(scopeId);
+  }
+  dispatchRun(input: DispatchInput) {
+    return this.runs.dispatch(input);
+  }
+  followUpRun(id: string, prompt: string) {
+    return this.runs.followUp(id, prompt);
+  }
+  landRun(id: string) {
+    return this.runs.land(id);
+  }
+  discardRun(id: string) {
+    return this.runs.discard(id);
+  }
+  shipRun(id: string) {
+    return this.runs.ship(id);
+  }
+  runReport(id: string) {
+    return this.runs.report(id);
+  }
+  runDiff(id: string) {
+    return this.runs.diff(id);
   }
 }

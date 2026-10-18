@@ -1,0 +1,32 @@
+import type { Service } from './service.js';
+import type { Handlers } from '../shared/contracts.js';
+
+/** One command implementation shared by every transport and channel adapter. */
+export const commandHandlers = (service: Service, clientId: number) =>
+  ({
+    listScopes: () => service.listScopes(),
+    addProject: (name, rootPath) => service.addProject(name, rootPath),
+    updateProject: (id, patch) => service.updateProject(id, patch),
+    removeProject: (id) => service.removeProject(id),
+    listConversations: () => service.listConversations(),
+    createConversation: (scopeId) => service.createConversation(scopeId),
+    openSession: (binding) => service.openSession(binding),
+    submit: (id, text, requestId) => service.submit(id, text, requestId),
+    abort: (id) => service.abort(id),
+    watch: (id) => service.watch(id, clientId),
+    unwatch: (id) => service.unwatch(id, clientId),
+    listTasks: (scopeId) => service.taskList(scopeId),
+    addTask: (scopeId, title, due) => service.addTaskItem(scopeId, title, due),
+    doneTask: (id, done) => service.doneTaskItem(id, done),
+    memoryDump: (scopeId) => service.memoryDump(scopeId),
+    inboxList: (scopeId) => service.inboxList(scopeId),
+    runList: (scopeId) => service.runList(scopeId),
+    runReport: (id) => service.runReport(id),
+    runDiff: (id) => service.runDiff(id),
+    followUpRun: (id, prompt) => service.followUpRun(id, prompt),
+    landRun: (id) => service.landRun(id),
+    discardRun: (id) => service.discardRun(id),
+    shipRun: (id) => service.shipRun(id),
+    getSettings: () => service.getSettings(),
+    setModel: (model) => service.setModel(model),
+  }) satisfies Handlers;

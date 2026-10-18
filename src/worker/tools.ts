@@ -6,15 +6,20 @@ import {
 import { Type } from '@earendil-works/pi-ai';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
 import type { Db, RunRow } from './db.js';
+import type { DataService } from './data.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
   db: Db;
+  data: DataService;
+  runReport: (id: string) => string;
+  runDiff: (id: string) => Promise<string>;
   /** Dispatch a headless worker run; resolves once the run is queued. */
   dispatch: (input: {
     projectRef: string;
     prompt: string;
     chiefConversationId: string | null;
+    operationId: string;
   }) => Promise<RunRow>;
 }
 
@@ -49,13 +54,11 @@ function resolveScope(
  * every request; tools are the narrow envelope — no shell, no coding tools.
  */
 export function chiefExtension(deps: ChiefDeps) {
-  const { scopes, db } = deps;
+  const { scopes, db, data } = deps;
 
   const preamble = section(
     'preamble',
-    (
-      input,
-    ) => `You are Tian's chief of staff (大内总管) — a personal chief-of-staff agent, not a coding agent.
+    () => `You are Tian's chief of staff (大内总管) — a personal chief-of-staff agent, not a coding agent.
 
 The user is Tian. Answer in the language they use (Chinese by default). Be direct, brief, and concrete.
 
@@ -76,12 +79,18 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
   const memorySection = section('memory', (input) => {
     const scope = db.conversationScope(String(input.conversationId));
     const parts: string[] = [];
+    const pending = (scopeId: string) => {
+      const merge = scopes.memory(scopeId).nextMerge();
+      return merge
+        ? `\nCOMPRESSION DUE: call nap with scope="${scopeId}", lo=${merge.lo}, hi=${merge.hi}. Summarize:\n${merge.source}`
+        : '';
+    };
     const globalWake = scopes.memory(GLOBAL_SCOPE).wake();
-    parts.push(`[global]\n${globalWake}`);
+    parts.push(`[global]\n${globalWake}${pending(GLOBAL_SCOPE)}`);
     if (scope !== GLOBAL_SCOPE) {
       const project = db.getProject(scope);
       parts.push(
-        `[project: ${project?.name ?? scope}]\n${scopes.memory(scope).wake()}`,
+        `[project: ${project?.name ?? scope}]\n${scopes.memory(scope).wake()}${pending(scope)}`,
       );
     }
     return parts.join('\n\n');
@@ -107,7 +116,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       }
       const running = db
         .listRuns(scope)
-        .filter((r) => r.status === 'running' || r.status === 'queued');
+        .filter((r) => ['running', 'queued', 'collecting'].includes(r.status));
       if (running.length > 0)
         lines.push(`active runs: ${running.map((r) => r.id).join(', ')}`);
     } catch {
@@ -126,7 +135,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
   const note = defineTool({
     name: 'note',
     description:
-      "Record one memory: a single line (<=280 chars) of a lasting fact, decision, preference or outcome. You are the only writer; choose target 'global' for facts about Tian, 'project' for facts about the current or a named project.",
+      "Record one memory: a single line (<=280 UTF-8 bytes) of a lasting fact, decision, preference or outcome. You are the only writer; choose target 'global' for facts about Tian, 'project' for facts about the current or a named project.",
     parameters: Type.Object({
       text: Type.String({ description: 'One line, <=280 bytes.' }),
       target: Type.Optional(
@@ -143,10 +152,10 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
           ? GLOBAL_SCOPE
           : resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        const merge = scopes.memory(scope).note(args.text);
+        const merge = data.note(scope, args.text);
         if (merge) {
           return text(
-            `noted in [${scope === GLOBAL_SCOPE ? 'global' : scope}].\n\nCOMPRESSION DUE — before your next action, call nap with lo=${merge.lo} hi=${merge.hi} and a one-line summary of:\n${merge.source}`,
+            `noted in [${scope === GLOBAL_SCOPE ? 'global' : scope}].\n\nCOMPRESSION DUE — before your next action, call nap with scope="${scope}" lo=${merge.lo} hi=${merge.hi} and a one-line summary of:\n${merge.source}`,
           );
         }
         return text(`noted in [${scope === GLOBAL_SCOPE ? 'global' : scope}].`);
@@ -161,8 +170,8 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     description:
       'Answer a pending memory compression: write a one-line summary covering the given range. Call this when note reports a compression due.',
     parameters: Type.Object({
-      lo: Type.Number(),
-      hi: Type.Number(),
+      lo: Type.Integer({ minimum: 0 }),
+      hi: Type.Integer({ minimum: 1 }),
       summary: Type.String({
         description: 'One line summarizing lines lo..hi.',
       }),
@@ -171,10 +180,10 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        const next = scopes.memory(scope).nap(args.lo, args.hi, args.summary);
+        const next = data.nap(scope, args.lo, args.hi, args.summary);
         if (next) {
           return text(
-            `merged ${args.lo}-${args.hi}.\n\nCOMPRESSION DUE — call nap with lo=${next.lo} hi=${next.hi} and a one-line summary of:\n${next.source}`,
+            `merged ${args.lo}-${args.hi}.\n\nCOMPRESSION DUE — call nap with scope="${scope}" lo=${next.lo} hi=${next.hi} and a one-line summary of:\n${next.source}`,
           );
         }
         return text(`merged ${args.lo}-${args.hi}.`);
@@ -204,8 +213,8 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     description:
       'Open a memory summary node into its two halves, down to raw lines.',
     parameters: Type.Object({
-      lo: Type.Number(),
-      hi: Type.Number(),
+      lo: Type.Integer({ minimum: 0 }),
+      hi: Type.Integer({ minimum: 1 }),
       scope: ScopeParam,
     }),
     execute: async (args, api) => {
@@ -235,6 +244,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
 
   const addTask = defineTool({
     name: 'add_task',
+    replay: 'safe',
     description: "Add a todo item to a scope's task list.",
     parameters: Type.Object({
       title: Type.String(),
@@ -243,7 +253,12 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     }),
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      const id = db.addTask(scope, args.title, args.due ?? null);
+      const id = data.addTask(
+        scope,
+        args.title,
+        args.due ?? null,
+        `task:${api.taskId}:${api.callId}`,
+      );
       return text(
         `task #${id} added in [${scope === GLOBAL_SCOPE ? 'global' : scope}].`,
       );
@@ -276,10 +291,11 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
 
   const doneTask = defineTool({
     name: 'done_task',
+    replay: 'safe',
     description: 'Mark a task done by id.',
     parameters: Type.Object({ id: Type.Number() }),
-    execute: async (args) => {
-      db.doneTask(args.id);
+    execute: async (args, api) => {
+      data.doneTask(args.id, true, `done-task:${api.taskId}:${api.callId}`);
       return text(`task #${args.id} done.`);
     },
   });
@@ -290,8 +306,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     parameters: Type.Object({ scope: ScopeParam }),
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      const unread = scopes.unreadMessages(scope);
-      scopes.markInboxRead(scope);
+      const unread = data.checkInbox(scope);
       if (unread.length === 0) return text('(inbox empty)');
       return text(
         unread
@@ -320,13 +335,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     }),
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      const id = scopes.sendMessage(
-        scope,
-        'chief',
-        args.body,
-        args.to,
-        args.thread,
-      );
+      const id = data.sendMessage(scope, args.body, args.to, args.thread);
       return text(
         `message ${id} posted to [${scope === GLOBAL_SCOPE ? 'global' : scope}] inbox.`,
       );
@@ -408,6 +417,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
 
   const dispatch = defineTool({
     name: 'dispatch',
+    replay: 'safe',
     description:
       'Dispatch a task to a worker coding agent in an isolated git worktree of a project. Returns immediately with a run id — you are woken with the report and diffstat when it finishes. Only for work that changes files; answer questions yourself.',
     parameters: Type.Object({
@@ -435,6 +445,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
           projectRef: scope,
           prompt: args.prompt,
           chiefConversationId: String(api.conversationId),
+          operationId: `dispatch:${api.taskId}:${api.callId}`,
         });
         return text(
           `dispatched run ${run.id} on ${run.agentKind} — worktree ${run.worktreePath ?? '(in place, not a git repo)'}. I'll report when it finishes.`,
@@ -443,6 +454,19 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
         return err(`dispatch failed: ${e instanceof Error ? e.message : e}`);
       }
     },
+  });
+
+  const readRunReport = defineTool({
+    name: 'read_run_report',
+    description: 'Read the report of a dispatched run by its ID.',
+    parameters: Type.Object({ id: Type.String() }),
+    execute: async (args) => text(deps.runReport(args.id)),
+  });
+  const readRunDiff = defineTool({
+    name: 'read_run_diff',
+    description: 'Read the Git diff of a dispatched run by its ID.',
+    parameters: Type.Object({ id: Type.String() }),
+    execute: async (args) => text(await deps.runDiff(args.id)),
   });
 
   const listRuns = defineTool({
@@ -488,6 +512,8 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       searchNotes,
       dispatch,
       listRuns,
+      readRunReport,
+      readRunDiff,
     ],
   });
 }

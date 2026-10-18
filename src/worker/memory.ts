@@ -3,11 +3,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { atomicWrite } from './files.js';
 
 /**
  * OptMem-semantics memory, reimplemented in TypeScript.
@@ -69,26 +68,35 @@ export class MemoryStore {
       .toISOString()
       .slice(0, 16)
       .replace('T', ' ');
-    const body = text.replace(/\s+/g, ' ').trim().slice(0, 280);
+    const body = text.replace(/\s+/g, ' ').trim();
     if (body === '') throw new Error('empty memory');
+    if (Buffer.byteLength(body, 'utf8') > 280)
+      throw new Error('memory must be at most 280 UTF-8 bytes');
     appendFileSync(this.logPath, `${stamp} ${body}\n`, 'utf8');
     return this.nextMerge();
   }
 
   /** Store a summary for node lo-hi; the agent writes `summary`, we own the file. */
   nap(lo: number, hi: number, summary: string): MergeDue | null {
-    if (hi - lo < 1 || lo < 0) throw new Error(`bad node ${lo}-${hi}`);
+    if (!Number.isInteger(lo) || !Number.isInteger(hi) || hi - lo < 1 || lo < 0)
+      throw new Error(`bad node ${lo}-${hi}`);
     const size = hi - lo + 1;
     if ((size & (size - 1)) !== 0 || lo % size !== 0)
       throw new Error(`unaligned node ${lo}-${hi}`);
     const lines = this.log();
-    if (hi >= lines.length && size === 2)
+    if (hi >= lines.length)
       throw new Error(`node ${lo}-${hi} covers missing lines`);
-    writeFileSync(
-      this.nodePath(lo, hi),
-      summary.replace(/\s+/g, ' ').trim() + '\n',
-      'utf8',
-    );
+    if (
+      size > 2 &&
+      (!this.hasNode(lo, lo + size / 2 - 1) || !this.hasNode(lo + size / 2, hi))
+    ) {
+      throw new Error(`node ${lo}-${hi} needs both child summaries`);
+    }
+    const body = summary.replace(/\s+/g, ' ').trim();
+    if (!body || Buffer.byteLength(body, 'utf8') > 280)
+      throw new Error('summary must contain 1–280 UTF-8 bytes');
+    // Another chief conversation may already have compressed this immutable range.
+    if (!this.hasNode(lo, hi)) atomicWrite(this.nodePath(lo, hi), body + '\n');
     return this.nextMerge();
   }
 
@@ -215,7 +223,13 @@ export class MemoryStore {
   /** Open node lo-hi into its two halves: summaries where built, raw lines otherwise. */
   zoom(lo: number, hi: number): string {
     const lines = this.log();
-    if (lo < 0 || hi >= lines.length || hi - lo < 1)
+    if (
+      !Number.isInteger(lo) ||
+      !Number.isInteger(hi) ||
+      lo < 0 ||
+      hi >= lines.length ||
+      hi - lo < 1
+    )
       throw new Error(`bad range ${lo}-${hi}`);
     const mid = lo + (hi - lo + 1) / 2 - 1;
     const half = (a: number, b: number): string => {

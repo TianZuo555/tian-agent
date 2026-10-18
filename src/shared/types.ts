@@ -1,4 +1,4 @@
-// Shared types between main, preload and renderer.
+import type { MessageRow } from './messages';
 
 export interface ScopeInfo {
   id: string;
@@ -10,10 +10,27 @@ export interface ScopeInfo {
 
 export interface ProjectSettings {
   autoLand: boolean;
-  agentKind: string;
+  allowInPlace: boolean;
+  agentKind: 'durable-worker';
   runTimeoutMin: number;
   baseBranch: string;
   promptPreamble: string;
+}
+
+export type ProjectPatch = Partial<
+  ProjectSettings & { name: string; rootPath: string }
+>;
+
+export interface SessionBinding {
+  channel: string;
+  externalId: string;
+  scopeId: string;
+}
+
+export interface ServiceInfo {
+  protocolVersion: number;
+  pid: number;
+  startedAt: string;
 }
 
 export interface ConversationInfo {
@@ -43,21 +60,38 @@ export interface InboxItem {
   read: boolean;
 }
 
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'collecting'
+  | 'done'
+  | 'failed'
+  | 'interrupted';
+export type ReviewStatus =
+  | 'pending'
+  | 'landing'
+  | 'landed'
+  | 'shipping'
+  | 'shipped'
+  | 'discarding'
+  | 'discarded';
+
 export interface RunInfo {
   id: string;
   projectId: string;
   conversationId: string | null;
   agentKind: string;
   prompt: string;
+  rootPath: string;
+  baseBranch: string;
+  executionMode: 'worktree' | 'in-place';
   worktreePath: string | null;
   branch: string | null;
-  status:
-    | 'queued'
-    | 'running'
-    | 'done'
-    | 'failed'
-    | 'interrupted'
-    | 'discarded';
+  status: RunStatus;
+  reviewStatus: ReviewStatus;
+  attempt: number;
+  error: string | null;
+  prUrl: string | null;
   reportPath: string | null;
   exitCode: number | null;
   startedAt: string;
@@ -73,8 +107,30 @@ export interface SettingsInfo {
   model: { provider: string; modelId: string };
 }
 
-/** One transcript entry as pushed to the renderer (structural view). */
+export interface ChatSnapshot {
+  rows: MessageRow[];
+  busy: boolean;
+}
+
 export interface ViewPayload {
   conversationId: string;
-  view: unknown; // ConversationView — entries + docs, JSON-safe
+  view: ChatSnapshot;
 }
+
+export interface AppEvents {
+  view: ViewPayload;
+  conversations: ConversationInfo[];
+  tasks: TaskItem[];
+  runs: RunInfo[];
+  inbox: string;
+  memory: string;
+  scopes: ScopeInfo[];
+  settings: SettingsInfo;
+  runtime: { status: 'starting' | 'ready' | 'failed'; error?: string };
+}
+
+export type Emit = <K extends keyof AppEvents>(
+  channel: K,
+  payload: AppEvents[K],
+  clientId?: number,
+) => void;

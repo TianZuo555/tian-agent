@@ -1,14 +1,14 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
-/** Git subprocess helpers for dispatch worktrees. Never throws on exit code —
- * callers inspect `code`; a thrown error means spawn itself failed. */
-export function git(
-  cwd: string,
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
+export interface GitResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+export function git(cwd: string, args: string[]): Promise<GitResult> {
+  return new Promise((resolveResult, reject) => {
     execFile(
       'git',
       ['-C', cwd, ...args],
@@ -18,7 +18,7 @@ export function git(
           reject(error);
           return;
         }
-        resolve({
+        resolveResult({
           code: (error as { code?: number } | null)?.code ?? 0,
           stdout: String(stdout),
           stderr: String(stderr),
@@ -27,104 +27,155 @@ export function git(
     );
   });
 }
-
+async function checked(cwd: string, args: string[]): Promise<string> {
+  const result = await git(cwd, args);
+  if (result.code !== 0)
+    throw new Error(
+      `git ${args[0]}: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  return result.stdout.trim();
+}
 export async function isGitRepo(path: string): Promise<boolean> {
   if (!existsSync(path)) return false;
-  const r = await git(path, ['rev-parse', '--is-inside-work-tree']);
-  return r.code === 0 && r.stdout.trim() === 'true';
+  const result = await git(path, ['rev-parse', '--is-inside-work-tree']);
+  return result.code === 0 && result.stdout.trim() === 'true';
 }
-
-/** Cut a `tian/<runId>` branch off `base` into a fresh worktree. */
 export async function addWorktree(
   rootPath: string,
   base: string,
   runId: string,
   worktreeBase: string,
-): Promise<{ worktreePath: string; branch: string }> {
+) {
   mkdirSync(worktreeBase, { recursive: true });
   const worktreePath = join(worktreeBase, runId);
   const branch = `tian/${runId}`;
-  const r = await git(rootPath, [
-    'worktree',
-    'add',
-    '-b',
-    branch,
-    worktreePath,
-    base,
-  ]);
-  if (r.code !== 0) throw new Error(`git worktree add: ${r.stderr.trim()}`);
+  if (existsSync(worktreePath)) {
+    const actual = await checked(worktreePath, ['branch', '--show-current']);
+    const commonDir = await checked(worktreePath, [
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-common-dir',
+    ]);
+    const expected = await checked(rootPath, [
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-common-dir',
+    ]);
+    if (actual !== branch || resolve(commonDir) !== resolve(expected))
+      throw new Error(`Worktree path is occupied: ${worktreePath}`);
+  } else {
+    await checked(rootPath, [
+      'worktree',
+      'add',
+      '-b',
+      branch,
+      worktreePath,
+      base,
+    ]);
+  }
   return { worktreePath, branch };
 }
 
-/** Commit whatever the worker left in the worktree. Empty tree is fine. */
+/** Retrying collection must not create extra empty commits. */
 export async function commitAll(
   worktreePath: string,
   message: string,
 ): Promise<void> {
-  await git(worktreePath, ['add', '-A']);
-  await git(worktreePath, [
+  await checked(worktreePath, ['add', '-A']);
+  const staged = await git(worktreePath, ['diff', '--cached', '--quiet']);
+  if (staged.code === 0) return;
+  if (staged.code !== 1) throw new Error(`git diff: ${staged.stderr}`);
+  await checked(worktreePath, [
     '-c',
     'user.name=tian-worker',
     '-c',
     'user.email=tian@local',
     'commit',
-    '--allow-empty',
     '-m',
     message,
   ]);
 }
-
-/** `base...branch` diff stat from the main checkout. */
 export async function diffStat(
   rootPath: string,
   base: string,
   branch: string,
 ): Promise<string> {
-  const r = await git(rootPath, ['diff', '--stat', `${base}...${branch}`]);
-  return r.code === 0 ? r.stdout.trim() : `(diff failed: ${r.stderr.trim()})`;
+  return checked(rootPath, ['diff', '--stat', `${base}...${branch}`]);
 }
-
 export async function diff(
   rootPath: string,
   base: string,
   branch: string,
   maxChars = 200_000,
 ): Promise<string> {
-  const r = await git(rootPath, ['diff', `${base}...${branch}`]);
-  if (r.code !== 0) return `(diff failed: ${r.stderr.trim()})`;
-  const out = r.stdout;
-  return out.length > maxChars
-    ? `${out.slice(0, maxChars)}\n… (diff truncated at ${maxChars} chars)`
-    : out;
+  const result = await checked(rootPath, ['diff', `${base}...${branch}`]);
+  return result.length > maxChars
+    ? `${result.slice(0, maxChars)}\n… (diff truncated at ${maxChars} chars)`
+    : result;
+}
+export async function isLanded(
+  rootPath: string,
+  base: string,
+  branch: string,
+): Promise<boolean> {
+  const result = await git(rootPath, [
+    'merge-base',
+    '--is-ancestor',
+    branch,
+    base,
+  ]);
+  if (result.code > 1) throw new Error(`git merge-base: ${result.stderr}`);
+  return result.code === 0;
 }
 
-/** Merge the run branch into the main checkout's current branch. */
+/** A land operation always targets the branch captured at dispatch. */
 export async function merge(
   rootPath: string,
   branch: string,
-): Promise<{ code: number; output: string }> {
-  const r = await git(rootPath, [
+  base: string,
+): Promise<string> {
+  const current = await checked(rootPath, ['branch', '--show-current']);
+  if (current !== base)
+    throw new Error(
+      `Checkout is on ${current || '(detached HEAD)'}; switch to ${base} before landing`,
+    );
+  if (
+    await checked(rootPath, ['status', '--porcelain', '--untracked-files=no'])
+  )
+    throw new Error('Commit or stash tracked changes before landing');
+  return checked(rootPath, [
     'merge',
     '--no-ff',
     '-m',
     `land ${branch}`,
     branch,
   ]);
-  return { code: r.code, output: `${r.stdout}${r.stderr}`.trim() };
 }
-
-/** Remove the worktree and delete its branch. Best-effort. */
 export async function discardWorktree(
   rootPath: string,
   worktreePath: string | null,
   branch: string | null,
 ): Promise<void> {
-  if (worktreePath) {
-    await git(rootPath, ['worktree', 'remove', '--force', worktreePath]).catch(
-      () => {},
-    );
-  }
+  if (worktreePath && existsSync(worktreePath))
+    await checked(rootPath, ['worktree', 'remove', '--force', worktreePath]);
   if (branch) {
-    await git(rootPath, ['branch', '-D', branch]).catch(() => {});
+    const existing = await git(rootPath, [
+      'show-ref',
+      '--verify',
+      '--quiet',
+      `refs/heads/${branch}`,
+    ]);
+    if (existing.code === 0) await checked(rootPath, ['branch', '-D', branch]);
+    else if (existing.code !== 1)
+      throw new Error(`git show-ref: ${existing.stderr}`);
   }
+}
+export function gh(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolveResult, reject) => {
+    execFile('gh', args, { cwd, timeout: 120_000 }, (error, stdout, stderr) =>
+      error
+        ? reject(new Error(String(stderr || error)))
+        : resolveResult(String(stdout).trim()),
+    );
+  });
 }

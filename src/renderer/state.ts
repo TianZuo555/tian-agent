@@ -1,0 +1,349 @@
+import type { TianApi } from '../shared/contracts';
+import type {
+  ChatSnapshot,
+  ConversationInfo,
+  InboxItem,
+  MemoryDump,
+  ProjectPatch,
+  RunInfo,
+  ScopeInfo,
+  SettingsInfo,
+  TaskItem,
+} from '../shared/types';
+
+export type Tab = 'tasks' | 'memory' | 'inbox' | 'runs';
+export interface State {
+  scopes: ScopeInfo[];
+  conversations: ConversationInfo[];
+  activeConversationId: string | null;
+  activeScopeId: string;
+  view: ChatSnapshot | null;
+  tasks: TaskItem[];
+  memory: MemoryDump | null;
+  inbox: InboxItem[];
+  runs: RunInfo[];
+  settings: SettingsInfo | null;
+  tab: Tab;
+  settingsOpen: boolean;
+  loading: boolean;
+  error: string | null;
+  operationError: string | null;
+  runtimeStatus: 'starting' | 'ready' | 'failed';
+}
+
+/** Requests and event subscriptions are scoped to this store's lifetime. */
+export function createAppStore(api: TianApi) {
+  let state: State = {
+    scopes: [],
+    conversations: [],
+    activeConversationId: null,
+    activeScopeId: 'global',
+    view: null,
+    tasks: [],
+    memory: null,
+    inbox: [],
+    runs: [],
+    settings: null,
+    tab: 'tasks',
+    settingsOpen: false,
+    loading: true,
+    error: null,
+    operationError: null,
+    runtimeStatus: 'starting',
+  };
+  const listeners = new Set<() => void>();
+  const versions: Record<string, number> = {};
+  let subscriptions: (() => void)[] = [];
+  let watchedId: string | null = null;
+  let watchQueue = Promise.resolve();
+  let lifetime = 0;
+  const set = (patch: Partial<State>) => {
+    state = { ...state, ...patch };
+    for (const listener of listeners) listener();
+  };
+  const next = (key: string) => (versions[key] = (versions[key] ?? 0) + 1);
+  const error = (reason: unknown) => set({ operationError: String(reason) });
+  const safe = async (action: () => Promise<unknown>) => {
+    try {
+      await action();
+    } catch (reason) {
+      error(reason);
+    }
+  };
+  async function load<
+    K extends
+      | 'scopes'
+      | 'conversations'
+      | 'settings'
+      | 'tasks'
+      | 'memory'
+      | 'inbox'
+      | 'runs',
+  >(key: K, fetch: () => Promise<State[K]>, scopeId?: string): Promise<void> {
+    const version = next(key);
+    const generation = lifetime;
+    const value = await fetch();
+    if (
+      generation === lifetime &&
+      version === versions[key] &&
+      (scopeId === undefined || scopeId === state.activeScopeId)
+    )
+      set({ [key]: value } as Partial<State>);
+  }
+  async function refreshPanels(scopeId = state.activeScopeId): Promise<void> {
+    await Promise.all([
+      load('tasks', () => api.listTasks(scopeId), scopeId),
+      load('memory', () => api.memoryDump(scopeId), scopeId),
+      load('inbox', () => api.inboxList(scopeId), scopeId),
+      load(
+        'runs',
+        () => api.runList(scopeId === 'global' ? null : scopeId),
+        scopeId,
+      ),
+    ]);
+  }
+  async function syncWatch(): Promise<void> {
+    const generation = lifetime;
+    watchQueue = watchQueue
+      .catch(() => {})
+      .then(async () => {
+        if (generation !== lifetime) return;
+        const target = state.activeConversationId;
+        if (watchedId && watchedId !== target) {
+          const previous = watchedId;
+          watchedId = null;
+          await api.unwatch(previous);
+        }
+        if (generation !== lifetime) return;
+        if (
+          target &&
+          watchedId !== target &&
+          target === state.activeConversationId
+        ) {
+          await api.watch(target);
+          watchedId = target;
+        }
+      });
+    await watchQueue;
+  }
+  async function refresh(): Promise<void> {
+    const generation = lifetime;
+    const scopeAtStart = state.activeScopeId;
+    try {
+      await Promise.all([
+        load('scopes', () => api.listScopes()),
+        load('conversations', () => api.listConversations()),
+        load('settings', () => api.getSettings()),
+      ]);
+      if (generation !== lifetime) return;
+      set({ loading: false, error: null, runtimeStatus: 'ready' });
+      await Promise.all([
+        scopeAtStart === state.activeScopeId
+          ? refreshPanels(scopeAtStart)
+          : Promise.resolve(),
+        syncWatch(),
+      ]);
+    } catch (reason) {
+      if (generation === lifetime)
+        set({ loading: false, error: String(reason) });
+    }
+  }
+  async function selectScope(scopeId: string): Promise<void> {
+    const active = state.conversations.find(
+      (conversation) =>
+        conversation.conversationId === state.activeConversationId,
+    );
+    set({
+      activeScopeId: scopeId,
+      activeConversationId:
+        active?.scopeId === scopeId ? state.activeConversationId : null,
+      view: null,
+      tasks: [],
+      memory: null,
+      inbox: [],
+      runs: [],
+      operationError: null,
+    });
+    await Promise.all([refreshPanels(scopeId), syncWatch()]);
+  }
+  async function selectConversation(
+    id: string,
+    scopeId: string,
+  ): Promise<void> {
+    set({
+      activeConversationId: id,
+      activeScopeId: scopeId,
+      view: null,
+      tasks: [],
+      memory: null,
+      inbox: [],
+      runs: [],
+      operationError: null,
+    });
+    await Promise.all([refreshPanels(scopeId), syncWatch()]);
+  }
+
+  const actions = {
+    init(): () => void {
+      if (subscriptions.length) return () => {};
+      lifetime++;
+      subscriptions = [
+        api.on('view', ({ conversationId, view }) => {
+          if (conversationId === state.activeConversationId) set({ view });
+        }),
+        api.on('conversations', (conversations) => {
+          next('conversations');
+          set({ conversations });
+        }),
+        api.on('scopes', (scopes) => {
+          next('scopes');
+          set({ scopes });
+        }),
+        api.on('settings', (settings) => {
+          next('settings');
+          set({ settings });
+        }),
+        api.on('tasks', (tasks) => {
+          next('tasks');
+          set({
+            tasks: tasks.filter((task) => task.scopeId === state.activeScopeId),
+          });
+        }),
+        api.on('runs', (runs) => {
+          next('runs');
+          set({
+            runs: runs.filter(
+              (run) =>
+                state.activeScopeId === 'global' ||
+                run.projectId === state.activeScopeId,
+            ),
+          });
+        }),
+        api.on('memory', (scopeId) => {
+          if (scopeId === state.activeScopeId)
+            void safe(() =>
+              load('memory', () => api.memoryDump(scopeId), scopeId),
+            );
+        }),
+        api.on('inbox', (scopeId) => {
+          if (scopeId === state.activeScopeId)
+            void safe(() =>
+              load('inbox', () => api.inboxList(scopeId), scopeId),
+            );
+        }),
+        api.on('runtime', (runtime) => {
+          set({
+            runtimeStatus: runtime.status,
+            operationError:
+              runtime.status === 'failed'
+                ? (runtime.error ?? 'Runtime unavailable')
+                : null,
+          });
+          if (runtime.status === 'starting') {
+            watchedId = null;
+            set({ view: null });
+          }
+          if (runtime.status === 'ready') void refresh();
+        }),
+      ];
+      void refresh();
+      return () => {
+        lifetime++;
+        for (const unsubscribe of subscriptions) unsubscribe();
+        subscriptions = [];
+        const previous = watchedId;
+        watchedId = null;
+        if (previous) void api.unwatch(previous).catch(() => {});
+      };
+    },
+    refresh,
+    selectScope: (scopeId: string) => safe(() => selectScope(scopeId)),
+    selectConversation: (id: string, scopeId: string) =>
+      safe(() => selectConversation(id, scopeId)),
+    newConversation: (scopeId: string) =>
+      safe(async () => {
+        const conversation = await api.createConversation(scopeId);
+        next('conversations');
+        set({
+          conversations: [
+            conversation,
+            ...state.conversations.filter(
+              (item) => item.conversationId !== conversation.conversationId,
+            ),
+          ],
+        });
+        await selectConversation(conversation.conversationId, scopeId);
+      }),
+    send: (text: string) =>
+      safe(async () => {
+        if (state.activeConversationId && text.trim())
+          await api.submit(state.activeConversationId, text.trim());
+      }),
+    abort: () =>
+      safe(async () => {
+        if (state.activeConversationId)
+          await api.abort(state.activeConversationId);
+      }),
+    addProject: (name: string, rootPath: string) =>
+      safe(async () => {
+        await api.addProject(name, rootPath);
+      }),
+    removeProject: (id: string) =>
+      safe(async () => {
+        await api.removeProject(id);
+      }),
+    addTask: (title: string) =>
+      safe(async () => {
+        await api.addTask(state.activeScopeId, title, null);
+      }),
+    toggleTask: (id: number, done: boolean) =>
+      safe(async () => {
+        await api.doneTask(id, done);
+      }),
+    refreshRuns: () =>
+      load(
+        'runs',
+        () =>
+          api.runList(
+            state.activeScopeId === 'global' ? null : state.activeScopeId,
+          ),
+        state.activeScopeId,
+      ),
+    async followUpRun(id: string, prompt: string) {
+      await api.followUpRun(id, prompt);
+    },
+    async landRun(id: string) {
+      await api.landRun(id);
+    },
+    async discardRun(id: string) {
+      await api.discardRun(id);
+    },
+    async shipRun(id: string) {
+      return api.shipRun(id);
+    },
+    async updateProject(id: string, patch: ProjectPatch) {
+      await api.updateProject(id, patch);
+    },
+    setTab(tab: Tab) {
+      set({ tab });
+    },
+    setSettingsOpen(settingsOpen: boolean) {
+      set({ settingsOpen });
+    },
+    setModel: (provider: string, modelId: string) =>
+      safe(() => api.setModel({ provider, modelId })),
+    clearError() {
+      set({ operationError: null });
+    },
+  };
+  return {
+    getState: () => state,
+    actions,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}

@@ -11,8 +11,7 @@ import {
   getComposerText,
 } from '@/components/ui/composer';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import type { MessageRow, ToolCallRow } from '../messages';
-import { toRows } from '../messages';
+import type { MessageRow, ToolCallRow } from '../../shared/messages';
 import { actions, useStore } from '../store';
 
 function ToolRow({ tool }: { tool: ToolCallRow }) {
@@ -89,7 +88,7 @@ export function ChatView() {
 
   const conv = conversations.find((c) => c.conversationId === activeId) ?? null;
   const scope = conv ? scopes.find((s) => s.id === conv.scopeId) : null;
-  const { rows, busy } = toRows(view ?? undefined);
+  const { rows, busy } = view ?? { rows: [], busy: false };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on every view update
   useEffect(() => {
