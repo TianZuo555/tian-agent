@@ -162,9 +162,10 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 | `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录         |
 | `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入               |
 | `worker/memory.ts`             | SQLite 记忆、来源与版本、摘要树                   |
+| `worker/memory-worker.ts` | 后台候选提取（F03）：触发、游标、启发式提取器 |
 | `worker/events.ts`             | 业务事件与审计日志（`events` 表）                 |
-| `worker/improvements.ts`       | 改进日志、系统异常指纹去重、提升为 Task           |
-| `worker/tools-improvements.ts` | 总管工具：log_improvement、list_improvements      |
+| `worker/improvements.ts` | 改进日志、系统异常指纹去重、提升为 Task |
+| `worker/tools-improvements.ts` | 总管工具：log_improvement、list_improvements |
 | `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索   |
 | `worker/tools-history.ts`      | 总管检索工具：search_history、read_history        |
 | `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令          |
@@ -192,8 +193,8 @@ Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可�
 
 表结构（`src/worker/memory.ts`）：
 
-- `memories`：每条记忆带 `seq`（Scope 内不可变序号，也是摘要树叶位置）、`kind`、`source_type`/`source_ref`、`trust_level`/`confidence`、`status`（active/superseded/deleted）。正文单行，最多 280 UTF-8 字节。
-- `memory_versions`：追加式版本记录（create/supersede/delete/import，含操作者、原因与前后内容），支持审计与恢复。
+- `memories`：每条记忆带 `seq`（Scope 内不可变序号，也是摘要树叶位置）、`kind`、`source_type`/`source_ref`、`trust_level`/`confidence`、`status`（candidate/active/superseded/deleted；candidate 另有 `supersedes` 指向被取代目标）。正文单行，最多 280 UTF-8 字节。
+- `memory_versions`：追加式版本记录（create/promote/supersede/delete/import，含操作者、原因与前后内容），支持审计与恢复。
 - `memory_nodes`：对齐二叉摘要树（`(scope, lo, hi)`）；记忆被取代或删除时，覆盖它的节点标记 stale，Core Memory 下探到子节点或原始行，并重新排入压缩队列。
 - `memory_fts`：FTS5 trigram 全文索引（中文可检索；少于 3 字符的查询回退为 LIKE 子串匹配），默认只查有效记忆，`include_history` 查历史。
 
@@ -208,9 +209,19 @@ Core Memory（`wake`）按 Token 预算渲染：默认每 Scope 1500 tokens，�
 
 首次打开某 Scope 时，若存在旧版 `LOG.txt` / `TREE/`，一次性事务导入（seq = 行号，来源标记 legacy、可信度 agent_inferred）并移入 `memory/legacy/`；之后数据库是唯一写入来源，`MEMORY.md` 永远只读，供 Worker 与人直接阅读。
 
-项目记忆位于 `<project root>/memory/`；全局记忆位于 `<dataDir>/scopes/global/memory/`。较长内容存入 `<scope root>/notes/` 的 Markdown 文档。UI 中用户可直接修订或删除记忆（`memoryRevise` / `memoryForget`，操作者为 user），全部历史保留在版本记录中。
+项目记忆位于 `<project root>/memory/`；全局记忆位于 `<dataDir>/scopes/global/memory/`。较长内容存入 `<scope root>/notes/` 的 Markdown 文档。UI 中用户可直接修订、晋升或删除记忆（`memoryRevise` / `memoryPromote` / `memoryDismiss`，操作者为 user），全部历史保留在版本记录中。
 
-记什么、如何摘要由总管模型负责。当前没有向量索引、语义去重或独立后台压缩服务。
+### 自动记忆提取（F03）
+
+`worker/memory-worker.ts` 在常驻服务内后台运行，不占用总管对话回合：Task 完成、会话空闲（watch 到 busy→idle，另有 5 分钟兑底 sweep）、用户纠正（`revise` / `forget` 强制触发）时，按 Scope 游标增量读取 History 派生索引，经 Extract → Classify → Deduplicate（与 `memory_fts` 比对）→ Resolve Conflicts → Persist 生成候选记忆。自动触发有 30 秒最小间隔节流；服务关闭/维护时暂停（`isPaused`）。
+
+- 候选一律为 `candidate` 状态、trust = agent_inferred，绝不进入 `wake()` 渲染与只读导出；提取与入库在同一事务，提取器抛异常则整体回滚、游标不动。
+- 候选与 active 记忆同 kind 且措辞高度重叠时记为取代候选（`supersedes`）；promote 时同事务取代旧记忆，矛盾不会同时留在 Core Memory。
+- dismiss 后同一来源不再重复提取（去重覆盖已删除记忆）。
+- 提取器是可注入接口 `MemoryExtractor`，默认为确定性启发式（中英文模式表见源码），可离线测试；接 Magpie 模型的位置已预留但未接（PRD 问题 6 未决）。
+- 每轮提取记录在 `memory_worker_runs`（触发原因、来源数、候选数、去重数），并写入 `events`（`memory.extracted`）。
+
+记什么、如何摘要由总管模型负责；候选的取舍由用户决定。当前没有向量索引，后台接管 `nap` 压缩（F04 Dreaming）仍未实现。
 
 ## 改进日志
 

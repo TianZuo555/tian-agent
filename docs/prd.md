@@ -94,7 +94,7 @@
 | Agent Orchestrator    | `worker/service.ts`、`worker/runs.ts`                        | Task 生命周期、Goal Conversation（M2） |
 | Agent Runtime Adapter | `worker/agents.ts`                                           | —                                      |
 | Memory Service        | `worker/memory.ts`（文件）                                   | SQLite Memory、History 索引（M1）      |
-| Memory Worker         | —                                                            | M4                                     |
+| Memory Worker         | `worker/memory-worker.ts`（候选提取，确定性启发式）          | 接入模型提取器待问题 6                 |
 | Goal Store            | `worker/db.ts` 的 `tasks`                                    | `goals`、Task 演进（M2）               |
 | Scheduler             | 60 秒 Inbox 扫描定时器                                       | `schedules` + 调度器（M2）             |
 | Skill Registry        | —                                                            | M5                                     |
@@ -161,13 +161,13 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 - History 增长不使新 Conversation 的 Prompt 线性增长。
 - 常规本地查询 p95 < 300ms（不含模型）。
 
-### 4.4 F03 — 自动记忆提取　P1（M4）　【缺失】
+### 4.4 F03 — 自动记忆提取　P1（M4）　【部分】
 
-独立 Memory Worker 在 Task 完成、Conversation 空闲、压缩前、用户纠正时，从 History 中提取候选 Memory：`Events → Extract → Classify → Deduplicate → Resolve Conflicts → Persist`。
+现状：`worker/memory-worker.ts` 在常驻服务内运行后台提取（不占用 Chief 对话回合）。触发时机：Task 完成（`complete_task` / `doneTask`）、会话空闲（watch 到 busy→idle，另有 5 分钟兜底 sweep）、用户纠正（`revise` / `forget` 强制触发，30 秒最小间隔节流，服务关闭/维护时暂停）。流程：Collect（按 Scope 游标增量取 `history_entries`）→ Extract → Classify → Deduplicate（与 `memory_fts` 比对既有记忆）→ Resolve Conflicts（与 active 记忆同 kind 且措辞高度重叠时生成取代候选）→ Persist（单事务，提取器抛异常则回滚且游标不前进）。提取器为可注入接口 `MemoryExtractor`，默认实现是确定性启发式（离线可测）；接 Magpie 模型的位置已预留但未接（问题 6 未决）。
 
-优先：稳定偏好、项目决策、环境配置、问题与解法、有复用价值的经验。不记：闲聊、未证实推测、重复 Tool 输出、外部内容中的指令、临时状态。
+优先：稳定偏好、项目决策、环境配置、问题与解法、有复用价值的经验。不记：闲聊、未证实推测、重复 Tool 输出、外部内容中的指令、临时状态（启发式模式表见 `memory-worker.ts`）。
 
-自动提取的 Memory 可信度为"Agent 推断"，进入候选状态，不直接进入 Core Memory。
+自动提取的 Memory 可信度为"Agent 推断"，进入 candidate 状态，不直接进入 Core Memory；用户在 Memory 面板 promote（转 active，trust 不变；若候选与 active 记忆矛盾则同事务取代旧记忆）或 dismiss（标记删除且不再重复提取）。
 
 ### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【缺失】
 
@@ -315,6 +315,7 @@ Skill 候选、更新、版本、人工审批、按任务匹配加载、测试�
 | `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md) |
 | `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                        |
 | `events`                                        | 新增 | 业务事件与审计                                          |
+| `memory_worker_runs`                            | 新增 | Memory Worker 提取轮次审计（触发原因、候选计数）        |
 | `goals`、`schedules`、`approvals`               | 新增 |                                                         |
 | `skills`                                        | M5   |                                                         |
 
@@ -406,16 +407,16 @@ MVP 暂不实现：自动 Dreaming、向量检索、Skill、多 Agent 自主协�
 
 ## 13. 设计问题
 
-| #   | 问题                               | 结论                                                                                     |
-| --- | ---------------------------------- | ---------------------------------------------------------------------------------------- |
-| 1   | Always-on Runtime 是否独立后台进程 | **已决**：是，launchd 常驻服务（已实现）                                                 |
-| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，摘要树压缩，会话内快照                       |
-| 3   | History 是否复用 Pi 原生存储       | **建议**：Pi 为唯一来源，`tian.db` 建可重建的派生 FTS 索引                               |
-| 4   | 多 Gateway 并发执行同一任务        | **建议**：只有常驻服务执行，渠道只提交；`dedupe_key` + Durable 去重                      |
-| 5   | 权限按 Agent / Goal / Task 授权    | **建议**：Goal 声明允许的操作类别，每次受控操作单独审批                                  |
-| 6   | Memory Worker 是否用廉价模型       | **未决**（M4）：通过 Magpie 可单独配置模型                                               |
-| 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量 |
-| 8   | Worker 的写权限如何真正受限        | **未决**：MVP 以 worktree + 审批 Land/Ship 为边界；沙箱或去除推送凭据另行评估            |
+| #   | 问题                               | 结论                                                                                                                             |
+| --- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Always-on Runtime 是否独立后台进程 | **已决**：是，launchd 常驻服务（已实现）                                                                                         |
+| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，摘要树压缩，会话内快照                                                               |
+| 3   | History 是否复用 Pi 原生存储       | **建议**：Pi 为唯一来源，`tian.db` 建可重建的派生 FTS 索引                                                                       |
+| 4   | 多 Gateway 并发执行同一任务        | **建议**：只有常驻服务执行，渠道只提交；`dedupe_key` + Durable 去重                                                              |
+| 5   | 权限按 Agent / Goal / Task 授权    | **建议**：Goal 声明允许的操作类别，每次受控操作单独审批                                                                          |
+| 6   | Memory Worker 是否用廉价模型       | **未决**（M4）：通过 Magpie 可单独配置模型；F03 现用确定性启发式提取器，`MemoryExtractor` 接口已预留接入点，接入与否待此问题决定 |
+| 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量                                         |
+| 8   | Worker 的写权限如何真正受限        | **未决**：MVP 以 worktree + 审批 Land/Ship 为边界；沙箱或去除推送凭据另行评估                                                    |
 
 问题 2–5、7 应在 M2 结束前形成 ADR。
 
