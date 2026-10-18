@@ -56,7 +56,7 @@
 | Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                              |
 | Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                 |
 | Memory                  | 跨会话保留的事实与经验              | 长期       | 【部分】OptMem 文件，无来源/版本（[ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)）  |
-| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批（M5）                                                     |
+| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批（M5）                                                    |
 
 约束：
 
@@ -97,7 +97,7 @@
 | Memory Worker         | —                                                            | M4                                     |
 | Goal Store            | `worker/db.ts` 的 `tasks`                                    | `goals`、Task 演进（M2）               |
 | Scheduler             | 60 秒 Inbox 扫描定时器                                       | `schedules` + 调度器（M2）             |
-| Skill Registry         | `worker/skills.ts`                                           | 按任务语义匹配、模型提取器（M5+）      |
+| Skill Registry        | `worker/skills.ts`                                           | 按任务语义匹配、模型提取器（M5+）      |
 | Approval Service      | 仅 UI 手动 Land/Ship                                         | `approvals` + 受控操作（M3）           |
 | Frontend              | React 三栏 shell（[ADR 0001](adr/0001-three-pane-shell.md)） | Goal 管理、Task Board、审批（M2–M3）   |
 
@@ -310,17 +310,17 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 `tian.db`（服务独占写入）：
 
-| 表                                              | 状态 | 说明                                                    |
-| ----------------------------------------------- | ---- | ------------------------------------------------------- |
-| `projects`、`conversations`、`channel_sessions` | 已有 | Scope、会话与渠道绑定                                   |
-| `tasks`                                         | 演进 | 增加 Goal、负责方、状态机、去重键                       |
-| `runs`、`run_attempts`、`agent_messages`        | 已有 | 增加 `runs.task_id`                                     |
-| `inbox`、`notifications`、`operations`          | 已有 | 通知增加 Goal 目标与去重 fingerprint                    |
-| `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md) |
-| `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                        |
-| `events`                                        | 新增 | 业务事件与审计                                          |
-| `goals`、`schedules`、`approvals`               | 新增 |                                                         |
-| `skills`                                        | 已有 | M5：多版本、状态机与来源引用（[ADR 0009](adr/0009-skill-registry-human-approval-gate.md)）                |
+| 表                                              | 状态 | 说明                                                                                       |
+| ----------------------------------------------- | ---- | ------------------------------------------------------------------------------------------ |
+| `projects`、`conversations`、`channel_sessions` | 已有 | Scope、会话与渠道绑定                                                                      |
+| `tasks`                                         | 演进 | 增加 Goal、负责方、状态机、去重键                                                          |
+| `runs`、`run_attempts`、`agent_messages`        | 已有 | 增加 `runs.task_id`                                                                        |
+| `inbox`、`notifications`、`operations`          | 已有 | 通知增加 Goal 目标与去重 fingerprint                                                       |
+| `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)                                    |
+| `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                                                           |
+| `events`                                        | 新增 | 业务事件与审计                                                                             |
+| `goals`、`schedules`、`approvals`               | 新增 |                                                                                            |
+| `skills`                                        | 已有 | M5：多版本、状态机与来源引用（[ADR 0009](adr/0009-skill-registry-human-approval-gate.md)） |
 
 `pi-session.sqlite`：Pi Durable 会话与 transcript，History 的唯一来源。
 

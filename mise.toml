@@ -1,0 +1,4 @@
+# Verification gate: everything must be green before delivery.
+[tasks.verify]
+description = "Typecheck, lint, and test (no model calls)"
+run = "pnpm verify"
