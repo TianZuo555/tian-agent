@@ -13,10 +13,10 @@
 
 ## 桌面客户端
 
-- 主导航：Chat、Goals、Inbox、Log 四个视图。
-- Context Pane：Tasks / Runs / Memory / Inbox 标签页。Memory 面板区分有效记忆与候选，可直接晋升、驳回、修订（`memoryPromote` / `memoryDismiss` / `memoryRevise`）。
+- 主导航：Chat、Goals、Skills、Inbox 四个视图；侧栏底部的齿轮打开整页 Settings。
+- Context Pane：Tasks / Runs / Memory 标签页。Memory 面板区分有效记忆与候选，可直接晋升、驳回、修订（`memoryPromote` / `memoryDismiss` / `memoryRevise`）。
 - ⌘K 命令面板：新建会话、切换视图、开关 Context Pane。
-- 设置：模型选择、用量统计热力图、服务与升级（见 [service.md](service.md)）。
+- Settings 页：模型选择与 Gateway 状态、用量统计热力图、改进日志（Log）、服务与升级（见 [service.md](service.md)）。
 - 聊天渲染：Streamdown 输出 Markdown，Mermaid 图表按需懒加载。
 - App 组件必须通过 oxlint 的 `jsx-a11y` 规则（error 级，见 `.oxlintrc.json`）。
 

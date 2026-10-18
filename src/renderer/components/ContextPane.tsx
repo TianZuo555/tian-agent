@@ -15,7 +15,6 @@ import {
   Plus,
   Stack,
   Trash,
-  Tray,
   WarningCircle,
   XCircle,
 } from '@phosphor-icons/react';
@@ -45,13 +44,12 @@ import { CountPulse, EASE } from './motion-primitives';
 import type { MemoryItem, RunInfo } from '@/shared/types';
 import { actions, useStore } from '../store';
 
-type PaneTab = 'tasks' | 'runs' | 'memory' | 'inbox';
+type PaneTab = 'tasks' | 'runs' | 'memory';
 
 const TABS: { id: PaneTab; label: string; icon: Icon }[] = [
   { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'runs', label: 'Runs', icon: GitMerge },
   { id: 'memory', label: 'Memory', icon: Stack },
-  { id: 'inbox', label: 'Inbox', icon: Tray },
 ];
 
 /** Discarded/landed/shipped runs read as terminal, whatever status they had. */
@@ -963,50 +961,6 @@ function ForgetMemoryForm({
   );
 }
 
-function InboxPanel() {
-  const inbox = useStore((s) => s.inbox);
-  const reduce = useReducedMotion();
-  return (
-    <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
-      <div className="flex flex-col gap-1.5 p-1.5">
-        {inbox.length === 0 && (
-          <EmptyPanel
-            icon={Tray}
-            title="Inbox is empty"
-            hint="Messages from agents and runs land here."
-          />
-        )}
-        <AnimatePresence initial={false}>
-          {inbox.map((m) => (
-            <motion.div
-              layout={!reduce}
-              key={m.id}
-              initial={reduce ? false : { opacity: 0, y: -3 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduce ? undefined : { opacity: 0, height: 0 }}
-              transition={{ duration: 0.18, ease: EASE }}
-              className={`rounded-lg border px-2 py-1.5 text-[11px] ${
-                m.read
-                  ? 'border-border text-content-secondary'
-                  : 'border-border-sky/40 bg-surface-sky/20 text-foreground'
-              }`}
-            >
-              <div className="mb-1 flex items-center gap-1 font-mono text-[9.5px] text-content-secondary">
-                <span className="truncate">{m.from}</span>
-                {m.to && <span>→ {m.to}</span>}
-                <span className="ml-auto shrink-0">
-                  {m.ts.slice(5, 16).replace('T', ' ')}
-                </span>
-              </div>
-              <div className="whitespace-pre-wrap break-words">{m.body}</div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
-    </ScrollArea>
-  );
-}
-
 /**
  * Right-hand context pane, Codex-style: a segmented tab strip that swaps one
  * inspector panel at a time, with the run list drilling into run detail.
@@ -1016,7 +970,6 @@ export function ContextPane() {
   const scopes = useStore((s) => s.scopes);
   const tasks = useStore((s) => s.tasks);
   const runs = useStore((s) => s.runs);
-  const inbox = useStore((s) => s.inbox);
   const [tab, setTab] = useState<PaneTab>('tasks');
   const reduce = useReducedMotion();
 
@@ -1026,7 +979,6 @@ export function ContextPane() {
     tasks: tasks.filter((t) => t.status === 'pending').length,
     runs: runs.filter(isLive).length,
     memory: (memory?.items ?? []).filter((m) => m.status === 'active').length,
-    inbox: inbox.filter((m) => !m.read).length,
   };
 
   return (
@@ -1143,7 +1095,6 @@ export function ContextPane() {
           {tab === 'tasks' && <TasksPanel />}
           {tab === 'runs' && <RunsPanel />}
           {tab === 'memory' && <MemoryPanel />}
-          {tab === 'inbox' && <InboxPanel />}
         </motion.div>
       </AnimatePresence>
     </aside>

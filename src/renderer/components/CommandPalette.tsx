@@ -4,7 +4,6 @@ import {
   ChatCircleDots,
   Folder,
   Gear,
-  Notebook,
   Lightning,
   SidebarSimple,
   Target,
@@ -94,11 +93,11 @@ export function CommandPalette() {
         run: go('inbox'),
       },
       {
-        value: 'go log',
-        label: 'Go to Log',
-        shortcut: '⌘5',
-        icon: Notebook,
-        run: go('log'),
+        value: 'go settings',
+        label: 'Go to Settings',
+        shortcut: '⌘,',
+        icon: Gear,
+        run: go('settings'),
       },
       {
         value: 'toggle context pane',
@@ -107,16 +106,6 @@ export function CommandPalette() {
         icon: SidebarSimple,
         run: () => {
           actions.setContextOpen(!contextOpen);
-          close();
-        },
-      },
-      {
-        value: 'open settings',
-        label: 'Open settings',
-        shortcut: '⌘,',
-        icon: Gear,
-        run: () => {
-          actions.setSettingsOpen(true);
           close();
         },
       },

@@ -24,8 +24,8 @@ const GoalsView = lazy(() =>
 const SkillsView = lazy(() =>
   import('./NavViews').then((m) => ({ default: m.SkillsView })),
 );
-const LogView = lazy(() =>
-  import('./LogView').then((m) => ({ default: m.LogView })),
+const SettingsView = lazy(() =>
+  import('./SettingsView').then((m) => ({ default: m.SettingsView })),
 );
 const ContextPane = lazy(() =>
   import('./ContextPane').then((m) => ({ default: m.ContextPane })),
@@ -128,7 +128,7 @@ function BannerBody({
         size="xs"
         variant="ghost"
         className="shrink-0 text-content-secondary"
-        onClick={() => actions.setSettingsOpen(true)}
+        onClick={() => actions.setNav('settings')}
       >
         服务设置
       </Button>
@@ -182,9 +182,9 @@ function MainPane() {
             <Suspense fallback={null}>
               <SkillsView />
             </Suspense>
-          ) : nav === 'log' ? (
+          ) : nav === 'settings' ? (
             <Suspense fallback={null}>
-              <LogView />
+              <SettingsView />
             </Suspense>
           ) : (
             <Suspense fallback={null}>

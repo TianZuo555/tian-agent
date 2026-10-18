@@ -26,7 +26,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import type {
   ImprovementKind,
@@ -132,24 +131,6 @@ function sourceLabel(entry: ImprovementSummary): string {
   if (entry.source === 'user') return 'You';
   if (entry.source === 'chief') return 'Chief';
   return 'System';
-}
-
-function Header({ count, action }: { count: number; action: React.ReactNode }) {
-  return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 px-4 backdrop-blur-md [-webkit-app-region:drag]">
-      <span
-        aria-hidden="true"
-        className="flex size-5 shrink-0 items-center justify-center rounded-md bg-secondary text-content-secondary"
-      >
-        <Notebook size={12} />
-      </span>
-      <h1 className="font-medium text-[13px]">Log</h1>
-      <span className="font-mono text-[9.5px] text-content-disabled">
-        improvement log · {count} open
-      </span>
-      <div className="ml-auto [-webkit-app-region:no-drag]">{action}</div>
-    </header>
-  );
 }
 
 function SectionLabel({
@@ -555,8 +536,11 @@ function NewEntryDialog({
   );
 }
 
-/** The triage surface for product observations and automatically caught issues. */
-export function LogView() {
+/**
+ * The triage surface for product observations and automatically caught
+ * issues. Rendered inside Settings, so it owns no page chrome or scroll area.
+ */
+export function ImprovementLog() {
   const improvements = useStore((s) => s.improvements);
   const details = useStore((s) => s.improvementDetails);
   const scopes = useStore((s) => s.scopes);
@@ -600,25 +584,12 @@ export function LogView() {
   };
 
   return (
-    <main
+    <div
+      role="group"
       aria-label="Improvement log"
-      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+      className="flex flex-col gap-4"
     >
-      <Header
-        count={open}
-        action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setDialogOpen(true)}
-          >
-            <Plus size={12} />
-            New entry
-          </Button>
-        }
-      />
-
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-border border-b px-4 py-2">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
           {STATUS_FILTERS.map((filter) => (
             <FilterChip
@@ -641,7 +612,19 @@ export function LogView() {
             </FilterChip>
           ))}
         </div>
-        <div className="ms-auto flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
+        <Button
+          variant="outline"
+          size="sm"
+          className="ms-auto"
+          onClick={() => setDialogOpen(true)}
+        >
+          <Plus size={12} />
+          New entry
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
           <FilterChip active={allScopes} onClick={() => setAllScopes(true)}>
             All scopes
           </FilterChip>
@@ -649,80 +632,74 @@ export function LogView() {
             {scopeLabel(scopes, activeScopeId)}
           </FilterChip>
         </div>
+        <div className="ms-auto flex items-baseline gap-3 font-mono text-[10px] text-content-disabled">
+          <span>{open} open</span>
+          <span>{promoted} promoted</span>
+          <span>{improvements.length} total</span>
+        </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
-        <div className="mx-auto w-full max-w-2xl px-5 py-6">
-          <div className="mb-5 flex items-baseline gap-3 font-mono text-[10px] text-content-disabled">
-            <span>{open} open</span>
-            <span>{promoted} promoted</span>
-            <span>{improvements.length} total</span>
+      {groups.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-6 py-10 text-center">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-secondary text-content-secondary">
+            <Notebook size={16} />
+          </span>
+          <div className="flex flex-col gap-1">
+            <p className="text-[13px] text-foreground">
+              {improvements.length === 0
+                ? 'Nothing logged yet.'
+                : 'No entries match this view.'}
+            </p>
+            <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
+              {improvements.length === 0
+                ? 'Log a product issue, friction point, idea, or win. The Chief also records observations while it works.'
+                : 'Try a different status, kind, or scope filter.'}
+            </p>
           </div>
-
-          {groups.length === 0 ? (
-            <div className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-12 text-center">
-              <span className="flex size-9 items-center justify-center rounded-xl bg-secondary text-content-secondary">
-                <Notebook size={16} />
-              </span>
-              <div className="flex flex-col gap-1">
-                <p className="text-[13px] text-foreground">
-                  {improvements.length === 0
-                    ? 'Nothing logged yet.'
-                    : 'No entries match this view.'}
-                </p>
-                <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
-                  {improvements.length === 0
-                    ? 'Log a product issue, friction point, idea, or win. The Chief also records observations while it works.'
-                    : 'Try a different status, kind, or scope filter.'}
-                </p>
-              </div>
-              <Button size="sm" onClick={() => setDialogOpen(true)}>
-                <Plus size={12} />
-                New entry
-              </Button>
-            </div>
-          ) : (
-            groups.map((group) => (
-              <section
-                key={group.status}
-                aria-label={`${STATUS_META[group.status].label} entries`}
-                className="mb-7"
-              >
-                <SectionLabel
-                  label={STATUS_META[group.status].label}
-                  count={group.entries.length}
-                  tone={
-                    group.status === 'open'
-                      ? 'warning'
-                      : group.status === 'promoted'
-                        ? 'brand'
-                        : group.status === 'resolved'
-                          ? 'success'
-                          : 'neutral'
-                  }
-                />
-                <ul className="flex flex-col gap-1.5">
-                  <AnimatePresence initial={false}>
-                    {group.entries.map((entry) => (
-                      <EntryRow
-                        key={entry.id}
-                        entry={entry}
-                        scopes={scopes}
-                        detail={details[entry.id]}
-                        expanded={expanded === entry.id}
-                        onToggle={() => toggle(entry)}
-                        reduce={Boolean(reduce)}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </ul>
-              </section>
-            ))
-          )}
+          <Button size="sm" onClick={() => setDialogOpen(true)}>
+            <Plus size={12} />
+            New entry
+          </Button>
         </div>
-      </ScrollArea>
+      ) : (
+        groups.map((group) => (
+          <section
+            key={group.status}
+            aria-label={`${STATUS_META[group.status].label} entries`}
+          >
+            <SectionLabel
+              label={STATUS_META[group.status].label}
+              count={group.entries.length}
+              tone={
+                group.status === 'open'
+                  ? 'warning'
+                  : group.status === 'promoted'
+                    ? 'brand'
+                    : group.status === 'resolved'
+                      ? 'success'
+                      : 'neutral'
+              }
+            />
+            <ul className="flex flex-col gap-1.5">
+              <AnimatePresence initial={false}>
+                {group.entries.map((entry) => (
+                  <EntryRow
+                    key={entry.id}
+                    entry={entry}
+                    scopes={scopes}
+                    detail={details[entry.id]}
+                    expanded={expanded === entry.id}
+                    onToggle={() => toggle(entry)}
+                    reduce={Boolean(reduce)}
+                  />
+                ))}
+              </AnimatePresence>
+            </ul>
+          </section>
+        ))
+      )}
 
       <NewEntryDialog open={dialogOpen} onOpenChange={setDialogOpen} />
-    </main>
+    </div>
   );
 }

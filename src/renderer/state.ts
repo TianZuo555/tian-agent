@@ -21,9 +21,8 @@ import type {
   TaskItem,
 } from '../shared/types';
 
-export type Tab = 'tasks' | 'memory' | 'inbox' | 'runs';
 /** Primary destination chosen in the left rail. */
-export type Nav = 'chat' | 'goals' | 'skills' | 'inbox' | 'log';
+export type Nav = 'chat' | 'goals' | 'skills' | 'inbox' | 'settings';
 export interface State {
   scopes: ScopeInfo[];
   conversations: ConversationInfo[];
@@ -41,10 +40,8 @@ export interface State {
   skills: SkillItem[];
   settings: SettingsInfo | null;
   catalog: ModelCatalog | null;
-  tab: Tab;
   nav: Nav;
   contextOpen: boolean;
-  settingsOpen: boolean;
   paletteOpen: boolean;
   loading: boolean;
   error: string | null;
@@ -71,10 +68,8 @@ export function createAppStore(api: TianApi) {
     skills: [],
     settings: null,
     catalog: null,
-    tab: 'tasks',
     nav: 'chat',
     contextOpen: true,
-    settingsOpen: false,
     paletteOpen: false,
     loading: true,
     error: null,
@@ -488,9 +483,6 @@ export function createAppStore(api: TianApi) {
     async updateProject(id: string, patch: ProjectPatch) {
       await api.updateProject(id, patch);
     },
-    setTab(tab: Tab) {
-      set({ tab });
-    },
     setNav(nav: Nav) {
       set({ nav });
     },
@@ -501,9 +493,6 @@ export function createAppStore(api: TianApi) {
       const catalog = await api.refreshModels();
       set({ catalog });
       return catalog;
-    },
-    setSettingsOpen(settingsOpen: boolean) {
-      set({ settingsOpen });
     },
     setPaletteOpen(paletteOpen: boolean) {
       set({ paletteOpen });

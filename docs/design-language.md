@@ -71,18 +71,19 @@ shadcn/coss 需要的 `--background` / `--foreground` / `--muted` / `--primary` 
 
 ## 组件形态
 
-| 组件     | 做法                                                                                                                                                                                                                                                            |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 侧栏     | 顶部品牌标记（黑白渐变 + 柔光）、New conversation 主按钮（`⌘N`）、Chat/Goals/Inbox 导航、可折叠 Projects、会话搜索、底部服务状态。选中项用共享 `layoutId` 的滑动 pill + 反相填充图标；会话行再加一条 2px 墨色/纸白左标。底部状态点用 foreground，不再使用绿色。 |
-| 命令面板 | `⌘K` 打开，搜索会话、切换 scope、跳转页面、打开设置、刷新模型。分组用图标 + 右侧 mono 快捷键；高亮项左侧 2px 墨色/纸白标。                                                                                                                                      |
-| 对话     | 助手消息无气泡，左上角 20px 品牌标记 + `TIAN` mono 标签；hover 出现复制按钮。用户消息右对齐、`surface-secondary`、圆角 12px。                                                                                                                                   |
-| 工具调用 | **chip**：图标（按工具类型映射）+ 名称 + 状态（运行中转圈 / 成功实心勾 / 失败警告），可展开看 args 和 output；超过 2 个收成 “N tool calls” 汇总行。                                                                                                             |
-| Markdown | `streamdown`，`animated` + `isAnimating` 跟随流式状态，未闭合语法也能正确渲染；控件图标覆盖为 Phosphor。                                                                                                                                                        |
-| 输入框   | 双行结构：textarea + 发送/停止；聚焦时上浮 1px、反相光环、底部展开 `↵ send · ⇧↵ new line` 提示。发送按钮在可发送时用黑白渐变，停止按钮带呼吸环。                                                                                                                |
-| 空状态   | 品牌标记 / 轨道光球 + 一句标题 + 一句解释 + 可点击建议（Plan my day / Review goals / Workspace check）。欢迎页给 New conversation + Browse（⌘K）。                                                                                                              |
-| 右栏     | 顶部四段 tab（Tasks / Runs / Memory / Inbox），共享 `layoutId` 的滑动 pill，图标选中填充；面板切换 cross-fade；Run 列表 → 详情用横向滑动。                                                                                                                      |
-| Diff     | `@pierre/diffs`，unified + bars 指示器 + `line-info-basic` 折叠分隔，主题跟随系统明暗。                                                                                                                                                                         |
-| 服务状态 | 侧栏底部：绿色呼吸点 + mono 状态；断开/连接中切到 warning 色。                                                                                                                                                                                                  |
+| 组件     | 做法                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 侧栏     | 顶部品牌标记（黑白渐变 + 柔光）、New conversation 主按钮（`⌘N`）、Chat/Goals/Skills/Inbox 导航、可折叠 Projects、会话搜索、底部服务状态与 Settings 齿轮。每个 scope 的会话只展开前 5 条，其余收进 `Show more`；选中的会话始终可见。选中项用共享 `layoutId` 的滑动 pill + 反相填充图标；会话行再加一条 2px 墨色/纸白左标。底部状态点用 foreground，不再使用绿色。 |
+| 命令面板 | `⌘K` 打开，搜索会话、切换 scope、跳转页面（含 Settings）、刷新模型。分组用图标 + 右侧 mono 快捷键；高亮项左侧 2px 墨色/纸白标。                                                                                                                                                                                                                                  |
+| 对话     | 助手消息无气泡，左上角 20px 品牌标记 + `TIAN` mono 标签；hover 出现复制按钮。用户消息右对齐、`surface-secondary`、圆角 12px。                                                                                                                                                                                                                                    |
+| 工具调用 | **chip**：图标（按工具类型映射）+ 名称 + 状态（运行中转圈 / 成功实心勾 / 失败警告），可展开看 args 和 output；超过 2 个收成 “N tool calls” 汇总行。                                                                                                                                                                                                              |
+| Markdown | `streamdown`，`animated` + `isAnimating` 跟随流式状态，未闭合语法也能正确渲染；控件图标覆盖为 Phosphor。                                                                                                                                                                                                                                                         |
+| 输入框   | 双行结构：textarea + 发送/停止；聚焦时上浮 1px、反相光环、底部展开 `↵ send · ⇧↵ new line` 提示。发送按钮在可发送时用黑白渐变，停止按钮带呼吸环。                                                                                                                                                                                                                 |
+| 空状态   | 品牌标记 / 轨道光球 + 一句标题 + 一句解释 + 可点击建议（Plan my day / Review goals / Workspace check）。欢迎页给 New conversation + Browse（⌘K）。                                                                                                                                                                                                               |
+| 右栏     | 顶部三段 tab（Tasks / Runs / Memory），共享 `layoutId` 的滑动 pill，图标选中填充；面板切换 cross-fade；Run 列表 → 详情用横向滑动。                                                                                                                                                                                                                               |
+| 设置页   | 侧栏底部齿轮或 `⌘,` 进入整页；左侧锚点导航，右侧依次 Model（模型与 Gateway）、Usage（热力图，可切 scope）、Log（改进日志与筛选）、Service（服务与升级）。                                                                                                                                                                                                        |
+| Diff     | `@pierre/diffs`，unified + bars 指示器 + `line-info-basic` 折叠分隔，主题跟随系统明暗。                                                                                                                                                                                                                                                                          |
+| 服务状态 | 侧栏底部：绿色呼吸点 + mono 状态；断开/连接中切到 warning 色。                                                                                                                                                                                                                                                                                                   |
 
 ## 动效
 
@@ -120,19 +121,21 @@ const SPRING = { type: 'spring', stiffness: 500, damping: 38 }; // 只在共享�
 
 ```
 ┌────────────┬─┬───────────────────────────┬─┬──────────────────┐
-│ 导航 264px │▏│ 主视图（自适应）           │▏│ 上下文 360px     │
+│ 导航 264px │▏│ 主视图（自适应）          │▏│ 上下文 360px     │
 │            │ │                           │ │                  │
-│ 品牌        │ │ Chat / Goals / Inbox      │ │ header: Context  │
-│ New chat    │ │                           │ │ tabs             │
-│ Chat        │ │ 对话 / 目标 / 收件箱       │ │ 面板内容         │
-│ Goals       │ │                           │ │                  │
-│ Inbox       │ │                           │ │                  │
+│ 品牌       │ │ Chat / Goals / Skills /   │ │ header: Context  │
+│ New chat   │ │ Inbox / Settings          │ │ tabs             │
+│ Chat       │ │                           │ │ 面板内容         │
+│ Goals      │ │ 对话 / 目标 / 技能 /      │ │                  │
+│ Skills     │ │ 收件箱 / 设置             │ │                  │
+│ Inbox      │ │                           │ │                  │
 │ ─────────  │ │                           │ │                  │
 │ PROJECTS   │ │                           │ │                  │
-│ scope 分组  │ │                           │ │                  │
-│ 会话列表    │ │                           │ │                  │
+│ scope 分组 │ │                           │ │                  │
+│ 会话列表   │ │                           │ │                  │
+│ (5 条折叠) │ │                           │ │                  │
 │ ─────────  │ │                           │ │                  │
-│ 服务状态    │ │                           │ │                  │
+│ 服务状态 ⚙ │ │                           │ │                  │
 └────────────┴─┴───────────────────────────┴─┴──────────────────┘
 ```
 
@@ -140,7 +143,7 @@ const SPRING = { type: 'spring', stiffness: 500, damping: 38 }; // 只在共享�
 - 宽度持久化到 `localStorage`（`tian.navWidth` / `tian.contextWidth`）。拖动时过渡为 0，松手后恢复。
 - 右栏可整体收起，收起后留 44px 竖条 + `»` 按钮；展开按钮 `«`。开合用宽度动画，内容保持固定宽度，避免挤压。
 - 窗口 `titleBarStyle: hiddenInset`，红绿灯在左栏顶部 36px 的 drag 区里；每个 pane 的 header 都是 `-webkit-app-region: drag`，交互控件单独标 `no-drag`。
-- 键盘流：`⌘K` 命令面板、`⌘N` 新会话、`⌘B` 开合右栏、`⌘,` 设置、`⌘1/2/3` 切换 Chat/Goals/Inbox。
+- 键盘流：`⌘K` 命令面板、`⌘N` 新会话、`⌘B` 开合右栏、`⌘,` 设置页、`⌘1/2/3/4` 切换 Chat/Goals/Skills/Inbox。
 
 ## 反例（不要这么做）
 

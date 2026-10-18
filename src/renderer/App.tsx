@@ -11,9 +11,9 @@ import { IconProvider } from './components/IconProvider';
 import { BrandOrb } from './components/BrandMark';
 import { Shell } from './components/Shell';
 
-const SettingsDialog = lazy(() =>
-  import('./components/SettingsDialog').then((m) => ({
-    default: m.SettingsDialog,
+const SettingsView = lazy(() =>
+  import('./components/SettingsView').then((m) => ({
+    default: m.SettingsView,
   })),
 );
 const CommandPalette = lazy(() =>
@@ -21,25 +21,6 @@ const CommandPalette = lazy(() =>
     default: m.CommandPalette,
   })),
 );
-
-/**
- * Mounts the settings dialog only after it is first opened, so its chunk
- * (and the usage/service settings inside) load on demand. Stays mounted
- * afterwards so dialog exit animations still play on close.
- */
-function DeferredSettingsDialog() {
-  const open = useStore((s) => s.settingsOpen);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    if (open) setMounted(true);
-  }, [open]);
-  if (!mounted) return null;
-  return (
-    <Suspense fallback={null}>
-      <SettingsDialog />
-    </Suspense>
-  );
-}
 
 function DeferredCommandPalette() {
   const open = useStore((s) => s.paletteOpen);
@@ -56,7 +37,13 @@ function DeferredCommandPalette() {
 }
 
 /** Full-screen boot state: the mark breathes while the service handshakes. */
-function BootScreen({ error }: { error: string | null }) {
+function BootScreen({
+  error,
+  onOpenSettings,
+}: {
+  error: string | null;
+  onOpenSettings: () => void;
+}) {
   const reduce = useReducedMotion();
   return (
     <div className="ambient-glow flex flex-1 flex-col items-center justify-center gap-6 px-8">
@@ -91,11 +78,7 @@ function BootScreen({ error }: { error: string | null }) {
         )}
       </div>
       {error && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => actions.setSettingsOpen(true)}
-        >
+        <Button variant="outline" size="sm" onClick={onOpenSettings}>
           打开服务设置
         </Button>
       )}
@@ -110,12 +93,11 @@ const SHORTCUTS: Record<string, () => void> = {
     actions.setNav('chat');
   },
   b: () => actions.setContextOpen(!getState().contextOpen),
-  ',': () => actions.setSettingsOpen(true),
+  ',': () => actions.setNav('settings'),
   '1': () => actions.setNav('chat'),
   '2': () => actions.setNav('goals'),
   '3': () => actions.setNav('skills'),
   '4': () => actions.setNav('inbox'),
-  '5': () => actions.setNav('log'),
 };
 
 /** Global navigation shortcuts; they work from every pane. */
@@ -124,9 +106,8 @@ function useGlobalShortcuts() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat)
         return;
-      const state = getState();
-      // Do not stack global navigation on top of a modal surface.
-      if (state.settingsOpen || state.paletteOpen) return;
+      // Do not stack global navigation on top of the command palette.
+      if (getState().paletteOpen) return;
       const run = SHORTCUTS[event.key.toLowerCase()];
       if (!run) return;
       event.preventDefault();
@@ -143,9 +124,8 @@ function useWarmChunks() {
     const warm = () => {
       void import('./components/ChatView');
       void import('./components/NavViews');
-      void import('./components/LogView');
       void import('./components/ContextPane');
-      void import('./components/SettingsDialog');
+      void import('./components/SettingsView');
       void import('./components/CommandPalette');
     };
     const id = window.requestIdleCallback(warm, { timeout: 3000 });
@@ -159,6 +139,8 @@ export function App() {
   const error = useStore((s) => s.error);
   const runtimeStatus = useStore((s) => s.runtimeStatus);
   const [contextDragging, setContextDragging] = useState(false);
+  // Service controls must stay reachable while the service itself is down.
+  const [bootSettings, setBootSettings] = useState(false);
   const [navWidth, setNavWidth] = usePersistedWidth(
     'tian.navWidth',
     264,
@@ -183,8 +165,17 @@ export function App() {
   return (
     <IconProvider>
       <TooltipProvider delay={400}>
-        {booting ? (
-          <BootScreen error={error} />
+        {booting && bootSettings ? (
+          <div className="flex h-screen flex-col bg-background">
+            <Suspense fallback={null}>
+              <SettingsView onBack={() => setBootSettings(false)} />
+            </Suspense>
+          </div>
+        ) : booting ? (
+          <BootScreen
+            error={error}
+            onOpenSettings={() => setBootSettings(true)}
+          />
         ) : (
           <Shell
             navWidth={navWidth}
@@ -195,7 +186,6 @@ export function App() {
             onContextDraggingChange={setContextDragging}
           />
         )}
-        <DeferredSettingsDialog />
         <DeferredCommandPalette />
       </TooltipProvider>
     </IconProvider>

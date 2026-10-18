@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  CaretDown,
   CaretRight,
   ChatCircleDots,
   ChatCircleText,
   FolderPlus,
+  Gear,
   Lightning,
   MagnifyingGlass,
-  Notebook,
   Plus,
-  SlidersHorizontal,
-  Sparkle,
   Target,
   Tray,
   X,
@@ -32,6 +31,7 @@ import { Kbd } from '@/components/ui/kbd';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip';
 import type { ConversationInfo, ScopeInfo } from '@/shared/types';
+import type { Nav } from '../state';
 import { actions, useStore } from '../store';
 import { CountPulse, Reveal } from './motion-primitives';
 import { ProjectSettingsDialog } from './ProjectSettingsDialog';
@@ -169,6 +169,9 @@ function NavItem(props: {
   );
 }
 
+/** Conversations rendered per scope before the group folds. */
+const VISIBLE_CONVERSATIONS = 5;
+
 function ScopeSection(props: {
   scope: ScopeInfo;
   conversations: ConversationInfo[];
@@ -176,6 +179,22 @@ function ScopeSection(props: {
   collapsed: boolean;
 }) {
   const { scope, conversations, activeId, collapsed } = props;
+  const [expanded, setExpanded] = useState(false);
+  // Fold everything past the first five, but keep the selected conversation
+  // visible so the list never hides where the reader currently is.
+  const { visible, hiddenCount } = useMemo(() => {
+    if (expanded || conversations.length <= VISIBLE_CONVERSATIONS)
+      return { visible: conversations, hiddenCount: 0 };
+    const shown = conversations.slice(0, VISIBLE_CONVERSATIONS);
+    const active = conversations.find((c) => c.conversationId === activeId);
+    if (active && !shown.includes(active)) shown.push(active);
+    const shownIds = new Set(shown);
+    return {
+      visible: conversations.filter((c) => shownIds.has(c)),
+      hiddenCount: conversations.length - shown.length,
+    };
+  }, [activeId, conversations, expanded]);
+  const collapsible = conversations.length > VISIBLE_CONVERSATIONS;
   return (
     <section aria-label={`Scope: ${scope.name}`} className="mb-1.5">
       <div className="group flex h-7 items-center gap-1 px-1">
@@ -214,13 +233,38 @@ function ScopeSection(props: {
       </div>
       <Reveal open={!collapsed}>
         <div className="flex flex-col gap-px">
-          {conversations.map((c) => (
+          {visible.map((c) => (
             <ConversationRow
               key={c.conversationId}
               conversation={c}
               active={c.conversationId === activeId}
             />
           ))}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              aria-expanded={false}
+              onClick={() => setExpanded(true)}
+              className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] text-content-disabled transition-colors hover:bg-sidebar-accent/55 hover:text-content-secondary"
+            >
+              <CaretDown size={10} weight="bold" />
+              Show more
+              <span className="font-mono text-[10px] tabular-nums">
+                ({hiddenCount})
+              </span>
+            </button>
+          )}
+          {expanded && collapsible && (
+            <button
+              type="button"
+              aria-expanded
+              onClick={() => setExpanded(false)}
+              className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] text-content-disabled transition-colors hover:bg-sidebar-accent/55 hover:text-content-secondary"
+            >
+              <CaretRight size={10} weight="bold" />
+              Show less
+            </button>
+          )}
           {conversations.length === 0 && (
             <p className="px-2 py-1.5 font-mono text-[10px] text-content-disabled">
               no conversations yet
@@ -232,7 +276,7 @@ function ScopeSection(props: {
   );
 }
 
-/** Brand block with the two global entry points: palette and settings. */
+/** Brand block with the command palette entry point. */
 function SidebarBrand() {
   return (
     <div className="relative flex items-center gap-2.5 bg-[radial-gradient(18rem_6rem_at_18%_0%,hsl(var(--brand)/0.1),transparent_70%)] px-3 pt-1 pb-3">
@@ -263,39 +307,21 @@ function SidebarBrand() {
           Command palette <Kbd className="ml-1.5">⌘K</Kbd>
         </TooltipPopup>
       </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Open settings"
-              className="text-content-secondary"
-              onClick={() => actions.setSettingsOpen(true)}
-            />
-          }
-        >
-          <SlidersHorizontal size={15} />
-        </TooltipTrigger>
-        <TooltipPopup>Settings</TooltipPopup>
-      </Tooltip>
     </div>
   );
 }
 
-/** Chat / Goals / Skills / Inbox / Log destinations with their badges. */
+/** Chat / Goals / Skills / Inbox destinations with their badges. */
 function PrimaryNav({
   nav,
   pendingTasks,
   candidates,
   unread,
-  openImprovements,
 }: {
-  nav: 'chat' | 'goals' | 'skills' | 'inbox' | 'log';
+  nav: Nav;
   pendingTasks: number;
   candidates: number;
   unread: number;
-  openImprovements: number;
 }) {
   return (
     <nav aria-label="Primary" className="flex flex-col gap-0.5 px-2 pb-3">
@@ -325,13 +351,6 @@ function PrimaryNav({
         active={nav === 'inbox'}
         badge={unread}
         onClick={() => actions.setNav('inbox')}
-      />
-      <NavItem
-        icon={Notebook}
-        label="Log"
-        active={nav === 'log'}
-        badge={openImprovements}
-        onClick={() => actions.setNav('log')}
       />
     </nav>
   );
@@ -375,44 +394,94 @@ function ConversationSearch({
   );
 }
 
-/** Service connection footer. */
+const SERVICE_STATUS: Record<
+  'ready' | 'starting' | 'disconnected' | 'failed',
+  { label: string; dot: string; live: boolean }
+> = {
+  ready: {
+    label: 'service connected',
+    dot: 'bg-foreground',
+    live: true,
+  },
+  starting: {
+    label: 'connecting…',
+    dot: 'animate-pulse bg-warning',
+    live: false,
+  },
+  disconnected: {
+    label: 'reconnecting…',
+    dot: 'animate-pulse bg-warning',
+    live: false,
+  },
+  failed: {
+    label: 'service unavailable',
+    dot: 'bg-destructive',
+    live: false,
+  },
+};
+
+/** Bottom-right gear: the only entry point to the settings page. */
+function SettingsGear({ active, count }: { active: boolean; count: number }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Open settings"
+            aria-current={active ? 'page' : undefined}
+            className={`ml-auto shrink-0 ${
+              active ? 'text-brand' : 'text-content-secondary'
+            }`}
+            onClick={() => actions.setNav('settings')}
+          />
+        }
+      >
+        <Gear size={14} weight={active ? 'fill' : 'regular'} />
+        {count > 0 && (
+          <span
+            aria-hidden="true"
+            className="absolute -top-0.5 -right-0.5 flex size-3 items-center justify-center rounded-full bg-brand font-mono text-[7.5px] text-brand-contrast tabular-nums"
+          >
+            {count > 9 ? '9+' : count}
+          </span>
+        )}
+      </TooltipTrigger>
+      <TooltipPopup>
+        Settings
+        <Kbd className="ml-1.5">⌘,</Kbd>
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** Service connection footer with the settings gear at the far right. */
 function ServiceStatus({
   status,
+  active,
+  openImprovements,
 }: {
   status: 'ready' | 'starting' | 'disconnected' | 'failed';
+  active: boolean;
+  openImprovements: number;
 }) {
-  const connected = status === 'ready';
-  const label = connected
-    ? 'service connected'
-    : status === 'starting'
-      ? 'connecting…'
-      : status === 'disconnected'
-        ? 'reconnecting…'
-        : 'service unavailable';
-  const dot = connected
-    ? 'bg-foreground'
-    : status === 'starting' || status === 'disconnected'
-      ? 'animate-pulse bg-warning'
-      : 'bg-destructive';
+  const copy = SERVICE_STATUS[status];
   return (
     <div className="flex items-center gap-2 border-border border-t px-3 py-2.5">
       <span className="relative flex size-2 shrink-0">
-        {connected && (
+        {copy.live && (
           <span className="absolute inset-0 animate-ping rounded-full bg-foreground opacity-30 motion-reduce:animate-none" />
         )}
-        <span className={`relative size-2 rounded-full ${dot}`} />
+        <span className={`relative size-2 rounded-full ${copy.dot}`} />
       </span>
       <span
         role="status"
         className="truncate font-mono text-[10px] text-content-disabled"
       >
-        {label}
+        {copy.label}
       </span>
-      <Sparkle
-        size={11}
-        weight="fill"
-        className="ml-auto text-content-disabled/60"
-      />
+      <SettingsGear active={active} count={openImprovements} />
     </div>
   );
 }
@@ -566,7 +635,6 @@ export function Sidebar() {
         pendingTasks={pendingTasks}
         candidates={skills.filter((s) => s.status === 'candidate').length}
         unread={unread}
-        openImprovements={openImprovements}
       />
 
       <div className="mx-3 border-border border-t" />
@@ -652,7 +720,11 @@ export function Sidebar() {
         <div className="h-2" />
       </ScrollArea>
 
-      <ServiceStatus status={runtimeStatus} />
+      <ServiceStatus
+        status={runtimeStatus}
+        active={nav === 'settings'}
+        openImprovements={openImprovements}
+      />
 
       <AddProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </aside>
