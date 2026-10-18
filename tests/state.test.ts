@@ -68,6 +68,26 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
       nodes: [],
       pendingMerges: 0,
     }),
+    listGoals: async () => [],
+    listNotices: async () => [],
+    createGoal: async () => {
+      throw new Error('Unused');
+    },
+    updateGoal: async () => {
+      throw new Error('Unused');
+    },
+    setGoalStatus: async () => {
+      throw new Error('Unused');
+    },
+    runGoalNow: async () => {
+      throw new Error('Unused');
+    },
+    addSchedule: async () => {
+      throw new Error('Unused');
+    },
+    removeSchedule: async () => {
+      throw new Error('Unused');
+    },
     inboxList: async () => [],
     runList: async () => [],
     watch: async (id) => {

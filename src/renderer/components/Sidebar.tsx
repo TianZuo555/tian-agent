@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import {
-  CalendarClock,
   FolderPlus,
   Inbox,
   MessageSquare,
@@ -8,6 +7,7 @@ import {
   Search,
   Settings2,
   Sparkles,
+  Target,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -74,7 +74,7 @@ function ConversationRow(props: {
   );
 }
 
-/** Top-level destination: Chat / Schedule / Inbox. */
+/** Top-level destination: Chat / Goals / Inbox. */
 function NavItem(props: {
   icon: typeof MessageSquare;
   label: string;
@@ -233,11 +233,11 @@ export function Sidebar() {
           onClick={() => actions.setNav('chat')}
         />
         <NavItem
-          icon={CalendarClock}
-          label="Schedule"
-          active={nav === 'schedule'}
+          icon={Target}
+          label="Goals"
+          active={nav === 'goals'}
           badge={tasks.filter((t) => t.status === 'pending').length}
-          onClick={() => actions.setNav('schedule')}
+          onClick={() => actions.setNav('goals')}
         />
         <NavItem
           icon={Inbox}

@@ -2,9 +2,13 @@ import type { TianApi } from '../shared/contracts';
 import type {
   ChatSnapshot,
   ConversationInfo,
+  GoalItem,
+  GoalPatch,
+  GoalStatus,
   InboxItem,
   MemoryDump,
   ModelCatalog,
+  NoticeItem,
   ProjectPatch,
   RunInfo,
   ScopeInfo,
@@ -14,7 +18,7 @@ import type {
 
 export type Tab = 'tasks' | 'memory' | 'inbox' | 'runs';
 /** Primary destination chosen in the left rail. */
-export type Nav = 'chat' | 'schedule' | 'inbox';
+export type Nav = 'chat' | 'goals' | 'inbox';
 export interface State {
   scopes: ScopeInfo[];
   conversations: ConversationInfo[];
@@ -22,6 +26,8 @@ export interface State {
   activeScopeId: string;
   view: ChatSnapshot | null;
   tasks: TaskItem[];
+  goals: GoalItem[];
+  notices: NoticeItem[];
   memory: MemoryDump | null;
   inbox: InboxItem[];
   runs: RunInfo[];
@@ -46,6 +52,8 @@ export function createAppStore(api: TianApi) {
     activeScopeId: 'global',
     view: null,
     tasks: [],
+    goals: [],
+    notices: [],
     memory: null,
     inbox: [],
     runs: [],
@@ -86,6 +94,8 @@ export function createAppStore(api: TianApi) {
       | 'settings'
       | 'catalog'
       | 'tasks'
+      | 'goals'
+      | 'notices'
       | 'memory'
       | 'inbox'
       | 'runs',
@@ -103,6 +113,8 @@ export function createAppStore(api: TianApi) {
   async function refreshPanels(scopeId = state.activeScopeId): Promise<void> {
     await Promise.all([
       load('tasks', () => api.listTasks(scopeId), scopeId),
+      load('goals', () => api.listGoals(scopeId), scopeId),
+      load('notices', () => api.listNotices(scopeId), scopeId),
       load('memory', () => api.memoryDump(scopeId), scopeId),
       load('inbox', () => api.inboxList(scopeId), scopeId),
       load(
@@ -170,6 +182,8 @@ export function createAppStore(api: TianApi) {
         active?.scopeId === scopeId ? state.activeConversationId : null,
       view: null,
       tasks: [],
+      goals: [],
+      notices: [],
       memory: null,
       inbox: [],
       runs: [],
@@ -186,6 +200,8 @@ export function createAppStore(api: TianApi) {
       activeScopeId: scopeId,
       view: null,
       tasks: [],
+      goals: [],
+      notices: [],
       memory: null,
       inbox: [],
       runs: [],
@@ -218,6 +234,20 @@ export function createAppStore(api: TianApi) {
           next('tasks');
           set({
             tasks: tasks.filter((task) => task.scopeId === state.activeScopeId),
+          });
+        }),
+        api.on('goals', (goals) => {
+          next('goals');
+          set({
+            goals: goals.filter((goal) => goal.scopeId === state.activeScopeId),
+          });
+        }),
+        api.on('notices', (notices) => {
+          next('notices');
+          set({
+            notices: notices.filter(
+              (notice) => notice.scopeId === state.activeScopeId,
+            ),
           });
         }),
         api.on('runs', (runs) => {
@@ -324,6 +354,41 @@ export function createAppStore(api: TianApi) {
       safe(() => api.memoryRevise(state.activeScopeId, seq, text, reason)),
     memoryForget: (seq: number, reason: string) =>
       safe(() => api.memoryForget(state.activeScopeId, seq, reason)),
+    createGoal: (
+      objective: string,
+      successCriteria: string,
+      constraints: string,
+      maxRunsPerDay: number,
+    ) =>
+      safe(async () => {
+        await api.createGoal(
+          state.activeScopeId,
+          objective,
+          successCriteria,
+          constraints,
+          maxRunsPerDay,
+        );
+      }),
+    updateGoal: (id: string, patch: GoalPatch) =>
+      safe(async () => {
+        await api.updateGoal(id, patch);
+      }),
+    setGoalStatus: (id: string, status: GoalStatus) =>
+      safe(async () => {
+        await api.setGoalStatus(id, status);
+      }),
+    runGoalNow: (id: string) =>
+      safe(async () => {
+        await api.runGoalNow(id);
+      }),
+    addSchedule: (goalId: string, cron: string, timezone: string | null) =>
+      safe(async () => {
+        await api.addSchedule(goalId, cron, timezone);
+      }),
+    removeSchedule: (scheduleId: string) =>
+      safe(async () => {
+        await api.removeSchedule(scheduleId);
+      }),
     refreshRuns: () =>
       load(
         'runs',

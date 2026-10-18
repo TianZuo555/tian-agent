@@ -208,6 +208,17 @@ dispatch → queued → running → collecting → done / failed
 
 报告从 `TIAN_REPORT.md` 收集到 `<project root>/.tian/runs/`，每轮独立保留，报告不进入代码提交。
 
+## Goals 与调度
+
+用户管理目标，Agent 管理任务。Goal 是长期跟进的结果（objective、success criteria、constraints、current state、next action、last execution、每日预算），存于 `goals` 表；总管用 `create_goal` / `update_goal` / `list_goals` 维护它们，用户在 Goals 视图创建、编辑、暂停、恢复或取消。
+
+- **Goal 会话**：每个 Goal 通过渠道绑定 `openSession({ channel: 'goal', externalId: goalId, scopeId })` 获得一条专属总管会话，跨重启稳定，唤醒内容只投递到这条会话。
+- **Task 状态机**：待办即 Task。状态 `pending → running → waiting_approval → completed`，另有 `paused / blocked / failed / cancelled`，转换集中在 `db.ts` 一处校验，非法转换抛错；结果单独记 `outcome`（achieved / not_achieved / no_change）与 summary。`trigger`（manual / schedule / event）与唯一 `dedupe_key` 记录来源，重启或重复触发不会生成第二个 Task。
+- **调度器**：`schedules` 表保存 cron、时区与持久化的 `next_fire_at`；服务内定时器睡到最早的触发点（上限 60 秒，不阻塞退出）。每次触发在一个事务内完成：创建 Task（`dedupe_key = sched:<schedule>:<触发时间>`）、向 Goal 会话投递通知（内容只含 Goal 状态与本次 Task，不重建历史）、并从当下推进 `next_fire_at`——停机期间错过的触发合并为一次，不补跑。
+- **预算**：每个 Goal 的 `max_runs_per_day` 限制每日执行次数；超出后本次唤醒生成 `blocked` Task 并给用户留下去重提醒，而不是默默丢弃。
+- **用户提醒**：`notify_user(goal, fingerprint, text)` 把要用户知道或决定的事写入 `user_notices`；同一 Goal 相同 fingerprint 在 24 小时窗口内只送达一次，`outcome = no_change` 的结果不应通知。Goals 视图展示提醒列表；Telegram 投递留待后续。
+- **代码类任务**：`dispatch` 工具接受可选 `task` 参数，`runs.task_id` 记录 Run 与 Task 的关联；Run 完成不等于 Task 完成，由总管依据结果调用 `complete_task` / `fail_task` 收口，再 `update_goal` 写回状态。
+
 ## 持久化、恢复与通知
 
 - `tian.db`：项目、会话、渠道绑定、tasks、runs、attempts、Inbox 及已读状态、通知、幂等记录、`events`，以及可重建的 `history_entries` / `history_fts` / `history_cursors`。

@@ -1,11 +1,7 @@
 import { Cron } from 'croner';
 import type { Db } from './db.js';
 import type { GoalStore } from './goals.js';
-import type {
-  GoalItem,
-  ScheduleItem,
-  TaskItem,
-} from '../shared/types.js';
+import type { GoalItem, ScheduleItem, TaskItem } from '../shared/types.js';
 
 export const DEFAULT_MAX_RUNS_PER_DAY = 3;
 /** Timer granularity: never sleep longer than this before re-checking. */

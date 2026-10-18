@@ -15,8 +15,8 @@ const ChatView = lazy(() =>
 const InboxView = lazy(() =>
   import('./components/NavViews').then((m) => ({ default: m.InboxView })),
 );
-const ScheduleView = lazy(() =>
-  import('./components/NavViews').then((m) => ({ default: m.ScheduleView })),
+const GoalsView = lazy(() =>
+  import('./components/NavViews').then((m) => ({ default: m.GoalsView })),
 );
 const ContextPane = lazy(() =>
   import('./components/ContextPane').then((m) => ({ default: m.ContextPane })),
@@ -185,9 +185,9 @@ export function App() {
                   <Suspense fallback={null}>
                     <ChatView />
                   </Suspense>
-                ) : nav === 'schedule' ? (
+                ) : nav === 'goals' ? (
                   <Suspense fallback={null}>
-                    <ScheduleView />
+                    <GoalsView />
                   </Suspense>
                 ) : (
                   <Suspense fallback={null}>

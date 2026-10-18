@@ -3,6 +3,9 @@ import { Check } from 'typebox/value';
 import type {
   AppEvents,
   ConversationInfo,
+  GoalItem,
+  GoalPatch,
+  GoalStatus,
   InboxItem,
   MemoryDump,
   ProjectPatch,
@@ -10,6 +13,7 @@ import type {
   ScopeInfo,
   SettingsInfo,
   ModelCatalog,
+  NoticeItem,
   TaskItem,
   SessionBinding,
   ServiceInfo,
@@ -44,6 +48,26 @@ export interface Commands {
     number
   >;
   doneTask: Command<[id: number, done: boolean], void>;
+  listGoals: Command<[scopeId: string | null], GoalItem[]>;
+  createGoal: Command<
+    [
+      scopeId: string,
+      objective: string,
+      successCriteria: string,
+      constraints: string,
+      maxRunsPerDay: number,
+    ],
+    GoalItem
+  >;
+  updateGoal: Command<[goalId: string, patch: GoalPatch], GoalItem>;
+  setGoalStatus: Command<[goalId: string, status: GoalStatus], GoalItem>;
+  runGoalNow: Command<[goalId: string], TaskItem>;
+  addSchedule: Command<
+    [goalId: string, cron: string, timezone: string | null],
+    GoalItem
+  >;
+  removeSchedule: Command<[scheduleId: string], GoalItem>;
+  listNotices: Command<[scopeId: string | null], NoticeItem[]>;
   memoryDump: Command<[scopeId: string], MemoryDump>;
   memoryRevise: Command<
     [scopeId: string, seq: number, text: string, reason: string],
@@ -121,6 +145,44 @@ export const commandArgs = {
     Type.Union([Type.String({ maxLength: 100 }), Type.Null()]),
   ]),
   doneTask: Type.Tuple([Type.Integer({ minimum: 1 }), Type.Boolean()]),
+  listGoals: Type.Tuple([nullableId]),
+  createGoal: Type.Tuple([
+    id,
+    Type.String({ minLength: 1, maxLength: 2_000 }),
+    Type.String({ maxLength: 10_000 }),
+    Type.String({ maxLength: 10_000 }),
+    Type.Integer({ minimum: 1, maximum: 48 }),
+  ]),
+  updateGoal: Type.Tuple([
+    id,
+    Type.Partial(
+      Type.Object({
+        objective: Type.String({ minLength: 1, maxLength: 2_000 }),
+        successCriteria: Type.String({ maxLength: 10_000 }),
+        constraints: Type.String({ maxLength: 10_000 }),
+        maxRunsPerDay: Type.Integer({ minimum: 1, maximum: 48 }),
+      }),
+      { additionalProperties: false },
+    ),
+  ]),
+  setGoalStatus: Type.Tuple([
+    id,
+    Type.Union([
+      Type.Literal('active'),
+      Type.Literal('paused'),
+      Type.Literal('blocked'),
+      Type.Literal('completed'),
+      Type.Literal('cancelled'),
+    ]),
+  ]),
+  runGoalNow: Type.Tuple([id]),
+  addSchedule: Type.Tuple([
+    id,
+    Type.String({ minLength: 1, maxLength: 100 }),
+    Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()]),
+  ]),
+  removeSchedule: Type.Tuple([id]),
+  listNotices: Type.Tuple([nullableId]),
   memoryDump: Type.Tuple([id]),
   memoryRevise: Type.Tuple([
     id,

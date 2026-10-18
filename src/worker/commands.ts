@@ -21,6 +21,28 @@ export const commandHandlers = (service: Service, clientId: number) =>
     listTasks: (scopeId) => service.taskList(scopeId),
     addTask: (scopeId, title, due) => service.addTaskItem(scopeId, title, due),
     doneTask: (id, done) => service.doneTaskItem(id, done),
+    listGoals: (scopeId) => service.goalList(scopeId),
+    createGoal: (
+      scopeId,
+      objective,
+      successCriteria,
+      constraints,
+      maxRunsPerDay,
+    ) =>
+      service.createGoal(
+        scopeId,
+        objective,
+        successCriteria,
+        constraints,
+        maxRunsPerDay,
+      ),
+    updateGoal: (goalId, patch) => service.updateGoal(goalId, patch),
+    setGoalStatus: (goalId, status) => service.setGoalStatus(goalId, status),
+    runGoalNow: (goalId) => service.runGoalNow(goalId),
+    addSchedule: (goalId, cron, timezone) =>
+      service.addSchedule(goalId, cron, timezone),
+    removeSchedule: (scheduleId) => service.removeSchedule(scheduleId),
+    listNotices: (scopeId) => service.noticeList(scopeId),
     memoryDump: (scopeId) => service.memoryDump(scopeId),
     memoryRevise: (scopeId, seq, text, reason) =>
       service.memoryRevise(scopeId, seq, text, reason),

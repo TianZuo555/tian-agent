@@ -12,6 +12,8 @@ const events: (keyof AppEvents)[] = [
   'view',
   'conversations',
   'tasks',
+  'goals',
+  'notices',
   'runs',
   'inbox',
   'memory',
