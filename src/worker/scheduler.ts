@@ -164,7 +164,6 @@ export class GoalScheduler {
           triggerRef: schedule.id,
           dedupeKey,
           now,
-          scheduleId: schedule.id,
         });
       }
       if (task)
@@ -195,16 +194,21 @@ export class GoalScheduler {
     }
     const task = this.deps.db.transaction(() => {
       const current = this.deps.goals.getGoal(goal.id)!;
-      const capKey = `manual-cap:${goal.id}:${dayKey(now)}`;
-      return this.createTask({
+      const created = this.createTask({
         goal: current,
         title: current.nextAction.trim() || current.objective,
         trigger: 'manual',
         triggerRef: null,
-        // While capped, repeated presses reuse one blocked task per day.
-        dedupeKey: this.overCap(current, now) ? capKey : null,
+        dedupeKey: null,
         now,
       });
+      this.deps.db.queueNotification({
+        id: `task:${created.id}`,
+        scopeId: current.scopeId,
+        conversationId: current.conversationId,
+        content: wakeContent(current, created),
+      });
+      return created;
     });
     this.deps.emitUpdates?.();
     await this.deps.notify();
@@ -226,11 +230,11 @@ export class GoalScheduler {
     triggerRef: string | null;
     dedupeKey: string | null;
     now: Date;
-    scheduleId?: string;
   }): TaskItem {
     const { db, goals } = this.deps;
     const { goal, now } = input;
     if (this.overCap(goal, now)) {
+      // One blocked task per goal per day, whatever requested the run.
       const task = db.insertTask({
         scopeId: goal.scopeId,
         title: input.title,
@@ -239,7 +243,7 @@ export class GoalScheduler {
         owner: 'agent',
         trigger: input.trigger,
         triggerRef: input.triggerRef,
-        dedupeKey: input.dedupeKey,
+        dedupeKey: `cap:${goal.id}:${dayKey(now)}`,
         summary: `Daily budget reached: this goal allows ${goal.maxRunsPerDay} run(s) per day. Blocked until tomorrow, or raise the cap.`,
       });
       const notice = goals.addNotice(

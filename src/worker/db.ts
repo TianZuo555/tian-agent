@@ -408,7 +408,7 @@ export class Db {
           patch.summary ?? null,
           patch.countAttempt ? 1 : 0,
           status === 'running' ? now : null,
-          status === 'completed' ? now : null,
+          ...(status === 'completed' ? [now] : []),
           now,
           id,
         );

@@ -230,7 +230,7 @@ test('UI and agent application operations emit updates; task operation IDs dedup
   data.remember('p1', 'A durable fact');
   data.remember('p1', 'A second fact');
   data.nap('p1', 0, 1, 'Two project facts');
-  assert.equal(f.db.listTasks('p1')[0].status, 'done');
+  assert.equal(f.db.listTasks('p1')[0].status, 'completed');
   assert.equal(f.events.filter((event) => event === 'memory').length, 3);
   assert.equal(f.events.filter((event) => event === 'tasks').length, 3);
 });

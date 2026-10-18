@@ -312,32 +312,30 @@ export class GoalStore {
     now = new Date(),
     windowMs = NOTICE_WINDOW_MS,
   ): { notice: NoticeRow; delivered: boolean } {
-    return this.db.transaction(() => {
-      const scopeRow = this.db.sqlite
-        .prepare('SELECT scope_id FROM goals WHERE id = ?')
-        .get(goalId) as { scope_id: string } | undefined;
-      if (!scopeRow) throw new Error(`Unknown goal: ${goalId}`);
-      const cutoff = new Date(now.getTime() - windowMs).toISOString();
-      const recent = this.db.sqlite
-        .prepare(
-          'SELECT * FROM user_notices WHERE goal_id = ? AND fingerprint = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1',
-        )
-        .get(goalId, fingerprint, cutoff) as
-        | Record<string, unknown>
-        | undefined;
-      if (recent) return { notice: this.mapNotice(recent), delivered: false };
-      const info = this.db.sqlite
-        .prepare(
-          'INSERT INTO user_notices (goal_id,fingerprint,text,created_at) VALUES (?,?,?,?)',
-        )
-        .run(goalId, fingerprint, text, now.toISOString());
-      const row = this.db.sqlite
-        .prepare(
-          'SELECT user_notices.*, goals.scope_id AS scope_id FROM user_notices JOIN goals ON goals.id = user_notices.goal_id WHERE user_notices.id = ?',
-        )
-        .get(Number(info.lastInsertRowid)) as Record<string, unknown>;
-      return { notice: this.mapNotice(row), delivered: true };
-    });
+    // Flat statements, no own transaction: callers that need atomicity (a
+    // schedule fire, a tool replay window) are already inside one.
+    const scopeRow = this.db.sqlite
+      .prepare('SELECT scope_id FROM goals WHERE id = ?')
+      .get(goalId) as { scope_id: string } | undefined;
+    if (!scopeRow) throw new Error(`Unknown goal: ${goalId}`);
+    const cutoff = new Date(now.getTime() - windowMs).toISOString();
+    const recent = this.db.sqlite
+      .prepare(
+        'SELECT * FROM user_notices WHERE goal_id = ? AND fingerprint = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1',
+      )
+      .get(goalId, fingerprint, cutoff) as Record<string, unknown> | undefined;
+    if (recent) return { notice: this.mapNotice(recent), delivered: false };
+    const info = this.db.sqlite
+      .prepare(
+        'INSERT INTO user_notices (goal_id,fingerprint,text,created_at) VALUES (?,?,?,?)',
+      )
+      .run(goalId, fingerprint, text, now.toISOString());
+    const row = this.db.sqlite
+      .prepare(
+        'SELECT user_notices.*, goals.scope_id AS scope_id FROM user_notices JOIN goals ON goals.id = user_notices.goal_id WHERE user_notices.id = ?',
+      )
+      .get(Number(info.lastInsertRowid)) as Record<string, unknown>;
+    return { notice: this.mapNotice(row), delivered: true };
   }
 
   listNotices(scopeId: string | null, limit = 50): NoticeRow[] {
