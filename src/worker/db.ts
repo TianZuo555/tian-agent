@@ -161,6 +161,10 @@ export class Db {
     }
   }
 
+  get sqlite(): DatabaseSync {
+    return this.db;
+  }
+
   transaction<T>(action: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try {

@@ -1,0 +1,432 @@
+# Tian Agent — 产品需求文档（PRD）
+
+版本：v0.2（基于 v0.1 按现有代码库裁剪）
+状态：Draft
+产品类型：Always-on Personal Agent
+平台：macOS 优先；Linux / Windows 后续
+技术方向：TypeScript 常驻服务（launchd）+ Pi Durable + Electron/React 客户端 + SQLite（见 [ADR 0003](adr/0003-keep-typescript-service.md)）
+
+术语以 [CONTEXT.md](../CONTEXT.md) 为准。每项需求标注现状：**【已有】** 已实现并有测试覆盖；**【部分】** 有基础但不满足需求；**【缺失】** 尚未开始。标注"建议"的是待确认的设计；标注"待验证"的是尚未在代码中确认的假设。
+
+---
+
+## 1. 产品概述
+
+### 1.1 定位
+
+一个长期在线、有持久记忆、能主动执行、能从经验中学习的个人 Agent。用户委托长期目标，Chief 规划 Task、按需唤醒执行、记录结果、积累经验，必要时请求用户审批。
+
+> 用户管理目标，Agent 管理任务。会话可以结束，但记忆、目标和责任不会消失。
+
+### 1.2 参考产品
+
+| 产品          | 借鉴能力                                                               |
+| ------------- | ---------------------------------------------------------------------- |
+| OpenClaw      | Gateway、Heartbeat、Cron、分层记忆、Dreaming、Hybrid Retrieval         |
+| Hermes Agent  | 轻量核心记忆、Session Search、Background Review、Self-improving Skills |
+| OpenAI Dots   | 长期目标、自主研究、跨应用执行、主动通知                               |
+| Codex Desktop | 多 Agent、Worktree、任务审查、执行控制                                 |
+
+### 1.3 核心目标
+
+1. **Persistent Memory**：跨会话、进程重启和模型切换保留记忆。
+2. **Persistent Goals**：支持持续数天到数月的目标。
+3. **Proactive Execution**：通过 Schedule、Event 或手动触发主动执行。
+4. **Self-Improvement**：从经验中学习并复用成功流程。
+5. **Human Control**：重要操作可审查、干预、撤销或停止。
+6. **Runtime Independence**：记忆和目标生命周期与模型、执行 Runtime 解耦。
+
+### 1.4 非目标（初期）
+
+- 不训练或微调模型。
+- 不做复杂知识图谱。
+- 不自主执行付款、资金交易或其他不可逆高风险操作。
+- 第一版不接入所有第三方应用。
+- 不让模型持续推理；按需唤醒。
+- 不做跨设备同步和远程服务。
+
+---
+
+## 2. 核心对象
+
+| 对象                    | 定义                                | 生命周期   | 代码现状                                                                                     |
+| ----------------------- | ----------------------------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| Goal                    | 用户希望长期达成或维持的结果        | 数天至数年 | 【缺失】                                                                                     |
+| Task                    | 为 Goal（或独立）完成的一件具体工作 | 分钟至数天 | 【部分】`tasks` 表只有 `open/done` 待办（[ADR 0005](adr/0005-task-evolves-run-executes.md)） |
+| Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                              |
+| Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                 |
+| Memory                  | 跨会话保留的事实与经验              | 长期       | 【部分】OptMem 文件，无来源/版本（[ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)）  |
+| Skill                   | 可复用、可验证的工作流程            | 长期       | 【缺失】（M5）                                                                               |
+
+约束：
+
+- 一个 Goal 包含多个 Task；一个 Task 可以有零个或多个 Run，并可跨多个 Conversation。
+- Conversation 结束不代表 Task 完成；Run 完成也不代表 Task 完成。
+- Memory 不承担调度；Goal / Task 存在结构化表中，不以自然语言摘要的形式只存在 Memory 里。
+- Skill 独立版本管理和验证。
+
+---
+
+## 3. 系统架构（现状 + 增量）
+
+### 3.1 原则
+
+- **Host-owned State**：只有常驻服务写数据库；前端不是权威来源。【已有】
+- **Runtime-agnostic**：Pi 是默认执行器，通过 `WorkerRuntime` 接口接入。【已有】
+- **Event-driven**：状态变化写入 Event，并据此驱动通知与后台处理。【部分】现有通知 outbox；无统一 Event 表
+- **Local-first**：数据默认在 `~/Library/Application Support/Tian Agent/`。【已有】
+- **Recoverable**：重启、失败恢复、升级回滚。【已有】（Run、Review、升级）；Memory 回滚【缺失】
+- **Auditable**：关键决策与外部操作保留来源。【部分】幂等记录有；审计日志无
+
+### 3.2 进程
+
+| 进程         | 职责                                                                       |
+| ------------ | -------------------------------------------------------------------------- |
+| 常驻服务     | 唯一持有 `tian.db` 与 `pi-session.sqlite`；运行模型、工具、调度、通知、Run |
+| Electron App | 桌面客户端，通过 Unix socket 连接服务；退出 App 不停止服务                 |
+| Worker       | 在常驻服务内的 Pi Conversation，工作目录为 Run 的 worktree                 |
+
+### 3.3 PRD 模块 ↔ 代码
+
+| PRD 模块              | 现有实现                                                     | 增量                                   |
+| --------------------- | ------------------------------------------------------------ | -------------------------------------- |
+| Agent Gateway         | `service/server.ts`、`openSession` 渠道绑定                  | Telegram adapter（M3）                 |
+| Agent Orchestrator    | `worker/service.ts`、`worker/runs.ts`                        | Task 生命周期、Goal Conversation（M2） |
+| Agent Runtime Adapter | `worker/agents.ts`                                           | —                                      |
+| Memory Service        | `worker/memory.ts`（文件）                                   | SQLite Memory、History 索引（M1）      |
+| Memory Worker         | —                                                            | M4                                     |
+| Goal Store            | `worker/db.ts` 的 `tasks`                                    | `goals`、Task 演进（M2）               |
+| Scheduler             | 60 秒 Inbox 扫描定时器                                       | `schedules` + 调度器（M2）             |
+| Skill Registry        | —                                                            | M5                                     |
+| Approval Service      | 仅 UI 手动 Land/Ship                                         | `approvals` + 受控操作（M3）           |
+| Frontend              | React 三栏 shell（[ADR 0001](adr/0001-three-pane-shell.md)） | Goal 管理、Task Board、审批（M2–M3）   |
+
+---
+
+## 4. 记忆系统
+
+### 4.1 分层
+
+| 层          | PRD 名称          | 本项目实现                                          |
+| ----------- | ----------------- | --------------------------------------------------- |
+| Core Memory | Core Memory       | 有效 Memory + Summary Node，按 Token 预算渲染并注入 |
+| History     | Episodic Memory   | Pi transcript 的派生全文索引 + Event 表             |
+| Semantic    | Semantic Memory   | M4：由 Memory Worker 合并归纳                       |
+| Procedural  | Procedural Memory | M5：Skill                                           |
+
+Goal 与 Task 由 Goal Store 管理，不属于记忆层。
+
+### 4.2 F01 — Core Memory　P0　【部分】
+
+现状：每次请求注入 Global 与当前 Project 的 `wake()` 视图（最多 96 行）；Chief 是唯一写入者；`note`（≤280 字节）、`nap`（写摘要）、`recall`（正则）、`zoom`。无修改、删除、纠正；无 Goal 级记忆；预算按行数。
+
+需求：
+
+- 保存用户偏好、长期事实、项目约定；Chief 可新增、取代、删除 Memory；用户可明确要求记住或纠正。
+- 作用域：Global、Project；Memory 可选关联到某个 Goal，只在该 Goal 的 Conversation 中优先加载。
+- Token 预算可配置。建议默认：Global 1,500 tokens + Project 1,500 tokens；超出时由摘要树压缩，失效节点下探。
+- 同一 Conversation 内使用稳定的记忆快照，避免 Prompt 前缀缓存失效。
+
+设计要点（[ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md)）：
+
+- 工具改名并补齐：`remember`（替代 `note`，避免与 Markdown Note 混淆）、`revise`（取代）、`forget`（标记删除）、`recall`（改为 FTS）、`nap` / `zoom` 保留。
+- 快照：Core Memory 在 Conversation 内按"记忆版本号"缓存，只在版本变化后的下一次 Conversation 开始或压缩完成时刷新；会话中的新写入通过工具返回值告知模型。
+- 待验证：Pi 的 `section` 是否位于可缓存的前缀。当前 `state` section 含精确到分钟的 `now`，若位于前缀，每分钟都会使缓存失效；应把易变内容移到前缀之后或用户输入侧。
+
+验收：
+
+- 重启后记忆不变；新 Conversation 加载相关 Core Memory。
+- 项目私有 Memory 不出现在其他项目的 Conversation 中。
+- 用户纠正后，新 Conversation 使用修订后的事实，被取代的内容不再出现在 Core Memory。
+
+### 4.3 F02 — History 与检索　P0　【缺失】
+
+现状：Chief 只能 `recall` 记忆日志；已结束会话的内容无法检索。
+
+需求：可按时间、Scope、Conversation、关键词检索以下内容，并定位到原始记录：
+
+- 用户与 Agent 消息、Tool Call 与结果（来自 Pi transcript）
+- Task / Run 状态变化、审批决定、用户反馈、外部 Event（来自 Event 表）
+
+设计要点（建议，回答 v0.1 问题 3）：
+
+- Pi 存储仍是 transcript 的唯一来源；`tian.db` 中建立派生的 FTS5 索引，键为 `(conversation_id, entry_id)`，按每个 Conversation 的游标增量同步，启动时补齐。索引可随时丢弃重建。
+- 已验证：Node 内置 `node:sqlite` 支持 FTS5 与 `trigram` 分词，中文可检索。trigram 不能匹配少于 3 个字符的查询（例如两字中文词），需要 `LIKE` 兜底。
+- 工具：`search_history(query, scope?, since?, until?)` 返回片段与引用 `conv:<id>#<entry>`；`read_history(ref, around?)` 展开上下文。
+- 检索流程：确定 Scope 与权限 → FTS → 去重排序 → 按 Token 预算截断 → 附引用。无命中时明确返回"无记录"，不编造。
+
+验收：
+
+- 能找回已结束 Conversation 中的决策，并给出引用。
+- History 增长不使新 Conversation 的 Prompt 线性增长。
+- 常规本地查询 p95 < 300ms（不含模型）。
+
+### 4.4 F03 — 自动记忆提取　P1（M4）　【缺失】
+
+独立 Memory Worker 在 Task 完成、Conversation 空闲、压缩前、用户纠正时，从 History 中提取候选 Memory：`Events → Extract → Classify → Deduplicate → Resolve Conflicts → Persist`。
+
+优先：稳定偏好、项目决策、环境配置、问题与解法、有复用价值的经验。不记：闲聊、未证实推测、重复 Tool 输出、外部内容中的指令、临时状态。
+
+自动提取的 Memory 可信度为"Agent 推断"，进入候选状态，不直接进入 Core Memory。
+
+### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【缺失】
+
+三阶段：Light（候选提取）→ Consolidate（合并、冲突检测、建立来源关系）→ Promote（按重要性、频率、近期性、来源可信度、实际使用晋升）。
+
+要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。现有摘要树压缩是 Consolidate 的雏形，可由 Memory Worker 在后台接管 `nap`，不再占用 Chief 的对话回合。
+
+### 4.6 F05 — Provenance　P0　【缺失】
+
+每条 Memory 字段：
+
+| 字段                        | 说明                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `id`、`scope_id`、`seq`     | `seq` 为 Scope 内不可变序号，摘要树叶子位置                                         |
+| `goal_id`                   | 可选                                                                                |
+| `kind`                      | preference / fact / decision / outcome / environment                                |
+| `content`                   | ≤280 UTF-8 字节                                                                     |
+| `source_type`、`source_ref` | user / agent / tool / external / legacy；引用 Conversation entry、Run、Inbox 消息等 |
+| `trust_level`、`confidence` | 用户确认 / Agent 推断 / 第三方                                                      |
+| `status`、`superseded_by`   | active / superseded / deleted                                                       |
+| `created_at`、`updated_at`  |                                                                                     |
+
+- `memory_versions` 追加记录每次写入、取代、删除（操作者、原因、前后内容），支持恢复。
+- 外部工具结果和第三方内容不得以高优先级指令的形式进入 Prompt；Summary Node 的可信度不高于其覆盖的 Memory。
+- 现有 `LOG.txt` / `TREE/` 一次性导入，之后单向导出供 Worker 与人阅读。
+
+---
+
+## 5. 目标与任务（Goal Engine）
+
+### 5.1 F06 — Persistent Goals　P0　【缺失】
+
+Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / Trigger、Current State、Next Action、Last Execution，以及 Scope、预算。
+
+状态：`active / paused / blocked / completed / cancelled`。用户可在 Desktop 和 Telegram 中创建、暂停、恢复、取消、修改。
+
+设计要点（建议）：
+
+- 每个 Goal 有一个专属 Chief Conversation，复用渠道绑定：`openSession({ channel: 'goal', externalId: goalId, scopeId })`。Goal 的长期上下文落在 Goal 字段与 Memory 中，而不是无限增长的会话。
+- Chief 每次执行后通过 `update_goal` 写回 Current State、Next Action、Last Execution（回答 v0.1 问题 7）；进度以 Success Criteria 清单衡量。
+
+### 5.2 F07 — Task Orchestration　P0　【部分】
+
+现状：Run 已具备队列、Attempt、follow-up、超时、恢复、执行与验收分离、幂等派发；通用 Task 没有状态机。
+
+需求（[ADR 0005](adr/0005-task-evolves-run-executes.md)）：
+
+- 状态：`pending → running → waiting_approval → completed`，以及 `paused / blocked / failed / cancelled`；`outcome` 单独记录（达成 / 未达成 / 无变化）。
+- 字段：`goal_id`、`owner`（user / agent）、`trigger`（manual / schedule / event）与 `trigger_ref`、唯一 `dedupe_key`、`attempts` / `max_attempts`、结果摘要。
+- 有限次数重试、失败退避；用户可 Steer、Pause、Resume。
+- 重启不重复执行同一 Task：创建靠 `dedupe_key`，投递靠 Notification ID，执行靠 Pi Durable 的 `requestId`。
+- 代码类 Task 派发 Run（`runs.task_id`）；Run 完成后由 Chief 判断 Task 是否达成。
+- MVP 单 Chief 串行处理调度 Task；Run 可并行。
+
+### 5.3 F08 — Scheduler　P0　【缺失】
+
+| 触发     | 示例                 | MVP                                         |
+| -------- | -------------------- | ------------------------------------------- |
+| Schedule | 每天早上检查项目状态 | 是                                          |
+| Manual   | 用户要求立即执行     | 是                                          |
+| Event    | GitHub 出现新 Issue  | 部分：现有 Inbox 文件投递可作为通用事件入口 |
+
+原则：Scheduler 决定何时唤醒，Chief 决定做什么。
+
+设计要点（建议）：
+
+- `schedules`：`goal_id`、cron、时区、`next_fire_at`、`last_fired_at`、`enabled`。
+- 到期时在一个事务中：按 `sched:<id>:<fire time>` 创建 Task、写入指向 Goal Conversation 的 Notification、推进 `next_fire_at`。复用现有通知投递与 Durable 去重。
+- 休眠或停机期间错过的触发合并为一次，不补跑风暴。
+- 唤醒内容只包含 Goal 状态与 Task 描述，不重建完整上下文；Chief 自行检索所需 History。
+- 预算：每个 Goal 的每日执行次数、单 Task 最长时间、全局并发；超出则 Task 进入 `blocked` 并通知用户。
+- 需要引入 cron 解析依赖（选择时遵守依赖发布时间要求）。
+- Heartbeat（周期性自检）P1，基于同一机制实现。
+
+通知去重（场景 C）：`notify_user(goal, fingerprint, text)`；同一 Goal 的相同 fingerprint 在窗口期内只送达一次；`outcome = 无变化` 的 Task 默认不通知。
+
+---
+
+## 6. 自我学习（M5）
+
+### 6.1 F09 — Experience Extraction　P1　【缺失】
+
+任务完成后审查执行轨迹（Run 报告、Attempt、Agent 消息），提取成功步骤、失败做法、环境限制、可复用命令。普通 History 不等于经验；证据充分的流程才进入 Skill 候选。
+
+### 6.2 F10 — Self-improving Skills　P2　【缺失】
+
+Skill 候选、更新、版本、人工审批、按任务匹配加载、测试失败回滚。一次未经验证的成功不得变成全局规则。现有项目设置 `promptPreamble` 是最原始的 Procedural Memory，可作为 Skill 的过渡载体。
+
+---
+
+## 7. 交互与执行控制
+
+### 7.1 F11 — 多入口 Gateway　P0　【部分】
+
+现状：`openSession({channel, externalId, scopeId})` 为渠道创建稳定 Conversation，绑定持久化，所有渠道共享 Scope Memory；外部输入可带 `requestId` 去重。无 Telegram adapter。
+
+需求（M3）：
+
+- Telegram Bot 使用 long polling（无需公网入口），按 chat ID 白名单授权，映射为渠道绑定。
+- Bot token 存于 `<dataDir>/service.env`（0600）；Keychain 后续。
+- Desktop 与 Telegram 共享 Goal、Task、Memory 与审批；同一 Task 只由常驻服务执行，渠道只提交输入（回答 v0.1 问题 4）。
+
+### 7.2 F12 — Task Board　P1　【缺失】
+
+替换现有 "Schedule" 视图（目前只是待办列表）。展示：待处理、运行中、待审批、最近完成、失败与阻塞；每个 Task 显示触发原因、所属 Goal、下一步。现有 Inbox（外部消息邮箱）保持原名与原功能。
+
+### 7.3 F13 — 权限与审批　P0　【部分】
+
+现状：
+
+- Chief 没有 shell 和编码工具；Land / Ship / Discard 只能由用户在 UI 中执行，事实上是人工审批。
+- Worker 拥有完整编码工具（含 shell），隔离仅为 Git worktree；"不要 push" 只是指令，没有操作系统级沙箱。
+- 幂等：`operations` 表、稳定操作 ID、`requestId`。【已有】
+
+权限分级：
+
+| 级别             | 行为                            | 默认     |
+| ---------------- | ------------------------------- | -------- |
+| Read             | 检索记忆、读取授权文件          | 允许     |
+| Safe Write       | 更新内部状态、写日志、写 Memory | 允许     |
+| Controlled Write | Land、Ship、对外发送消息        | 需要审批 |
+| Sensitive        | 大量删除、部署生产、支付        | 默认禁止 |
+
+需求（M3）：
+
+- `approvals`：操作类型、对象引用、payload 摘要、请求方、状态（pending / approved / rejected / expired）、决定人、渠道、时间。
+- Chief 获得 `request_land` / `request_ship` 等工具：只创建审批，不直接执行；用户在 Desktop 或 Telegram 批准后，由服务调用现有 `runs.land` / `runs.ship`。
+- 执行前校验审批状态与 payload 摘要一致；被拒绝的审批不可复用，同一对象重新申请需要新的审批记录。
+- MVP 的强制边界是 worktree + 受审批的 Land/Ship；PRD 中 Worker 级别的 Controlled Write 在 MVP 中只能做到"指令 + 事后审查"。建议另行评估：Worker worktree 禁用推送地址、去除推送凭据，或 macOS 沙箱。
+- 审批粒度（回答 v0.1 问题 5，建议）：Goal 的 Constraints 声明允许的操作类别；每一次具体的受控操作单独审批。
+- 审计：所有 Controlled 及以上操作写入 Event（操作者、Trigger、审批 ID、结果）。
+
+---
+
+## 8. 存储
+
+`tian.db`（服务独占写入）：
+
+| 表                                              | 状态 | 说明                                                    |
+| ----------------------------------------------- | ---- | ------------------------------------------------------- |
+| `projects`、`conversations`、`channel_sessions` | 已有 | Scope、会话与渠道绑定                                   |
+| `tasks`                                         | 演进 | 增加 Goal、负责方、状态机、去重键                       |
+| `runs`、`run_attempts`、`agent_messages`        | 已有 | 增加 `runs.task_id`                                     |
+| `inbox`、`notifications`、`operations`          | 已有 | 通知增加 Goal 目标与去重 fingerprint                    |
+| `memories`、`memory_versions`、`memory_nodes`   | 新增 | [ADR 0004](adr/0004-sqlite-memory-with-summary-tree.md) |
+| `memory_fts`、`history_fts`、`history_cursors`  | 新增 | 派生索引，可重建                                        |
+| `events`                                        | 新增 | 业务事件与审计                                          |
+| `goals`、`schedules`、`approvals`               | 新增 |                                                         |
+| `skills`                                        | M5   |                                                         |
+
+`pi-session.sqlite`：Pi Durable 会话与 transcript，History 的唯一来源。
+
+文件：Notes（Markdown，可读写）、Inbox、Run 报告；Memory 导出（只读，单向）。
+
+每次 schema 变化提升 `DATABASE_VERSION`，并由现有升级事务覆盖备份与回滚。
+
+---
+
+## 9. MVP 范围与里程碑
+
+MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行；重启后可靠恢复目标、任务和待审批状态。
+
+### M1 — Memory Foundation
+
+- `memories` / `memory_versions` / `memory_nodes` + FTS；`LOG.txt` / `TREE/` 导入；单向导出。
+- Chief 工具：`remember` / `revise` / `forget` / `recall`（FTS）/ `nap` / `zoom`。
+- Core Memory 按 Token 预算渲染，Conversation 内使用快照；核实并修正 `state` section 的缓存影响。
+- `events` 表；History 派生索引与 `search_history` / `read_history`。
+- Memory UI：显示来源、状态、版本，支持用户纠正和删除（当前为只读）。
+
+### M2 — Persistent Agent
+
+- `goals`、`tasks` 演进、`runs.task_id`。
+- `schedules` 与调度器；Goal Conversation；`update_goal`、`notify_user` 及去重。
+- 预算、超时、并发与退避。
+- UI：Goal 列表与详情（创建、暂停、恢复、取消、编辑）。
+
+### M3 — Always-on UX
+
+- `approvals` 与受控操作工具；Desktop 审批入口。
+- Task Board 替换 Schedule 视图。
+- Telegram adapter（消息、审批按钮）。
+- 场景 A–F 的自动化测试全部通过。
+
+### M4 / M5（MVP 之后）
+
+- M4：Memory Worker、Dreaming、向量 + 全文混合检索。
+- M5：Experience Review、Skill、多 Agent 协作。
+
+MVP 暂不实现：自动 Dreaming、向量检索、Skill、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
+
+---
+
+## 10. 验收场景
+
+每个场景对应 `pnpm test` 中的自动化测试（临时数据库、真实临时 Git 仓库、可控 Worker，不调用模型）。
+
+| 场景 | 描述                         | 预期                                                   | 当前                    |
+| ---- | ---------------------------- | ------------------------------------------------------ | ----------------------- |
+| A    | 告知长期偏好，结束会话并重启 | 新 Conversation 的 Core Memory 包含该偏好              | 部分（无来源）          |
+| B    | 询问一周前的开发决定         | `search_history` 命中原始记录并返回引用                | 缺失                    |
+| C    | 每天自动检查 GitHub 项目     | 按 Schedule 生成 Task、记录结果；无变化不重复通知      | 缺失                    |
+| D    | 执行中应用崩溃               | 重启后恢复 Task 与 Run；已执行的外部操作不盲目重试     | Run 已有；Task 缺失     |
+| E    | 用户纠正旧偏好               | 旧 Memory 被取代并保留版本，Core Memory 不再包含旧内容 | 缺失                    |
+| F    | Agent 想推送代码             | 审批前不执行；审批持久化；拒绝后无法绕过               | 部分（仅 UI 手动 Ship） |
+
+---
+
+## 11. 非功能需求
+
+| 维度     | 目标                                                                                                                   |
+| -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 持久性   | 已确认的写入在正常重启和升级后不丢失（WAL + 升级备份）【已有】                                                         |
+| 故障恢复 | 恢复未完成 Task，核对外部操作状态                                                                                      |
+| 检索     | 本地常规查询 p95 < 300ms，不含模型                                                                                     |
+| 性能     | 后台处理在常驻服务内，不阻塞 renderer【已有】                                                                          |
+| 成本     | Memory Worker 等后台调用可配置模型与预算；Magpie 不回传单价，成本按 Token 计（[ADR 0002](adr/0002-magpie-gateway.md)） |
+| 隐私     | 本地优先、按 Scope 隔离、明确外部数据传输边界                                                                          |
+| 安全     | 最小权限、来源追踪、审批、审计、Prompt Injection 防护                                                                  |
+| 可观测性 | 记录 Trigger、检索命中、Task 结果、Token 用量（已有按 Scope 的 Token 统计）                                            |
+
+性能目标为初步指标，需在真实数据量与硬件上验证。
+
+---
+
+## 12. 产品指标
+
+- **Memory Recall Accuracy**：需要历史时正确检索并使用相关事实的比例。
+- **Memory Contradiction Rate**：使用过期或矛盾 Memory 的频率（可由被取代 Memory 出现在回答中的次数衡量）。
+- **Task Recovery Success Rate**：重启后正确恢复、继续或安全停止 Task 的比例。
+- **Autonomous Task Success Rate**：无需人工纠正达到 Success Criteria 的比例。
+- **Unnecessary Action Rate**：重复执行、重复通知、无意义工具调用的频率。
+- **Tokens per Completed Task**：完成一个成功 Task 的 Token 消耗（暂无金额成本）。
+
+---
+
+## 13. 设计问题
+
+| #   | 问题                               | 结论                                                                                     |
+| --- | ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| 1   | Always-on Runtime 是否独立后台进程 | **已决**：是，launchd 常驻服务（已实现）                                                 |
+| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，摘要树压缩，会话内快照                       |
+| 3   | History 是否复用 Pi 原生存储       | **建议**：Pi 为唯一来源，`tian.db` 建可重建的派生 FTS 索引                               |
+| 4   | 多 Gateway 并发执行同一任务        | **建议**：只有常驻服务执行，渠道只提交；`dedupe_key` + Durable 去重                      |
+| 5   | 权限按 Agent / Goal / Task 授权    | **建议**：Goal 声明允许的操作类别，每次受控操作单独审批                                  |
+| 6   | Memory Worker 是否用廉价模型       | **未决**（M4）：通过 Magpie 可单独配置模型                                               |
+| 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量 |
+| 8   | Worker 的写权限如何真正受限        | **未决**：MVP 以 worktree + 审批 Land/Ship 为边界；沙箱或去除推送凭据另行评估            |
+
+问题 2–5、7 应在 M2 结束前形成 ADR。
+
+---
+
+## 14. 产品原则
+
+- **Memory ≠ Context**：长期记忆不等于无限增长的上下文。
+- **Goal ≠ Conversation**：会话可以结束，目标必须持续存在。
+- **Activity ≠ Progress**：执行了工具不代表 Task 有进展；Run 完成不代表 Task 达成。
+- **Experience ≠ Verified Skill**：经验未经验证不能成为执行规则。
+- **Autonomy ≠ Unlimited Authority**：Agent 可以主动规划，执行权限受用户控制。
+
+目标：从需要持续下指令的助手，演进为能长期承担责任、积累经验、可靠执行并接受监督的个人 Agent。

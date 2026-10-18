@@ -4,6 +4,8 @@
 
 当前已实现聊天、项目注册、记忆、任务、Inbox、Run 派发与验收、总管与工兵的双向消息（agent-to-agent），以及多渠道独立 Session 的后端接口。
 
+产品需求与路线图见 [docs/prd.md](docs/prd.md)，术语见 [CONTEXT.md](CONTEXT.md)，架构决策见 [docs/adr/](docs/adr/)。
+
 ## 开发与验证
 
 ```sh
