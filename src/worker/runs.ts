@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Db, RunRow } from './db.js';
 import type { Scopes } from './scopes.js';
+import type { EventLog } from './events.js';
 import type { Emit } from '../shared/types.js';
 import { atomicWrite } from './files.js';
 import * as Git from './dispatch.js';
@@ -41,6 +42,7 @@ export class RunOrchestrator {
     private userDataDir: string,
     private emit: Emit,
     private notify: () => Promise<void>,
+    private events?: EventLog,
   ) {}
 
   private async locked<T>(key: string, action: () => Promise<T>): Promise<T> {
@@ -117,6 +119,16 @@ export class RunOrchestrator {
         throw error;
       }
       this.launch(id);
+      this.events?.record({
+        id: `run:${id}:dispatched`,
+        type: 'run.dispatched',
+        actor: input.chiefConversationId ? 'chief' : 'system',
+        scopeId: run.projectId,
+        runId: id,
+        conversationId: input.chiefConversationId,
+        summary: `Dispatched to ${project.name}: ${input.prompt.split('\n')[0].slice(0, 120)}`,
+        payload: { prompt: input.prompt.slice(0, 2000) },
+      });
       this.changed();
       return this.require(id);
     });
@@ -313,6 +325,16 @@ export class RunOrchestrator {
       conversationId: run.chiefConversationId,
       content,
     });
+    this.events?.record({
+      id: `run:${run.id}:attempt:${run.attempt}:finished`,
+      type: 'run.finished',
+      actor: 'worker',
+      scopeId: run.projectId,
+      runId: run.id,
+      conversationId: run.chiefConversationId,
+      summary: `Run ${run.id} attempt ${run.attempt} ${status}${run.error ? `: ${run.error}` : ''}`,
+      payload: { status, error: run.error },
+    });
     this.changed();
     await this.notify();
   }
@@ -323,6 +345,16 @@ export class RunOrchestrator {
       scopeId: run.projectId,
       conversationId: run.chiefConversationId,
       content: `[run ${run.id} failed]\n${String(error)}`,
+    });
+    this.events?.record({
+      id: `run:${run.id}:attempt:${run.attempt}:finished`,
+      type: 'run.finished',
+      actor: 'system',
+      scopeId: run.projectId,
+      runId: run.id,
+      conversationId: run.chiefConversationId,
+      summary: `Run ${run.id} attempt ${run.attempt} failed: ${String(error).slice(0, 160)}`,
+      payload: { status: 'failed', error: String(error) },
     });
     this.changed();
     await this.notify();
@@ -386,6 +418,14 @@ export class RunOrchestrator {
             output = await Git.merge(run.rootPath, run.branch, run.baseBranch);
           await Git.discardWorktree(run.rootPath, run.worktreePath, null);
           this.db.patchRun(id, { reviewStatus: 'landed', worktreePath: null });
+          this.events?.record({
+            id: `run:${id}:landed`,
+            type: 'run.landed',
+            actor: 'user',
+            scopeId: run.projectId,
+            runId: id,
+            summary: `Run ${id} landed into ${run.baseBranch}`,
+          });
         } catch (error) {
           this.db.patchRun(id, { error: String(error) });
           throw error;
@@ -420,6 +460,14 @@ export class RunOrchestrator {
           finishedAt: run.finishedAt ?? new Date().toISOString(),
         });
         this.db.recordAttempt(updated);
+        this.events?.record({
+          id: `run:${id}:discarded`,
+          type: 'run.discarded',
+          actor: 'user',
+          scopeId: run.projectId,
+          runId: id,
+          summary: `Run ${id} discarded`,
+        });
       } catch (error) {
         this.db.patchRun(id, { error: String(error) });
         throw error;
@@ -478,6 +526,15 @@ export class RunOrchestrator {
             run.branch,
           ]));
         this.db.patchRun(id, { reviewStatus: 'shipped', prUrl: url });
+        this.events?.record({
+          id: `run:${id}:shipped`,
+          type: 'run.shipped',
+          actor: 'user',
+          scopeId: run.projectId,
+          runId: id,
+          summary: `Run ${id} shipped: ${url}`,
+          payload: { prUrl: url },
+        });
         return url;
       } catch (error) {
         this.db.patchRun(id, { error: String(error) });

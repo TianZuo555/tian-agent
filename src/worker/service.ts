@@ -14,6 +14,8 @@ import { Settings } from './settings.js';
 import { DataService } from './data.js';
 import { AgentRuntime } from './agents.js';
 import { RunOrchestrator, type DispatchInput } from './runs.js';
+import { EventLog } from './events.js';
+import { HistoryIndex } from './history.js';
 import { chiefExtension } from './tools.js';
 import { workerExtension } from './worker-tools.js';
 import { toRows, type ConversationView } from '../shared/messages.js';
@@ -32,6 +34,8 @@ export class Service {
   readonly scopes: Scopes;
   readonly data: DataService;
   readonly runs: RunOrchestrator;
+  readonly events: EventLog;
+  readonly history: HistoryIndex;
   private agents: AgentRuntime;
   private settings: Settings;
   private globalDir: string;
@@ -47,6 +51,7 @@ export class Service {
   private closing = false;
   private maintenanceMode = false;
   private openingSessions = new Map<string, Promise<ConversationInfo>>();
+  private historyBackfill: Promise<void> | null = null;
 
   constructor(
     userDataDir: string,
@@ -63,6 +68,13 @@ export class Service {
       this.settings,
       this.db,
     );
+    this.events = new EventLog(this.db);
+    this.history = new HistoryIndex(
+      this.db,
+      this.agents,
+      this.events,
+      () => !this.maintenanceMode,
+    );
     this.runs = new RunOrchestrator(
       this.db,
       this.scopes,
@@ -70,6 +82,7 @@ export class Service {
       userDataDir,
       emit,
       () => this.deliverNotifications(),
+      this.events,
     );
   }
 
@@ -88,6 +101,11 @@ export class Service {
         sendRunMessage: (runId, body, operationId) =>
           this.data.sendRunMessage(runId, body, operationId),
         runMessages: (runId) => this.data.runMessages(runId),
+        history: {
+          db: this.db,
+          events: this.events,
+          history: this.history,
+        },
       }),
       workerExtension({
         db: this.db,
@@ -116,6 +134,10 @@ export class Service {
 
   private async activate(): Promise<void> {
     await this.runs.recover();
+    // Catch the derived history index up in the background; never block startup.
+    this.historyBackfill = this.history
+      .syncAll()
+      .catch((error) => console.error('History backfill:', error));
     for (const scope of this.listScopes()) {
       this.watchInbox(scope.id);
       this.scanInbox(scope.id);
@@ -169,6 +191,9 @@ export class Service {
     for (const watcher of this.inboxWatches.values()) watcher.close();
     this.inboxTimers.clear();
     this.inboxWatches.clear();
+    this.history.stop();
+    await this.history.idle();
+    await this.historyBackfill;
     await this.delivery;
     for (const watch of this.watches.values()) await watch.stop();
     this.watches.clear();
@@ -347,11 +372,12 @@ export class Service {
   }
 
   async submit(id: string, content: string, requestId?: string) {
-    this.db.conversationScope(id);
+    const scopeId = this.db.conversationScope(id);
     const submission = await (
       await this.agents.conversation(id)
     ).submit({ type: 'input', content, requestId }, BACKGROUND_CONTEXT);
     this.db.setConversationTitle(id, content.split('\n')[0].slice(0, 60));
+    this.history.touch(id, scopeId);
     this.emit('conversations', this.listConversations());
     return { submissionId: String(submission.id) };
   }
@@ -360,7 +386,7 @@ export class Service {
     await (await this.agents.conversation(id)).abort(BACKGROUND_CONTEXT);
   }
   async watch(id: string, clientId = 0): Promise<void> {
-    this.db.conversationScope(id);
+    const scopeId = this.db.conversationScope(id);
     const key = `${clientId}:${id}`;
     const stopping = this.unwatch(id, clientId);
     const version = this.watchVersions.get(key);
@@ -375,12 +401,14 @@ export class Service {
       return;
     }
     const publish = (value: unknown) => {
-      if (current())
+      if (current()) {
+        this.history.touch(id, scopeId);
         this.emit(
           'view',
           { conversationId: id, view: toRows(value as ConversationView) },
           clientId,
         );
+      }
     };
     publish(watch.value);
     await watch.start(async (value) => {
@@ -455,6 +483,18 @@ export class Service {
         conversationId: null,
         content: `[inbox message ${message.id} from ${message.from}]\n${message.body.slice(0, 12_000)}\nRead with check_inbox and tell Tian what came in.`,
       });
+      this.events.record({
+        id: `inbox:${scopeId}:${message.id}`,
+        type: 'inbox.received',
+        actor: 'channel',
+        scopeId,
+        summary: `Inbox message from ${message.from}: ${message.body.split('\n')[0].slice(0, 120)}`,
+        payload: {
+          messageId: message.id,
+          from: message.from,
+          thread: message.thread,
+        },
+      });
     }
     this.emit('inbox', scopeId);
     void this.deliverNotifications();
@@ -498,6 +538,14 @@ export class Service {
             BACKGROUND_CONTEXT,
           );
           this.db.deliveredNotification(notification.id);
+          this.events.record({
+            id: `notify:${notification.id}:delivered`,
+            type: 'notification.delivered',
+            actor: 'system',
+            scopeId: notification.scopeId,
+            conversationId,
+            summary: `Notification ${notification.id} delivered: ${notification.content.split('\n')[0].slice(0, 120)}`,
+          });
           this.emit('inbox', notification.scopeId);
         } catch (error) {
           console.error(`Notification ${notification.id}:`, error);
