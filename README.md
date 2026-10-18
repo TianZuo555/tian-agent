@@ -111,7 +111,7 @@ Settings 中的“服务与升级”在服务离线时也可访问，支持查�
 | `worker/data.ts`         | task、memory、Inbox 操作和更新事件                |
 | `worker/db.ts`           | 业务数据、渠道绑定、通知 outbox、幂等记录         |
 | `worker/scopes.ts`       | scope 目录、notes 和 Inbox 文件导入               |
-| `worker/memory.ts`       | 文件记忆与摘要树                                  |
+| `worker/memory.ts`       | SQLite 记忆、来源与版本、摘要树                   |
 | `worker/dispatch.ts`     | worktree、commit、diff、merge 和 PR 命令          |
 
 总管和工兵共用常驻服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵当前是 Durable 会话，生命周期与桌面客户端独立。
@@ -126,29 +126,35 @@ Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可�
 
 ## Memory
 
-参考 OptMem 结构的 TypeScript 实现：
+记忆存储在 SQLite（`tian.db`，由常驻服务独占写入），带来源、可信度与版本；文件只是单向只读导出（ADR 0004）：
 
 ```text
 <scope root>/memory/
-  LOG.txt
-  TREE/
-    0-1.txt
-    2-3.txt
-    0-3.txt
+  MEMORY.md        每次写入后原子重写的只读视图（有效记忆 + 未失效摘要）
+  legacy/          一次性导入后的旧 LOG.txt 与 TREE/
 ```
 
-- `LOG.txt`：追加事实，一行一条，正文最多 280 UTF-8 字节，附时间；保留原始内容。
-- `TREE/<lo>-<hi>.txt`：对齐二叉区间摘要，父节点需要两个子摘要，使用原子 rename 发布。
-- `note`：记住事实，返回待压缩区间。
-- `nap`：总管写区间摘要；并发压缩不覆盖已存在的节点。
-- `recall`：对原始日志逐字正则搜索。
-- `zoom`：展开摘要的两个子区间。
-- 每次请求注入全局与当前项目记忆，重新提示未完成的压缩及目标 scope。
-- UI 只读，note/nap 完成后自动刷新。
+表结构（`src/worker/memory.ts`）：
 
-项目记忆位于 `<project root>/memory/`；全局记忆位于 `<dataDir>/scopes/global/memory/`。较长内容存入 `<scope root>/notes/` 的 Markdown 文档。
+- `memories`：每条记忆带 `seq`（Scope 内不可变序号，也是摘要树叶位置）、`kind`、`source_type`/`source_ref`、`trust_level`/`confidence`、`status`（active/superseded/deleted）。正文单行，最多 280 UTF-8 字节。
+- `memory_versions`：追加式版本记录（create/supersede/delete/import，含操作者、原因与前后内容），支持审计与恢复。
+- `memory_nodes`：对齐二叉摘要树（`(scope, lo, hi)`）；记忆被取代或删除时，覆盖它的节点标记 stale，Core Memory 下探到子节点或原始行，并重新排入压缩队列。
+- `memory_fts`：FTS5 trigram 全文索引（中文可检索；少于 3 字符的查询回退为 LIKE 子串匹配），默认只查有效记忆，`include_history` 查历史。
 
-记什么、如何摘要由总管模型负责。当前没有向量索引、语义去重、自动纠错或独立后台压缩服务。
+Chief 工具：
+
+- `remember`：新增记忆；`source: "user"` 表示 Tian 明确陈述（trust = user_confirmed），可选关联 goal。
+- `revise`：取代旧记忆（新 `seq`，旧记忆保留为历史并指向新记忆）；用户纠正一律 revise，不追加矛盾行。
+- `forget`：标记删除，从不物理删除。
+- `recall` / `nap` / `zoom`：检索、压缩与下钻；对齐区间、双子节点、并发 nap 不覆盖非 stale 节点等规则不变。零有效记忆的待合并区间自动写入空标记节点，不需要模型调用。
+
+Core Memory（`wake`）按 Token 预算渲染：默认每 Scope 1500 tokens，按 `ceil(UTF-8 字节 / 3)` 估算，超出时头尾省略并提示 recall/zoom。同一 Conversation 内使用稳定快照：只在新的用户轮次开始且记忆版本变化时刷新，避免 Prompt 前缀缓存失效；轮次内的写入通过工具返回值告知模型。
+
+首次打开某 Scope 时，若存在旧版 `LOG.txt` / `TREE/`，一次性事务导入（seq = 行号，来源标记 legacy、可信度 agent_inferred）并移入 `memory/legacy/`；之后数据库是唯一写入来源，`MEMORY.md` 永远只读，供 Worker 与人直接阅读。
+
+项目记忆位于 `<project root>/memory/`；全局记忆位于 `<dataDir>/scopes/global/memory/`。较长内容存入 `<scope root>/notes/` 的 Markdown 文档。UI 中用户可直接修订或删除记忆（`memoryRevise` / `memoryForget`，操作者为 user），全部历史保留在版本记录中。
+
+记什么、如何摘要由总管模型负责。当前没有向量索引、语义去重或独立后台压缩服务。
 
 ## Run 生命周期
 

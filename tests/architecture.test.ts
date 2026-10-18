@@ -196,16 +196,18 @@ test('IPC rejects unknown fields, unsupported workers, and invalid settings', ()
 
 test('memory persists, supports recall/zoom, and validates UTF-8 bytes and summary ranges', (t) => {
   const path = temporary(t);
-  const memory = new MemoryStore(path);
-  assert.throws(() => memory.note('中'.repeat(94)), /280/);
-  memory.note('Tian prefers Chinese');
-  const merge = memory.note('Project uses Electron');
+  const db = new Db(path);
+  t.after(() => db.close());
+  const memory = new MemoryStore(db, 'global', path);
+  assert.throws(() => memory.remember({ text: '中'.repeat(94) }), /280/);
+  memory.remember({ text: 'Tian prefers Chinese' });
+  const { merge } = memory.remember({ text: 'Project uses Electron' });
   assert.deepEqual(merge && [merge.lo, merge.hi], [0, 1]);
   assert.throws(() => memory.nap(0, 3, 'invalid'), /missing/);
   assert.throws(() => memory.nap(0.5, 1.5, 'invalid'), /bad node/);
   assert.throws(() => memory.nap(0, 1, ''), /summary/);
   memory.nap(0, 1, 'Chinese conversations; Electron project');
-  const reopened = new MemoryStore(path);
+  const reopened = new MemoryStore(db, 'global', path);
   assert.match(reopened.wake(), /Chinese conversations/);
   assert.match(reopened.recall('Electron'), /Project uses Electron/);
   assert.match(reopened.zoom(0, 1), /Tian prefers Chinese/);
@@ -222,8 +224,8 @@ test('UI and agent application operations emit updates; task operation IDs dedup
   assert.equal(data.addTask('p1', 'Task', null, 'tool-call-1'), id);
   assert.equal(f.db.listTasks('p1').length, 1);
   data.doneTask(id, true);
-  data.note('p1', 'A durable fact');
-  data.note('p1', 'A second fact');
+  data.remember('p1', 'A durable fact');
+  data.remember('p1', 'A second fact');
   data.nap('p1', 0, 1, 'Two project facts');
   assert.equal(f.db.listTasks('p1')[0].status, 'done');
   assert.equal(f.events.filter((event) => event === 'memory').length, 3);
@@ -262,6 +264,7 @@ test('chief and worker capabilities remain separate, including previously contam
     scopes: f.scopes,
     db: f.db,
     data,
+    latestUserEntry: async () => null,
     dispatch: (input) => f.runs.dispatch(input),
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),
@@ -283,7 +286,9 @@ test('chief and worker capabilities remain separate, including previously contam
     (tool) => tool.name,
   );
   assert.ok(names.includes('read_run_report'));
-  assert.ok(names.includes('note'));
+  assert.ok(names.includes('remember'));
+  assert.ok(names.includes('revise'));
+  assert.ok(names.includes('forget'));
   for (const tool of ['bash', 'read', 'write', 'edit'])
     assert.ok(!names.includes(tool));
   await chief.configure({ extensions: [CodingTools] }, BACKGROUND_CONTEXT);

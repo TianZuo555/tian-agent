@@ -48,7 +48,7 @@ test('closing every desktop client leaves the service and persistent data runnin
   const before = await app.start();
   await app.invoke('addTask', ['global', 'Continue without the App', null]);
   app.close();
-  f.server.service.data.note('global', 'The service owns shared memory');
+  f.server.service.data.remember('global', 'The service owns shared memory');
   const another = f.client();
   const after = await another.start();
   assert.equal(after.pid, before.pid);
@@ -58,7 +58,7 @@ test('closing every desktop client leaves the service and persistent data runnin
     'Continue without the App',
   );
   assert.match(
-    (await another.invoke('memoryDump', ['global'])).lines[0],
+    (await another.invoke('memoryDump', ['global'])).items[0].content,
     /shared memory/,
   );
 });
@@ -83,7 +83,7 @@ test('channel sessions are independent, stable, and share scope memory', async (
   ]);
   assert.equal(again.conversationId, b.conversationId);
   assert.equal(concurrent.conversationId, b.conversationId);
-  f.server.service.data.note('global', 'One memory for all channels');
+  f.server.service.data.remember('global', 'One memory for all channels');
   assert.deepEqual(
     await app.invoke('memoryDump', ['global']),
     await telegram.invoke('memoryDump', ['global']),
@@ -115,10 +115,10 @@ test('the same external chat can bind separate sessions to different scopes', as
     { ...binding, scopeId: projectId },
   ]);
   assert.notEqual(general.conversationId, scoped.conversationId);
-  f.server.service.data.note(projectId, 'Project memory stays scoped');
-  assert.equal((await client.invoke('memoryDump', ['global'])).lines.length, 0);
+  f.server.service.data.remember(projectId, 'Project memory stays scoped');
+  assert.equal((await client.invoke('memoryDump', ['global'])).items.length, 0);
   assert.equal(
-    (await client.invoke('memoryDump', [projectId])).lines.length,
+    (await client.invoke('memoryDump', [projectId])).items.length,
     1,
   );
 });
@@ -294,7 +294,7 @@ test('service restart restores sessions and memory; existing clients reconnect',
     scopeId: 'global',
   };
   const session = await client.invoke('openSession', [binding]);
-  f.server.service.data.note('global', 'Persistent memory');
+  f.server.service.data.remember('global', 'Persistent memory');
   const before = client.info!.startedAt;
   await f.server.close();
   await until(() => client.info === null);
@@ -308,7 +308,7 @@ test('service restart restores sessions and memory; existing clients reconnect',
       session.conversationId,
     );
     assert.match(
-      (await client.invoke('memoryDump', ['global'])).lines[0],
+      (await client.invoke('memoryDump', ['global'])).items[0].content,
       /Persistent memory/,
     );
   } finally {

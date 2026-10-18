@@ -56,7 +56,7 @@ try {
   clients.push(reconnected);
   assert.equal((await reconnected.start()).pid, installed.pid);
   assert.match(
-    (await reconnected.invoke('memoryDump', ['global'])).lines[0],
+    (await reconnected.invoke('memoryDump', ['global'])).items[0].content,
     /Shared persistent memory/,
   );
 

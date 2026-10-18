@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createAppStore } from '../src/renderer/state';
 import type { CommandApi, TianApi } from '../src/shared/contracts';
-import type { AppEvents, TaskItem } from '../src/shared/types';
+import type { AppEvents, MemoryDump, TaskItem } from '../src/shared/types';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -51,7 +51,12 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
       model: { provider: 'anthropic', modelId: 'test' },
     }),
     listTasks: async () => [],
-    memoryDump: async () => ({ lines: [], pendingMerges: 0 }),
+    memoryDump: async () => ({
+      scopeId: 'global',
+      items: [],
+      nodes: [],
+      pendingMerges: 0,
+    }),
     inboxList: async () => [],
     runList: async () => [],
     watch: async (id) => {
@@ -81,6 +86,8 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     abort: async () => {},
     addTask: async () => 1,
     doneTask: async () => {},
+    memoryRevise: async () => {},
+    memoryForget: async () => {},
     runReport: async () => '',
     runDiff: async () => '',
     followUpRun: async () => {
@@ -163,17 +170,34 @@ test('a newer event wins over an older snapshot request', async () => {
 });
 
 test('memory writes refresh the active memory panel', async () => {
-  let lines: string[] = [];
+  let items: MemoryDump['items'] = [];
   const mock = mockApi({
-    memoryDump: async () => ({ lines, pendingMerges: 0 }),
+    memoryDump: async () => ({
+      scopeId: 'global',
+      items,
+      nodes: [],
+      pendingMerges: 0,
+    }),
   });
   const store = createAppStore(mock.api);
   const cleanup = store.actions.init();
   await store.actions.refresh();
-  lines = ['A lasting fact'];
+  items = [
+    {
+      seq: 0,
+      content: 'A lasting fact',
+      kind: 'fact',
+      status: 'active',
+      trustLevel: 'agent_inferred',
+      sourceType: 'agent',
+      supersededBy: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ];
   mock.emit('memory', 'global');
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(store.getState().memory?.lines, ['A lasting fact']);
+  assert.deepEqual(store.getState().memory?.items, items);
   cleanup();
 });
 
