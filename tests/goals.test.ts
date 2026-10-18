@@ -405,6 +405,25 @@ test('runGoalNow creates a manual agent task and respects pause and the cap', as
   await assert.rejects(f.scheduler.runGoalNow('g-missing'), /Unknown goal/);
 });
 
+test('nested transactions (operation replay around a transition) compose', (t) => {
+  const f = fixture(t);
+  const id = f.db.addTask('global', 'nested', null);
+  // `once` opens a transaction; updateTaskStatus opens its own inside it.
+  f.db.once('op-1', () => f.db.updateTaskStatus(id, 'running'));
+  assert.equal(f.db.getTask(id)!.status, 'running');
+  f.db.once('op-1', () => f.db.updateTaskStatus(id, 'completed'));
+  // A replayed operation returns its saved result instead of re-running.
+  assert.equal(f.db.getTask(id)!.status, 'running');
+  // A failing inner action rolls back the whole outer transaction.
+  assert.throws(() =>
+    f.db.once('op-2', () => {
+      f.db.updateTaskStatus(id, 'pending');
+      return null;
+    }),
+  );
+  assert.equal(f.db.getTask(id)!.status, 'running');
+});
+
 test('schedule parsing validates expressions and computes the first fire', () => {
   const now = new Date('2026-10-05T01:00:00.000Z');
   const daily = parseCron('30 9 * * *', 'Asia/Shanghai', now);

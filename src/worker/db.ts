@@ -189,8 +189,26 @@ export class Db {
     return this.db;
   }
 
+  private txDepth = 0;
+
   transaction<T>(action: () => T): T {
+    if (this.txDepth > 0) {
+      // Nested calls become savepoints so helpers with their own transaction
+      // compose inside a larger one (operation-id replay, schedule fires).
+      const savepoint = `tian_sp_${this.txDepth}`;
+      this.db.exec(`SAVEPOINT ${savepoint}`);
+      try {
+        const result = action();
+        this.db.exec(`RELEASE ${savepoint}`);
+        return result;
+      } catch (error) {
+        this.db.exec(`ROLLBACK TO ${savepoint}`);
+        this.db.exec(`RELEASE ${savepoint}`);
+        throw error;
+      }
+    }
     this.db.exec('BEGIN IMMEDIATE');
+    this.txDepth = 1;
     try {
       const result = action();
       this.db.exec('COMMIT');
@@ -198,6 +216,8 @@ export class Db {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    } finally {
+      this.txDepth = 0;
     }
   }
 
