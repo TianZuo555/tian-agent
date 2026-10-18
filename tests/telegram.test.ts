@@ -7,6 +7,8 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { Conversation } from '@earendil-works/pi-durable';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { Service } from '../src/worker/service';
+import { ResidentServer } from '../src/service/server';
+import { servicePaths } from '../src/shared/service-paths';
 import {
   splitMessage,
   telegramConfigFromEnv,
@@ -21,8 +23,25 @@ class FakeBotApi implements TelegramBotApi {
   sent: { chatId: string; text: string }[] = [];
   failures = 0;
   offsets: number[] = [];
-  async getUpdates(offset: number): Promise<TelegramUpdate[]> {
+  /** Resolve to make the next getUpdates hang until aborted (long poll). */
+  hold = false;
+  aborted = 0;
+  async getUpdates(
+    offset: number,
+    _timeout: number,
+    signal?: AbortSignal,
+  ): Promise<TelegramUpdate[]> {
     this.offsets.push(offset);
+    if (this.hold) {
+      // Long poll: hang until aborted, then fail like an aborted fetch and
+      // leave the queue untouched so the update is delivered again later.
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener('abort', () => resolve());
+        setTimeout(resolve, 100);
+      });
+      this.aborted += 1;
+      throw new Error('aborted');
+    }
     if (this.failures > 0) {
       this.failures -= 1;
       throw new Error('network unreachable');
@@ -45,6 +64,8 @@ interface Fixture {
   start(): Promise<Service>;
   /** Detach a manually closed service so the next start() may run. */
   forget(): void;
+  /** Start another service on the same data dir, e.g. with a new allow-list. */
+  restart(allowed: string): Promise<Service>;
 }
 
 async function fixture(
@@ -52,22 +73,23 @@ async function fixture(
   options: { token?: string | null; allowed?: string } = {},
 ): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), 'tian-telegram-'));
-  const keys = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_CHAT_IDS'];
-  const saved = new Map(keys.map((key) => [key, process.env[key]]));
-  const setEnv = (key: string, value: string | undefined) => {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  };
-  setEnv(
-    'TELEGRAM_BOT_TOKEN',
-    options.token === null ? undefined : (options.token ?? 'test-token'),
-  );
-  setEnv('TELEGRAM_ALLOWED_CHAT_IDS', options.allowed ?? String(CHAT));
-  t.after(() => {
-    for (const [key, value] of saved) setEnv(key, value);
-  });
   const api = new FakeBotApi();
   let service: Service | null = null;
+  const build = async (allowed: string) => {
+    assert.equal(service, null, 'close the previous service first');
+    const config =
+      options.token === null
+        ? null
+        : { token: options.token ?? 'test-token', allowedChatIds: [allowed] };
+    const instance = new Service(join(root, 'data'), () => {}, {
+      config,
+      api,
+      options: { pollTimeoutMs: 0, backoffMs: 5, maxUpdateAttempts: 3 },
+    });
+    await instance.init();
+    service = instance;
+    return instance;
+  };
   t.after(async () => {
     if (service) await service.close();
     rmSync(root, { recursive: true, force: true });
@@ -75,16 +97,8 @@ async function fixture(
   return {
     root,
     api,
-    start: async () => {
-      assert.equal(service, null, 'close the previous service first');
-      const instance = new Service(join(root, 'data'), () => {}, {
-        api,
-        options: { pollTimeoutMs: 0, backoffMs: 5, maxUpdateAttempts: 3 },
-      });
-      await instance.init();
-      service = instance;
-      return instance;
-    },
+    start: () => build(options.allowed ?? String(CHAT)),
+    restart: (allowed) => build(allowed),
     forget: () => {
       service = null;
     },
@@ -358,6 +372,214 @@ test('without a token the adapter stays disabled and nothing fails', async (t) =
       TELEGRAM_ALLOWED_CHAT_IDS: ' 1 , 2,',
     }),
     { token: 't', allowedChatIds: ['1', '2'] },
+  );
+});
+
+test('a service created without telegram setup never reads the environment', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'tian-telegram-'));
+  const keys = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_CHAT_IDS'];
+  const saved = new Map(keys.map((key) => [key, process.env[key]]));
+  process.env.TELEGRAM_BOT_TOKEN = 'environment-token';
+  process.env.TELEGRAM_ALLOWED_CHAT_IDS = String(CHAT);
+  t.after(() => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+  // No telegram option: the adapter must stay off even with a token in env.
+  const service = new Service(join(root, 'data'), () => {});
+  t.after(() => service.close());
+  await service.init();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const adapter = (service as unknown as { telegram: unknown }).telegram;
+  assert.equal(adapter, null);
+  assert.equal(service.listConversations().length, 0);
+});
+
+test('a resident server without telegram options never calls the Bot API', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'tian-telegram-'));
+  const keys = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_CHAT_IDS'];
+  const saved = new Map(keys.map((key) => [key, process.env[key]]));
+  process.env.TELEGRAM_BOT_TOKEN = 'environment-token';
+  process.env.TELEGRAM_ALLOWED_CHAT_IDS = String(CHAT);
+  t.after(() => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+  // Any real Bot API call would fail against this token; the fake proves that
+  // the server never even reaches an adapter when the entry passed no config.
+  const paths = {
+    ...servicePaths(join(root, 'data')),
+    socketPath: join(root, 'agent.sock'),
+  };
+  const server = new ResidentServer(paths);
+  t.after(() => server.close());
+  await server.start();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const adapter = (server.service as unknown as { telegram: unknown }).telegram;
+  assert.equal(adapter, null);
+});
+
+// Review 1 item 1: the gateway stops before the idle check, so no submit can
+// slip in after it, and a refused maintenance restarts the gateway.
+test('maintenance stops the gateway before the idle check so no submit slips in', async (t) => {
+  const f = await fixture(t);
+  const service = await f.start();
+  const conversationId = await bindChat(f, service);
+  // Hold the adapter's in-flight long poll, then make the idle check (activity)
+  // take long enough that a still-running poll loop would submit in the window.
+  f.api.hold = true;
+  const polls = f.api.offsets.length;
+  await until(() => f.api.offsets.length > polls);
+  f.api.push(message(2, 21, CHAT, '维护窗口里不该提交'));
+  const originalActivity = service.activity.bind(service);
+  let releaseIdle = () => {};
+  const idleGate = new Promise<void>((resolve) => {
+    releaseIdle = resolve;
+  });
+  let idleEntered = false;
+  service.activity = async () => {
+    if (!idleEntered) {
+      idleEntered = true;
+      releaseIdle();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return originalActivity();
+  };
+  const maintenance = service.beginMaintenance();
+  await idleGate;
+  // The idle check is running: the gateway must already be stopped.
+  const adapter = (service as unknown as { telegram: { running: boolean } })
+    .telegram;
+  assert.equal(adapter.running, false, 'gateway stopped before the idle check');
+  await maintenance;
+  assert.equal((await service.activity()).maintenance, true);
+  const submitted = await userEntries(service, conversationId);
+  assert.equal(submitted, 1, 'the update during maintenance was not submitted');
+  f.api.hold = false;
+  await service.finishMaintenance();
+  await until(() => f.api.offsets.length > polls); // polling again
+  await until(
+    async () => (await userEntries(service, conversationId)) === submitted + 1,
+  );
+});
+
+test('refused maintenance restarts the gateway', async (t) => {
+  const f = await fixture(t);
+  const service = await f.start();
+  const conversationId = await bindChat(f, service);
+  service.db.addRun({
+    id: 'busy',
+    projectId: 'project',
+    conversationId: null,
+    chiefConversationId: null,
+    agentKind: 'durable-worker',
+    prompt: 'busy',
+    currentPrompt: 'busy',
+    rootPath: '/tmp',
+    baseBranch: 'main',
+    executionMode: 'in-place',
+    worktreePath: null,
+    branch: null,
+    status: 'running',
+    reviewStatus: 'pending',
+    attempt: 1,
+    error: null,
+    prUrl: null,
+    reportPath: null,
+    exitCode: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    deadlineAt: '',
+  });
+  await assert.rejects(service.beginMaintenance(), /still running/);
+  assert.equal((await service.activity()).maintenance, false);
+  const polls = f.api.offsets.length;
+  f.api.push(message(2, 21, CHAT, '维护被拒绝后仍然工作'));
+  await until(async () => (await userEntries(service, conversationId)) === 2);
+  assert.ok(f.api.offsets.length > polls);
+});
+
+// Review 1 item 2: the allow-list gates the outbound path itself, not only
+// the catch-up sweep, so a de-authorized chat stops receiving messages.
+test('a chat removed from the allow-list stops receiving assistant output', async (t) => {
+  const f = await fixture(t);
+  let service = await f.start();
+  const conversationId = await bindChat(f, service);
+  await reply(service, conversationId, '允许时的回复');
+  await until(() => f.api.sent.length === 1);
+  await service.close();
+  f.forget();
+  service = await f.restart('999'); // CHAT is no longer allow-listed
+  await until(() => f.api.offsets.length > 0);
+  await reply(service, conversationId, '不再允许的回复');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(f.api.sent.length, 1);
+  assert.equal(f.api.sent[0].text, '允许时的回复');
+  assert.equal(service.listConversations().length, 1); // binding kept, output gated
+});
+
+// Review 1 item 4: watch triggers coalesce, so a burst of view changes runs one
+// forward pass plus at most one queued re-run instead of a page read each.
+test('rapid watch triggers coalesce into one running plus one pending forward pass', async (t) => {
+  const f = await fixture(t);
+  const service = await f.start();
+  const conversationId = await bindChat(f, service);
+  const adapter = (
+    service as unknown as {
+      telegram: {
+        forwardChat(chatId: string, conversationId: string): Promise<void>;
+        forwardRuns: Map<string, Promise<void>>;
+      };
+    }
+  ).telegram;
+  // Count entries() reads and block the first pass inside it, so every later
+  // trigger arrives while a pass is running.
+  const runtime = (
+    service as unknown as {
+      agents: { conversation(id: string): Promise<Conversation> };
+    }
+  ).agents;
+  const open = runtime.conversation.bind(runtime);
+  let reads = 0;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let blocked = false;
+  runtime.conversation = async (id: string) => {
+    const handle = await open(id);
+    const entries = handle.entries.bind(handle);
+    handle.entries = (async (...args: Parameters<typeof entries>) => {
+      reads += 1;
+      if (!blocked) {
+        blocked = true;
+        await gate;
+      }
+      return entries(...args);
+    }) as typeof handle.entries;
+    return handle;
+  };
+  await reply(service, conversationId, '被合并的回复');
+  await until(() => reads === 1); // the poll-driven pass is now blocked
+  const triggers = Array.from({ length: 20 }, () =>
+    adapter.forwardChat(String(CHAT), conversationId),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(reads, 1); // triggers did not each queue a read
+  assert.equal(adapter.forwardRuns.size, 1);
+  release();
+  await Promise.all(triggers);
+  await until(() => adapter.forwardRuns.size === 0);
+  assert.ok(reads <= 3, `expected coalesced reads, got ${reads}`);
+  assert.deepEqual(
+    f.api.sent.map((sent) => sent.text),
+    ['被合并的回复'],
   );
 });
 
