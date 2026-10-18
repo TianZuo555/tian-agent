@@ -22,6 +22,10 @@ export const commandHandlers = (service: Service, clientId: number) =>
     addTask: (scopeId, title, due) => service.addTaskItem(scopeId, title, due),
     doneTask: (id, done) => service.doneTaskItem(id, done),
     memoryDump: (scopeId) => service.memoryDump(scopeId),
+    memoryRevise: (scopeId, seq, text, reason) =>
+      service.memoryRevise(scopeId, seq, text, reason),
+    memoryForget: (scopeId, seq, reason) =>
+      service.memoryForget(scopeId, seq, reason),
     inboxList: (scopeId) => service.inboxList(scopeId),
     runList: (scopeId) => service.runList(scopeId),
     runReport: (id) => service.runReport(id),

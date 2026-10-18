@@ -80,6 +80,8 @@ export class Service {
         scopes: this.scopes,
         db: this.db,
         data: this.data,
+        latestUserEntry: (conversationId) =>
+          this.latestUserEntry(conversationId),
         dispatch: (input) => this.runs.dispatch(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
@@ -542,6 +544,32 @@ export class Service {
   }
   memoryDump(scopeId: string) {
     return this.scopes.memory(scopeId).dump();
+  }
+  memoryRevise(
+    scopeId: string,
+    seq: number,
+    text: string,
+    reason: string,
+  ): void {
+    this.data.revise(scopeId, seq, text, reason, 'user');
+  }
+  memoryForget(scopeId: string, seq: number, reason: string): void {
+    this.data.forget(scopeId, seq, reason, 'user');
+  }
+
+  /** Newest user entry of a conversation; the Core Memory snapshot refresh marker. */
+  private async latestUserEntry(
+    conversationId: string,
+  ): Promise<string | null> {
+    const conversation = await this.agents.conversation(conversationId);
+    const page = await conversation.entries(
+      { order: 'descending' },
+      30,
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    const user = page.items.find((entry) => entry.kind === 'pi.user');
+    return user ? String(user.id) : null;
   }
   inboxList(scopeId: string) {
     return this.scopes.listMessages(scopeId);

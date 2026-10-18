@@ -7,6 +7,14 @@ import { Type } from '@earendil-works/pi-ai';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
 import type { AgentMessageRow, Db, RunRow } from './db.js';
 import type { DataService } from './data.js';
+import {
+  ScopeParam,
+  memoryTools,
+  mergeNotice,
+  resolveScope,
+  toolErr as err,
+  toolText as text,
+} from './tools-memory.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
@@ -29,32 +37,8 @@ export interface ChiefDeps {
   ) => AgentMessageRow;
   /** Read the durable message thread between the chief and a run's worker. */
   runMessages: (runId: string) => AgentMessageRow[];
-}
-
-const text = (t: string) => ({ output: [{ type: 'text' as const, text: t }] });
-const err = (t: string) => ({
-  isError: true as const,
-  output: [{ type: 'text' as const, text: t }],
-});
-
-const ScopeParam = Type.Optional(
-  Type.String({
-    description:
-      'Target scope: "global", a project name or id. Default: this conversation\'s scope.',
-  }),
-);
-
-function resolveScope(
-  deps: ChiefDeps,
-  conversationId: string,
-  param?: string,
-): string {
-  const own = deps.db.conversationScope(conversationId);
-  if (!param) return own;
-  const p = deps.db.getProject(param) ?? deps.db.projectByName(param);
-  if (p) return p.id;
-  if (param === GLOBAL_SCOPE) return GLOBAL_SCOPE;
-  return param; // let scopes.root throw if truly unknown
+  /** Newest user entry in a conversation, to detect a new user turn. */
+  latestUserEntry: (conversationId: string) => Promise<string | null>;
 }
 
 /**
@@ -71,10 +55,11 @@ export function chiefExtension(deps: ChiefDeps) {
 The user is Tian. Answer in the language they use (Chinese by default). Be direct, brief, and concrete.
 
 MEMORY. Your memory outlives every session — without it you do not know who Tian is or what was decided. It is already loaded into context (see <memory>), do not re-read it.
-- note "<one line>" whenever you learn something lasting: a fact about Tian, a project decision, an outcome, a preference. Judge what is worth keeping; never record trivia. Set target "global" for facts about Tian, "project" for facts about the project.
-- If note asks for a compression, do it immediately: call nap with the range and a one-line summary before anything else.
-- recall <regex> searches every memory verbatim; zoom <lo>-<hi> drills a summary node down to raw lines.
-- You are the only writer of memory. Dispatched sub-agents never touch it.
+- remember "<one line>" whenever you learn something lasting: a fact about Tian, a project decision, an outcome, a preference. Judge what is worth keeping; never record trivia. Set source "user" when Tian states it explicitly, target "global" for facts about Tian, "project" for facts about the project.
+- When Tian corrects something, call revise on that memory's #seq — never append a contradicting line. forget #seq removes a memory that should not exist at all.
+- recall "<query>" full-text search over memory (Chinese included; queries under 3 characters use substring matching); pass include_history to see superseded or deleted memories. zoom <lo>-<hi> drills a summary node down to raw lines.
+- If a compression is due, do it immediately: call nap with the range and a one-line summary before anything else.
+- You are the only writer of memory. Dispatched workers read only the exported memory/MEMORY.md and never write memory.
 
 WORLD. <state> shows unread inbox, open tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox.
 
@@ -86,8 +71,16 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     { tag: false },
   );
 
-  const memorySection = section('memory', (input) => {
-    const scope = db.conversationScope(String(input.conversationId));
+  //
+  // Core Memory snapshot: the rendered text lands in the cacheable system-prompt
+  // prefix, so it is computed once per conversation and refreshed only when a
+  // new user turn starts AND the scope's memory version changed since. Writes
+  // within a turn reach the model through the tool results instead.
+  const snapshots = new Map<
+    string,
+    { text: string; version: string; turn: string | null }
+  >();
+  const renderMemory = (scope: string): string => {
     const parts: string[] = [];
     const pending = (scopeId: string) => {
       const merge = scopes.memory(scopeId).nextMerge();
@@ -104,6 +97,28 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       );
     }
     return parts.join('\n\n');
+  };
+
+  const memorySection = section('memory', async (input) => {
+    const conversationId = String(input.conversationId);
+    const scope = db.conversationScope(conversationId);
+    const version = `${scopes.memory(GLOBAL_SCOPE).version()}/${scope === GLOBAL_SCOPE ? '' : scopes.memory(scope).version()}`;
+    let turn: string | null;
+    try {
+      turn = await deps.latestUserEntry(conversationId);
+    } catch {
+      turn = `unavailable-${Date.now()}`; // degradation: recompute every request
+    }
+    const cached = snapshots.get(conversationId);
+    if (cached && cached.turn === turn) return cached.text;
+    if (cached && cached.version === version) {
+      cached.turn = turn; // new turn but unchanged memory: keep the snapshot
+      return cached.text;
+    }
+    const rendered = renderMemory(scope);
+    if (snapshots.size > 200) snapshots.clear();
+    snapshots.set(conversationId, { text: rendered, version, turn });
+    return rendered;
   });
 
   const stateSection = section('state', (input) => {
@@ -142,48 +157,15 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       : header.join('\n');
   });
 
-  const note = defineTool({
-    name: 'note',
-    description:
-      "Record one memory: a single line (<=280 UTF-8 bytes) of a lasting fact, decision, preference or outcome. You are the only writer; choose target 'global' for facts about Tian, 'project' for facts about the current or a named project.",
-    parameters: Type.Object({
-      text: Type.String({ description: 'One line, <=280 bytes.' }),
-      target: Type.Optional(
-        Type.Union([Type.Literal('global'), Type.Literal('project')], {
-          description:
-            'Default: this conversation\'s scope; "global" for the General memory.',
-        }),
-      ),
-      scope: ScopeParam,
-    }),
-    execute: async (args, api) => {
-      const scope =
-        args.target === 'global'
-          ? GLOBAL_SCOPE
-          : resolveScope(deps, String(api.conversationId), args.scope);
-      try {
-        const merge = data.note(scope, args.text);
-        if (merge) {
-          return text(
-            `noted in [${scope === GLOBAL_SCOPE ? 'global' : scope}].\n\nCOMPRESSION DUE — before your next action, call nap with scope="${scope}" lo=${merge.lo} hi=${merge.hi} and a one-line summary of:\n${merge.source}`,
-          );
-        }
-        return text(`noted in [${scope === GLOBAL_SCOPE ? 'global' : scope}].`);
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
   const nap = defineTool({
     name: 'nap',
     description:
-      'Answer a pending memory compression: write a one-line summary covering the given range. Call this when note reports a compression due.',
+      'Answer a pending memory compression: write a one-line summary covering the given range of memory #seq values. Call this when remember/revise reports a compression due.',
     parameters: Type.Object({
       lo: Type.Integer({ minimum: 0 }),
       hi: Type.Integer({ minimum: 1 }),
       summary: Type.String({
-        description: 'One line summarizing lines lo..hi.',
+        description: 'One line summarizing memories #lo..#hi.',
       }),
       scope: ScopeParam,
     }),
@@ -191,12 +173,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
         const next = data.nap(scope, args.lo, args.hi, args.summary);
-        if (next) {
-          return text(
-            `merged ${args.lo}-${args.hi}.\n\nCOMPRESSION DUE — call nap with scope="${scope}" lo=${next.lo} hi=${next.hi} and a one-line summary of:\n${next.source}`,
-          );
-        }
-        return text(`merged ${args.lo}-${args.hi}.`);
+        return text(`merged ${args.lo}-${args.hi}.${mergeNotice(scope, next)}`);
       } catch (e) {
         return err(String(e));
       }
@@ -206,12 +183,28 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
   const recall = defineTool({
     name: 'recall',
     description:
-      'Search every memory verbatim with a regex (case-insensitive).',
-    parameters: Type.Object({ pattern: Type.String(), scope: ScopeParam }),
+      "Full-text search over a scope's memories (FTS, Chinese included; queries under 3 characters fall back to substring matching). Active memories by default.",
+    parameters: Type.Object({
+      query: Type.String({
+        description:
+          'Search text; at least 3 characters for full-text matching.',
+      }),
+      include_history: Type.Optional(
+        Type.Boolean({
+          description:
+            'Include superseded and deleted memories (marked with their status). Default: false.',
+        }),
+      ),
+      scope: ScopeParam,
+    }),
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        return text(scopes.memory(scope).recall(args.pattern));
+        return text(
+          scopes.memory(scope).recall(args.query, {
+            includeHistory: args.include_history ?? false,
+          }),
+        );
       } catch (e) {
         return err(String(e));
       }
@@ -221,7 +214,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
   const zoom = defineTool({
     name: 'zoom',
     description:
-      'Open a memory summary node into its two halves, down to raw lines.',
+      'Open a memory summary node into its two halves, down to raw #seq lines.',
     parameters: Type.Object({
       lo: Type.Integer({ minimum: 0 }),
       hi: Type.Integer({ minimum: 1 }),
@@ -555,7 +548,7 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     name: 'chief',
     sections: [preamble, memorySection, stateSection],
     tools: [
-      note,
+      ...memoryTools(deps),
       nap,
       recall,
       zoom,

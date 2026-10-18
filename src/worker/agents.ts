@@ -114,7 +114,7 @@ export class AgentRuntime implements WorkerRuntime {
           instructions: [
             'You are a worker coding agent. Complete the task unattended and make reasonable decisions yourself. Only when a decision genuinely needs the chief (destructive or irreversible action, missing credentials, fundamental ambiguity) ask once with ask_chief and wait for its reply; use tell_chief for short progress notes, never for chatter.',
             'Edit only files inside the current working directory. Do not run git commit, merge, push, or change branches; the application manages Git.',
-            `Shared context can be read from ${join(run.rootPath, 'memory')} and ${join(run.rootPath, 'notes')}. Never modify memory or the project main checkout.`,
+            `Shared memory is exported read-only to ${join(run.rootPath, 'memory', 'MEMORY.md')}; longer notes in ${join(run.rootPath, 'notes')}. Never modify the memory export, notes, or the project main checkout.`,
             'Write a report of at most one page to TIAN_REPORT.md in the working directory: changes, validation, key decisions, and limitations.',
             project?.promptPreamble ?? '',
           ]

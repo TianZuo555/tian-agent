@@ -101,8 +101,31 @@ export interface RunInfo {
   finishedAt: string | null;
 }
 
+export type MemoryStatus = 'active' | 'superseded' | 'deleted';
+
+export interface MemoryItem {
+  seq: number;
+  content: string;
+  kind: string;
+  status: MemoryStatus;
+  trustLevel: string;
+  sourceType: string;
+  supersededBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryNodeInfo {
+  lo: number;
+  hi: number;
+  summary: string;
+  stale: boolean;
+}
+
 export interface MemoryDump {
-  lines: string[];
+  scopeId: string;
+  items: MemoryItem[];
+  nodes: MemoryNodeInfo[];
   pendingMerges: number;
 }
 
