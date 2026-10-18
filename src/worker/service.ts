@@ -23,6 +23,7 @@ import {
 import { HistoryIndex } from './history.js';
 import { GoalStore } from './goals.js';
 import { GoalScheduler, parseCron } from './scheduler.js';
+import { MemoryWorker } from './memory-worker.js';
 import { chiefExtension } from './tools.js';
 import { workerExtension } from './worker-tools.js';
 import {
@@ -56,6 +57,7 @@ export class Service {
   readonly history: HistoryIndex;
   readonly goals: GoalStore;
   readonly scheduler: GoalScheduler;
+  readonly memoryWorker: MemoryWorker;
   private telegram: TelegramAdapter | null = null;
   private agents: AgentRuntime;
   private settings: Settings;
@@ -68,6 +70,7 @@ export class Service {
   private inboxWatches = new Map<string, FSWatcher>();
   private inboxTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private maintenance?: ReturnType<typeof setInterval>;
+  private memoryTimer?: ReturnType<typeof setInterval>;
   private delivery: Promise<void> | null = null;
   private closing = false;
   private maintenanceMode = false;
@@ -100,6 +103,28 @@ export class Service {
       () => !this.maintenanceMode,
       (area, error, context) => this.reportIssue(area, error, context),
     );
+    // Memory worker (PRD §4.4 F03): extracts candidate memories from the
+    // history index in the background; a trigger never costs a chief turn.
+    this.memoryWorker = new MemoryWorker({
+      db: this.db,
+      scopes: this.scopes,
+      history: this.history,
+      events: this.events,
+      isPaused: () => this.closing || this.maintenanceMode,
+      emitMemory: (scopeId) => this.emit('memory', scopeId),
+    });
+    this.data = new DataService(this.db, this.scopes, emit, {
+      onTaskCompleted: (scopeId) => {
+        void this.memoryWorker
+          .trigger(scopeId, 'task-completed')
+          .catch((error) => console.error('Memory worker:', error));
+      },
+      onCorrection: (scopeId) => {
+        void this.memoryWorker
+          .trigger(scopeId, 'user-correction', { force: true })
+          .catch((error) => console.error('Memory worker:', error));
+      },
+    });
     this.runs = new RunOrchestrator(
       this.db,
       this.scopes,
@@ -143,6 +168,11 @@ export class Service {
         emitImprovements: () => this.emitImprovements(),
         emitNotices: (scopeId) =>
           this.emit('notices', this.goals.listNotices(scopeId)),
+        onTaskCompleted: (scopeId) => {
+          void this.memoryWorker
+            .trigger(scopeId, 'task-completed')
+            .catch((error) => console.error('Memory worker:', error));
+        },
         dispatch: (input) => this.runs.dispatch(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
@@ -178,6 +208,13 @@ export class Service {
       void this.deliverNotifications();
     }, 60_000);
     this.maintenance.unref();
+    // Periodic memory extraction for conversations nobody watches (PRD §4.4).
+    this.memoryTimer = setInterval(() => {
+      void this.memoryWorker
+        .sweep()
+        .catch((error) => console.error('Memory sweep:', error));
+    }, 5 * 60_000);
+    this.memoryTimer.unref();
   }
 
   private async activate(): Promise<void> {
@@ -271,7 +308,9 @@ export class Service {
     this.closing = true;
     this.runs.pause();
     this.scheduler.stop();
+    this.memoryWorker.stop();
     clearInterval(this.maintenance);
+    clearInterval(this.memoryTimer);
     await this.telegram?.stop();
     for (const timer of this.inboxTimers.values()) clearTimeout(timer);
     for (const watcher of this.inboxWatches.values()) watcher.close();
@@ -279,6 +318,7 @@ export class Service {
     this.inboxWatches.clear();
     this.history.stop();
     await this.history.idle();
+    await this.memoryWorker.idle();
     await this.historyBackfill;
     await this.delivery;
     await Promise.all([...this.watches.values()].map((watch) => watch.stop()));
@@ -489,14 +529,19 @@ export class Service {
       await watch.stop();
       return;
     }
+    // When a watched conversation goes idle, its turn is complete history —
+    // worth an extraction pass (PRD §4.4 F03, Conversation idle).
+    let wasBusy = false;
     const publish = (value: unknown) => {
       if (current()) {
         this.history.touch(id, scopeId);
-        this.emit(
-          'view',
-          { conversationId: id, view: toRows(value as ConversationView) },
-          clientId,
-        );
+        const snapshot = toRows(value as ConversationView);
+        if (wasBusy && !snapshot.busy)
+          void this.memoryWorker
+            .trigger(scopeId, 'conversation-idle')
+            .catch((error) => console.error('Memory worker:', error));
+        wasBusy = snapshot.busy;
+        this.emit('view', { conversationId: id, view: snapshot }, clientId);
       }
     };
     publish(watch.value);
@@ -882,6 +927,12 @@ export class Service {
   }
   memoryForget(scopeId: string, seq: number, reason: string): void {
     this.data.forget(scopeId, seq, reason, 'user');
+  }
+  memoryPromote(scopeId: string, seq: number): void {
+    this.data.promote(scopeId, seq);
+  }
+  memoryDismiss(scopeId: string, seq: number): void {
+    this.data.dismiss(scopeId, seq);
   }
 
   /** Newest user entry of a conversation; the Core Memory snapshot refresh marker. */

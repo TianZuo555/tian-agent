@@ -10,6 +10,11 @@ export class DataService {
     private db: Db,
     private scopes: Scopes,
     private emit: Emit,
+    /** Background hooks fired after memory corrections and task completions. */
+    private hooks: {
+      onTaskCompleted?: (scopeId: string) => void;
+      onCorrection?: (scopeId: string) => void;
+    } = {},
   ) {}
 
   addTask(
@@ -28,12 +33,15 @@ export class DataService {
   }
 
   doneTask(id: number, done: boolean, operationId?: string): void {
+    const scopeId = this.db.getTask(id)?.scopeId;
     this.db.once(operationId, () => {
       if (done) this.db.doneTask(id);
       else this.db.reopenTask(id);
       return null;
     });
     this.emit('tasks', this.db.listTasks(null));
+    // A finished task is an extraction trigger (PRD §4.4 F03).
+    if (done && scopeId) this.hooks.onTaskCompleted?.(scopeId);
   }
 
   /** Record a memory; `source: 'user'` means Tian stated it explicitly. */
@@ -69,6 +77,8 @@ export class DataService {
   ) {
     const result = this.scopes.memory(scopeId).revise(seq, text, reason, actor);
     this.emit('memory', scopeId);
+    // A correction is an extraction trigger (PRD §4.4 F03).
+    this.hooks.onCorrection?.(scopeId);
     return result;
   }
 
@@ -80,7 +90,26 @@ export class DataService {
   ): MemoryRow {
     const memory = this.scopes.memory(scopeId).forget(seq, reason, actor);
     this.emit('memory', scopeId);
+    this.hooks.onCorrection?.(scopeId);
     return memory;
+  }
+
+  /** User promotion of a candidate; trust stays agent_inferred. */
+  promote(
+    scopeId: string,
+    seq: number,
+  ): {
+    memory: MemoryRow;
+    superseded: MemoryRow | null;
+  } {
+    const result = this.scopes.memory(scopeId).promote(seq, 'user');
+    this.emit('memory', scopeId);
+    return result;
+  }
+
+  /** User dismissal of a candidate; the extraction remembers the rejection. */
+  dismiss(scopeId: string, seq: number): void {
+    this.forget(scopeId, seq, 'candidate dismissed', 'user');
   }
 
   nap(scopeId: string, lo: number, hi: number, summary: string) {

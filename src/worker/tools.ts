@@ -35,6 +35,8 @@ export interface ChiefDeps {
   emitImprovements: () => void;
   /** Push the notices panel update for a scope. */
   emitNotices: (scopeId: string) => void;
+  /** An extraction trigger fires when the chief completes a task (PRD §4.4). */
+  onTaskCompleted?: (scopeId: string) => void;
   runReport: (id: string) => string;
   runDiff: (id: string) => Promise<string>;
   /** Dispatch a headless worker run; resolves once the run is queued. */
@@ -73,6 +75,7 @@ export function chiefExtension(deps: ChiefDeps) {
       resolveScope(deps, conversationId, param),
     emitUpdates: deps.emitUpdates,
     emitNotice: deps.emitNotices,
+    onTaskCompleted: deps.onTaskCompleted,
   });
 
   const preamble = section(

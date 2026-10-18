@@ -57,6 +57,8 @@ export const commandHandlers = (service: Service, clientId: number) =>
       service.memoryRevise(scopeId, seq, text, reason),
     memoryForget: (scopeId, seq, reason) =>
       service.memoryForget(scopeId, seq, reason),
+    memoryPromote: (scopeId, seq) => service.memoryPromote(scopeId, seq),
+    memoryDismiss: (scopeId, seq) => service.memoryDismiss(scopeId, seq),
     inboxList: (scopeId) => service.inboxList(scopeId),
     runList: (scopeId) => service.runList(scopeId),
     runReport: (id) => service.runReport(id),

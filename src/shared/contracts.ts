@@ -97,6 +97,8 @@ export interface Commands {
     void
   >;
   memoryForget: Command<[scopeId: string, seq: number, reason: string], void>;
+  memoryPromote: Command<[scopeId: string, seq: number], void>;
+  memoryDismiss: Command<[scopeId: string, seq: number], void>;
   inboxList: Command<[scopeId: string], InboxItem[]>;
   runList: Command<[scopeId: string | null], RunInfo[]>;
   runReport: Command<[id: string], string>;
@@ -250,6 +252,8 @@ export const commandArgs = {
     Type.Integer({ minimum: 0 }),
     Type.String({ minLength: 1, maxLength: 2_000 }),
   ]),
+  memoryPromote: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
+  memoryDismiss: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   inboxList: Type.Tuple([id]),
   runList: Type.Tuple([nullableId]),
   runReport: Type.Tuple([id]),

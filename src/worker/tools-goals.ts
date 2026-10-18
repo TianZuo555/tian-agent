@@ -15,6 +15,8 @@ export interface GoalsToolDeps {
   /** Push task/goal updates to clients after a tool write. */
   emitUpdates: () => void;
   emitNotice: (scopeId: string) => void;
+  /** An extraction trigger fires when the chief completes a task (PRD §4.4). */
+  onTaskCompleted?: (scopeId: string) => void;
 }
 
 const text = (t: string) => ({ output: [{ type: 'text' as const, text: t }] });
@@ -328,6 +330,7 @@ export function goalsTools(deps: GoalsToolDeps): ToolRegistration[] {
             }),
         );
         changed();
+        deps.onTaskCompleted?.(updated.scopeId);
         return text(
           `task #${updated.id} completed (${updated.outcome}). Remember update_goal to record the new state and next action.`,
         );
