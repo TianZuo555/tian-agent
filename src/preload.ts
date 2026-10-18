@@ -22,6 +22,12 @@ const events: (keyof AppEvents)[] = [
 
 const api: TianApi = {
   ...commands,
+  desktop: ((action: string, candidateId?: string) =>
+    ipcRenderer.invoke(
+      'tian:desktop',
+      action,
+      candidateId,
+    )) as TianApi['desktop'],
   on(channel, callback) {
     if (!events.includes(channel)) throw new Error(`Unknown event: ${channel}`);
     const handler = (

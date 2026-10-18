@@ -16,16 +16,20 @@ pnpm test
 pnpm package
 pnpm test:runtime
 pnpm test:launchd
+pnpm test:upgrade
+pnpm test:app-upgrade
 ```
 
 - `pnpm test`：临时数据库、真实临时 Git 仓库和可控工兵；覆盖权限、记忆、Inbox、Run 状态、前端同步和多客户端服务。不调用模型。
 - `pnpm test:runtime`：验证打包后的服务产物可以离开 checkout、通过普通 Node 运行，并连接 sandbox preload 和真实 renderer；退出 Electron 后服务继续运行。不使用用户数据或模型。
 - `pnpm test:launchd`：安装独立测试 LaunchAgent，强制结束其进程，验证系统自动重启、持久化恢复和客户端重连，随后删除测试服务。
+- `pnpm test:upgrade`：真实隔离 LaunchAgent，验证维护期间拒绝写入、启动失败回滚、数据库备份恢复、未完成升级恢复，以及停止服务与登录偏好的独立性。
+- `pnpm test:app-upgrade`：构建两个版本的真实 macOS App，使用隐藏窗口及临时数据验证设置面板、断开／重连、App 启动失败回滚、App 与服务配套升级及界面启动确认。此命令暂时修改版本号并在结束时恢复，不要与其他打包命令同时运行。
 - `scripts/e2e-dispatch.mts`：需要模型凭据的手工集成检查，会执行真实工兵任务。
 
 ## 本机常驻服务
 
-要求 Node.js 24 或更新版本。首次安装或更新后端时运行 `pnpm service:install`。安装器将完整构建产物复制到应用数据目录中的独立 release，LaunchAgent 不依赖开发 checkout、终端或 Electron 进程存活。
+开发构建要求 Node.js 24 或更新版本。首次安装或更新后端时运行 `pnpm service:install`，也可以在 App 设置的“服务与升级”中操作。安装器将完整构建产物和固定版本的 Node 运行时复制到独立 release，LaunchAgent 不依赖开发 checkout、系统 Node 安装、终端或 Electron 进程存活。
 
 | 操作                 | 命令                                          |
 | -------------------- | --------------------------------------------- |
@@ -46,9 +50,32 @@ pnpm test:launchd
 
 使用 `TIAN_AGENT_DATA_DIR` 或 CLI 的 `--data-dir` 指定其他数据目录，`TIAN_AGENT_SOCKET_PATH` 可指定 socket 路径；App 与服务必须使用相同配置。存储和 socket 都有独占锁。旧版 App 仍占用数据库时，新服务会拒绝打开存储，需要先退出旧版 App。
 
-LaunchAgent 保存安装时 Node 的绝对路径与 PATH。更换或删除该 Node 安装后需要重新安装服务。环境变量密钥可以写入 `<dataDir>/service.env`，文件权限应为 `0600`，然后重启服务；已有 Pi API key 配置仍可使用。安装器不将模型密钥写入 plist。
+LaunchAgent 使用 release 内的独立 Node 运行时。环境变量密钥可以写入 `<dataDir>/service.env`，文件权限应为 `0600`，然后重启服务；当前模型由 Magpie 网关提供，可在此配置 `MAGPIE_BASE_URL` 与 `MAGPIE_API_KEY`。安装器不将模型密钥写入 plist。
 
-服务登录时自动启动，崩溃后由 launchd 重启。App 启动时会启动已安装的服务并连接它；退出 App 只断开连接，任务与工兵继续运行。系统休眠或关机期间无法执行任务，登录后恢复。
+登录自启动、服务运行和 App 连接是独立状态。App 启动时只按偏好连接现有服务，不会把已经停止的服务自动启动。退出 App 仅关闭连接；明确“断开本窗口连接”会持久保存不自动重连的偏好。系统休眠或关机期间无法执行任务。
+
+## 服务控制与升级
+
+Settings 中的“服务与升级”在服务离线时也可访问，支持查看 App／配套服务／运行服务版本、连接、断开、启动、停止、登录自启动、安装配套服务和恢复未完成升级。停止或升级前检查 Durable tasks、queued submissions、Runs 和验收操作；仍有工作时拒绝操作，保留原服务运行。首次迁移没有版本信息的旧服务时，设置页会单独标识：旧版没有空闲检查，需确认工作可以暂停后先正常停止，再安装新版配套服务。数据保留；旧协议不再用于新版 App 的业务连接。
+
+关闭登录自启动只移除 `~/Library/LaunchAgents/` 中的入口，保留安装目录中的定义，允许手动启动并在当前登录会话内崩溃重启。停止服务使用 `bootout`，避免 KeepAlive 立即将其启动。重新打开 App 不撤销停止操作。
+
+服务升级执行以下事务：
+
+1. 校验完整 release manifest，包括所有动态 chunk、平台、架构、协议、数据库版本与独立 Node；复制到不可变 release 目录。
+2. 获取升级互斥锁，拒绝新请求并检查现有工作已空闲。
+3. 写入持久化维护标记，停止旧服务，在存储锁保护下备份两份 SQLite 及存在的 WAL／SHM。
+4. 切换服务定义并启动新版。新版在维护模式下启动，不恢复任务、不投递 Inbox、不接受普通请求。
+5. 核对版本、release ID、数据库版本及维护状态；写入提交记录后才恢复工作。
+6. 提交前失败则恢复数据库快照、旧服务定义和原运行状态。提交后不自动恢复旧数据库，避免覆盖新数据；恢复入口只继续完成激活。
+
+升级日志位于 `<dataDir>/service/update.json`，维护标记在 `service/maintenance.json`，快照在 `service/backups/<transaction-id>/`。协调进程异常退出后，可通过设置中的恢复入口继续处理。已成功升级后保留当前与上一份服务 release，以及最近三份数据库备份。Memory 文本格式未改变，升级不替换其内容。
+
+已打包的 macOS App 支持“导入新版 App…”：选择更高版本的 `.app`，检查应用标识、版本、配套服务及平台架构；当前 App 有开发者签名时，新版必须由同一开发者签名且通过签名验证。本地未签名开发版本需要在确认框中明确确认。App 所在目录必须可写。
+
+确认后，独立升级进程等待旧 App 退出，在同一磁盘暂存并原子切换 App 目录。已有服务与 App 一起升级；未安装服务时只更新 App，已停止的服务升级后仍保持停止。新 App 必须完成 renderer 挂载及配套服务版本检查，升级器才提交并解除维护状态。检查失败会恢复旧 App 与服务。此功能支持当前协议及数据库版本；未来破坏性迁移需要同步扩展升级器，不能直接绕过兼容检查。
+
+目前升级来源是用户选择的本地 `.app`；远端版本检查、下载源、发布签名和公证尚未配置。
 
 ## 渠道与独立 Session
 
@@ -69,7 +96,9 @@ LaunchAgent 保存安装时 Node 的绝对路径与 PATH。更换或删除该 No
 | ------------------------ | ------------------------------------------------- |
 | `service/server.ts`      | 服务生命周期、独占锁、Unix socket RPC、客户端隔离 |
 | `service/client.ts`      | 请求、事件、自动重连；关闭客户端不停止服务        |
-| `service/launchd.ts`     | 安装、启动、停止及移除 LaunchAgent                |
+| `service/launchd.ts`     | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理 |
+| `desktop/controller.ts`  | App 连接偏好、服务控制及本地升级入口              |
+| `desktop/app-update.ts`  | App 校验、独立替换、启动检查与失败恢复            |
 | `shared/contracts.ts`    | IPC / socket 参数 schema、返回类型和消息合约      |
 | `shared/messages.ts`     | Pi transcript 转换为聊天快照                      |
 | `worker/service.ts`      | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
@@ -182,6 +211,6 @@ thread: optional-thread
 
 ## 后续
 
-当前使用 Pi API key 或环境变量接入 Anthropic、OpenAI、DeepSeek。Keychain、Telegram adapter、远程服务、本机／云端协议、更多工兵类型、定时简报、自动更新、签名与公证仍待实现。
+当前通过 Magpie 网关接入模型。Keychain、Telegram adapter、远程服务、本机／云端协议、更多工兵类型、定时简报、远端自动更新源、发布签名与公证仍待实现。
 
 参考：[Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable)、[OptMem](https://github.com/VictorTaelin/OptMem)、[launchd](https://www.launchd.info/)、[coss](https://coss.com/ui)。

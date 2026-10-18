@@ -8,6 +8,8 @@ import {
   startService,
   stopService,
   uninstallService,
+  recoverServiceUpdate,
+  setLoginEnabled,
 } from '../src/service/launchd.js';
 
 const { values, positionals } = parseArgs({
@@ -43,6 +45,15 @@ try {
       await stopService(options);
       console.log(JSON.stringify(await startService(options), null, 2));
       break;
+    case 'recover':
+      await recoverServiceUpdate(options);
+      console.log('Service upgrade recovered.');
+      break;
+    case 'login-on':
+    case 'login-off':
+      await setLoginEnabled(options, action === 'login-on');
+      console.log('Login preference saved.');
+      break;
     case 'stop':
       await stopService(options);
       console.log('Resident service stopped.');
@@ -69,7 +80,7 @@ try {
       break;
     default:
       throw new Error(
-        'Usage: pnpm exec tsx scripts/service.mts install|start|stop|restart|status|uninstall [--data-dir /absolute/path]',
+        'Usage: pnpm exec tsx scripts/service.mts install|start|stop|restart|status|uninstall|recover|login-on|login-off [--data-dir /absolute/path]',
       );
   }
 } catch (error) {

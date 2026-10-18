@@ -8,11 +8,13 @@ import { Button } from '@/components/ui/button';
  */
 export function ChatComposer({
   busy,
+  disabled = false,
   onSend,
   onStop,
   placeholder = 'Message the steward…',
 }: {
   busy: boolean;
+  disabled?: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
   placeholder?: string;
@@ -30,7 +32,7 @@ export function ChatComposer({
 
   const submit = () => {
     const text = value.trim();
-    if (!text) return;
+    if (!text || disabled) return;
     onSend(text);
     setValue('');
   };
@@ -39,6 +41,7 @@ export function ChatComposer({
     <div className="relative flex items-end gap-1 rounded-xl border border-border bg-card p-1.5 transition-colors focus-within:border-border-secondary">
       <textarea
         ref={ref}
+        disabled={disabled}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
@@ -57,6 +60,7 @@ export function ChatComposer({
           variant="secondary"
           size="icon-sm"
           aria-label="Stop"
+          disabled={disabled}
           onClick={onStop}
         >
           <Square className="size-3.5" />
@@ -65,7 +69,7 @@ export function ChatComposer({
         <Button
           size="icon-sm"
           aria-label="Send"
-          disabled={!value.trim()}
+          disabled={disabled || !value.trim()}
           onClick={submit}
         >
           <ArrowUp className="size-4" />

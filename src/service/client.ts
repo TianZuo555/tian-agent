@@ -36,6 +36,7 @@ export class ServiceClient {
   private disposed = false;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private currentInfo: ServiceInfo | null = null;
+  private reconnectAttempt = 0;
 
   constructor(
     readonly socketPath: string,
@@ -100,7 +101,11 @@ export class ServiceClient {
         this.emit('runtime', { status: 'failed', error: lastError });
         this.reconnectTimer = setTimeout(
           () => this.connect(),
-          this.options.reconnectDelayMs ?? 500,
+          Math.min(
+            30_000,
+            (this.options.reconnectDelayMs ?? 500) *
+              2 ** Math.min(this.reconnectAttempt++, 6),
+          ),
         );
         this.reconnectTimer.unref();
       }
@@ -117,6 +122,9 @@ export class ServiceClient {
       if (
         !isRecord(info) ||
         info.protocolVersion !== SERVICE_PROTOCOL ||
+        typeof info.serviceVersion !== 'string' ||
+        typeof info.releaseId !== 'string' ||
+        !Number.isSafeInteger(info.databaseVersion) ||
         !isId(info.pid) ||
         typeof info.startedAt !== 'string'
       ) {
@@ -128,6 +136,7 @@ export class ServiceClient {
         return;
       }
       this.currentInfo = info as unknown as ServiceInfo;
+      this.reconnectAttempt = 0;
       for (const waiter of this.waiting) {
         clearTimeout(waiter.timer);
         waiter.resolve(this.currentInfo);

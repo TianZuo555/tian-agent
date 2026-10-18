@@ -28,6 +28,9 @@ export interface SessionBinding {
 }
 
 export interface ServiceInfo {
+  serviceVersion: string;
+  databaseVersion: number;
+  releaseId: string;
   protocolVersion: number;
   pid: number;
   startedAt: string;
@@ -158,7 +161,10 @@ export interface AppEvents {
   memory: string;
   scopes: ScopeInfo[];
   settings: SettingsInfo;
-  runtime: { status: 'starting' | 'ready' | 'failed'; error?: string };
+  runtime: {
+    status: 'starting' | 'ready' | 'failed' | 'disconnected';
+    error?: string;
+  };
 }
 
 export type Emit = <K extends keyof AppEvents>(

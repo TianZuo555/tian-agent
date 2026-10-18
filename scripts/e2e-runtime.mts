@@ -18,7 +18,10 @@ const electron = require('electron') as string;
 const archive = resolve(
   `out/Tian Agent-darwin-${process.arch}/Tian Agent.app/Contents/Resources/app.asar`,
 );
-if (!existsSync(archive) || !existsSync('.vite/build/service.cjs'))
+const packagedPayload = resolve(
+  `out/Tian Agent-darwin-${process.arch}/Tian Agent.app/Contents/Resources/service`,
+);
+if (!existsSync(archive) || !existsSync(join(packagedPayload, 'service.cjs')))
   throw new Error('Run pnpm package first');
 const temporary = mkdtempSync('/tmp/tian-runtime-');
 const data = join(temporary, 'data');
@@ -30,12 +33,12 @@ writeFileSync(
   '2026-01-01 00:00 Persistent memory from disk\n',
 );
 // Forge packages these same files. Run the copy with plain Node from outside the checkout.
-cpSync(resolve('.vite/build'), join(temporary, 'bundle'), { recursive: true });
+cpSync(packagedPayload, join(temporary, 'bundle'), { recursive: true });
 let daemon: ChildProcess | null = null;
 let client: ServiceClient | null = null;
 async function startDaemon() {
   daemon = spawn(
-    process.execPath,
+    join(temporary, 'bundle/runtime/node'),
     [join(temporary, 'bundle/service.cjs'), '--data-dir', data],
     {
       cwd: temporary,
@@ -110,6 +113,7 @@ app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
   await ready;
   ipcMain.handle('tian:invoke', (event, command, args) => rpc(command, args, event.sender.id));
+  ipcMain.handle('tian:desktop', (_event, action) => { if(action === 'ready') return null; throw new Error('Desktop controls are covered by test:app-upgrade'); });
   const errors = [];
   window = new BrowserWindow({ show: false, webPreferences: { preload: preloadPath, sandbox: true, contextIsolation: true, nodeIntegration: false } });
   window.webContents.on('preload-error', (_event, _path, error) => errors.push(String(error)));

@@ -45,6 +45,7 @@ export class Service {
   private maintenance?: ReturnType<typeof setInterval>;
   private delivery: Promise<void> | null = null;
   private closing = false;
+  private maintenanceMode = false;
   private openingSessions = new Map<string, Promise<ConversationInfo>>();
 
   constructor(
@@ -72,7 +73,8 @@ export class Service {
     );
   }
 
-  async init(): Promise<void> {
+  async init(maintenance = false): Promise<void> {
+    this.maintenanceMode = maintenance;
     await this.agents.open(
       chiefExtension({
         scopes: this.scopes,
@@ -93,15 +95,10 @@ export class Service {
         },
       }),
     );
-    await this.runs.recover();
-    for (const scope of this.listScopes()) {
-      this.watchInbox(scope.id);
-      this.scanInbox(scope.id);
-    }
-    await this.deliverNotifications();
-    this.agents.harness.resume();
-    // Scans repair missed filesystem events and retry durable notification delivery.
+    if (!maintenance) await this.activate();
+    // Keep the process available for health checks while the updater holds maintenance.
     this.maintenance = setInterval(() => {
+      if (this.maintenanceMode) return;
       for (const scope of this.listScopes()) {
         try {
           this.watchInbox(scope.id);
@@ -111,8 +108,54 @@ export class Service {
         }
       }
       void this.deliverNotifications();
-    }, 10_000);
+    }, 60_000);
     this.maintenance.unref();
+  }
+
+  private async activate(): Promise<void> {
+    await this.runs.recover();
+    for (const scope of this.listScopes()) {
+      this.watchInbox(scope.id);
+      this.scanInbox(scope.id);
+    }
+    await this.deliverNotifications();
+    this.agents.harness.resume();
+  }
+
+  async activity() {
+    const inspection = await this.agents.harness.inspect(BACKGROUND_CONTEXT);
+    return {
+      tasks: inspection.tasks.length,
+      submissions: inspection.submissions.length,
+      runs: this.db.activeRuns().length,
+      reviews: this.db.unsettledReviews().length,
+      maintenance: this.maintenanceMode,
+    };
+  }
+  async beginMaintenance() {
+    this.maintenanceMode = true;
+    try {
+      await this.delivery;
+      const activity = await this.activity();
+      if (
+        activity.tasks ||
+        activity.submissions ||
+        activity.runs ||
+        activity.reviews
+      )
+        throw new Error(
+          'Tasks or conversations are still running. Wait for them to finish before stopping or updating the service.',
+        );
+      return activity;
+    } catch (error) {
+      this.maintenanceMode = false;
+      throw error;
+    }
+  }
+  async finishMaintenance(): Promise<void> {
+    if (!this.maintenanceMode) return;
+    this.maintenanceMode = false;
+    await this.activate();
   }
 
   async close(): Promise<void> {
@@ -400,7 +443,7 @@ export class Service {
     this.inboxWatches.delete(scopeId);
   }
   private scanInbox(scopeId: string): void {
-    if (this.closing) return;
+    if (this.closing || this.maintenanceMode) return;
     for (const message of this.scopes.listMessages(scopeId)) {
       if (message.from === 'chief' || message.thread.startsWith('run-'))
         continue;
@@ -415,11 +458,11 @@ export class Service {
     void this.deliverNotifications();
   }
   private deliverNotifications(): Promise<void> {
-    if (this.closing) return Promise.resolve();
+    if (this.closing || this.maintenanceMode) return Promise.resolve();
     if (this.delivery) return this.delivery;
     this.delivery = (async () => {
       for (const notification of this.db.pendingNotifications()) {
-        if (this.closing) break;
+        if (this.closing || this.maintenanceMode) break;
         try {
           let conversationId = notification.conversationId;
           if (!conversationId) {

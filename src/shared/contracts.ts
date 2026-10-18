@@ -16,8 +16,13 @@ import type {
   UsageStats,
 } from './types';
 
+import type { DesktopApi, ServiceActivity } from './desktop';
+
 type Command<A extends unknown[], R> = { args: A; result: R };
 export interface Commands {
+  getActivity: Command<[], ServiceActivity>;
+  beginMaintenance: Command<[], ServiceActivity>;
+  finishMaintenance: Command<[], void>;
   listScopes: Command<[], ScopeInfo[]>;
   addProject: Command<[name: string, rootPath: string], ScopeInfo[]>;
   updateProject: Command<[id: string, patch: ProjectPatch], ScopeInfo[]>;
@@ -73,6 +78,9 @@ const patch = Type.Partial(
 );
 
 export const commandArgs = {
+  getActivity: Type.Tuple([]),
+  beginMaintenance: Type.Tuple([]),
+  finishMaintenance: Type.Tuple([]),
   listScopes: Type.Tuple([]),
   addProject: Type.Tuple([
     Type.String({ minLength: 1, maxLength: 200 }),
@@ -121,11 +129,7 @@ export const commandArgs = {
   setModel: Type.Tuple([
     Type.Object(
       {
-        provider: Type.Union([
-          Type.Literal('anthropic'),
-          Type.Literal('openai'),
-          Type.Literal('deepseek'),
-        ]),
+        provider: Type.Literal('magpie'),
         modelId: id,
       },
       { additionalProperties: false },
@@ -148,7 +152,7 @@ export type Handlers = {
   ) => Result<K> | Promise<Result<K>>;
 };
 
-export interface TianApi extends CommandApi {
+export interface TianApi extends CommandApi, DesktopApi {
   on<K extends keyof AppEvents>(
     channel: K,
     callback: (payload: AppEvents[K]) => void,

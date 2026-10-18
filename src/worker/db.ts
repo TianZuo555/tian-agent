@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { DATABASE_VERSION } from '../shared/version.js';
 import type {
   ConversationInfo,
   InboxItem,
@@ -65,6 +66,13 @@ export class Db {
   constructor(userDataDir: string) {
     mkdirSync(userDataDir, { recursive: true });
     this.db = new DatabaseSync(join(userDataDir, 'tian.db'));
+    const version = (
+      this.db.prepare('PRAGMA user_version').get() as { user_version: number }
+    ).user_version;
+    if (version > DATABASE_VERSION) {
+      this.db.close();
+      throw new Error('The database requires a newer service version');
+    }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS projects (
@@ -134,6 +142,7 @@ export class Db {
     this.db.exec(`
       UPDATE runs SET root_path = COALESCE((SELECT root_path FROM projects WHERE projects.id = runs.project_id), '') WHERE root_path = '';
       UPDATE runs SET current_prompt = prompt WHERE current_prompt = '';
+      PRAGMA user_version = ${DATABASE_VERSION};
       UPDATE runs SET execution_mode = 'in-place' WHERE branch IS NULL;
       UPDATE runs SET status = 'interrupted', review_status = 'discarded' WHERE status = 'discarded';
     `);

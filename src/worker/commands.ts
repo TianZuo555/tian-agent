@@ -4,6 +4,9 @@ import type { Handlers } from '../shared/contracts.js';
 /** One command implementation shared by every transport and channel adapter. */
 export const commandHandlers = (service: Service, clientId: number) =>
   ({
+    getActivity: () => service.activity(),
+    beginMaintenance: () => service.beginMaintenance(),
+    finishMaintenance: () => service.finishMaintenance(),
     listScopes: () => service.listScopes(),
     addProject: (name, rootPath) => service.addProject(name, rootPath),
     updateProject: (id, patch) => service.updateProject(id, patch),

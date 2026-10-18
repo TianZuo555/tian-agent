@@ -27,6 +27,24 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
   const watched = new Set<string>();
   let watchCount = 0;
   const api: TianApi = {
+    desktop: (async () => {
+      throw new Error('Unused desktop operation');
+    }) as TianApi['desktop'],
+    getActivity: async () => ({
+      tasks: 0,
+      submissions: 0,
+      runs: 0,
+      reviews: 0,
+      maintenance: false,
+    }),
+    beginMaintenance: async () => ({
+      tasks: 0,
+      submissions: 0,
+      runs: 0,
+      reviews: 0,
+      maintenance: true,
+    }),
+    finishMaintenance: async () => {},
     listScopes: async () => [],
     listConversations: async () => [],
     getSettings: async () => ({
@@ -195,6 +213,20 @@ test('cleanup releases listeners and reinitialization registers each once', asyn
   for (const callbacks of mock.listeners.values())
     assert.equal(callbacks.size, 1);
   nextCleanup();
+});
+
+test('disconnect invalidates pending snapshots without changing the runtime back to ready', async () => {
+  const scopes = deferred<Awaited<ReturnType<CommandApi['listScopes']>>>();
+  const mock = mockApi({ listScopes: () => scopes.promise });
+  const store = createAppStore(mock.api);
+  const cleanup = store.actions.init();
+  mock.emit('runtime', { status: 'disconnected' });
+  scopes.resolve([]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(store.getState().runtimeStatus, 'disconnected');
+  assert.equal(store.getState().loading, false);
+  assert.equal(store.getState().error, null);
+  cleanup();
 });
 
 test('runtime restart restores the active conversation subscription', async () => {

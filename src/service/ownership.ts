@@ -4,12 +4,14 @@ import { join } from 'node:path';
 
 /** The pre-daemon desktop runtime does not participate in the service lock. */
 export async function checkDatabaseOwner(dataDir: string): Promise<void> {
-  const database = join(dataDir, 'pi-session.sqlite');
-  if (process.platform !== 'darwin' || !existsSync(database)) return;
+  const databases = ['pi-session.sqlite', 'tian.db']
+    .map((file) => join(dataDir, file))
+    .filter(existsSync);
+  if (process.platform !== 'darwin' || !databases.length) return;
   const pids = await new Promise<string>((resolve, reject) => {
     execFile(
       '/usr/sbin/lsof',
-      ['-t', database],
+      ['-t', ...databases],
       { timeout: 10_000 },
       (error, stdout) => {
         if (error && (error as { code?: number }).code !== 1) reject(error);

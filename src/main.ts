@@ -1,18 +1,24 @@
 import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
-import { ServiceClient } from './service/client.js';
+import { DesktopController } from './desktop/controller.js';
+import { desktopActions, type DesktopAction } from './shared/desktop.js';
 import { servicePaths } from './shared/service-paths.js';
-import { startService } from './service/launchd.js';
 import { validateCommand } from './shared/contracts.js';
+import { mkdirSync } from 'node:fs';
 import type { Emit } from './shared/types.js';
 
+if (process.env.TIAN_AGENT_DATA_DIR) {
+  const directory = servicePaths().dataDir;
+  mkdirSync(directory, { recursive: true });
+  app.setPath('userData', directory);
+}
 const primaryInstance = !started && app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
 app.commandLine.appendSwitch('force-renderer-accessibility');
 if (!app.isPackaged)
   app.commandLine.appendSwitch('remote-debugging-port', '9222');
-let runtime: ServiceClient | null = null;
+let runtime: DesktopController | null = null;
 
 const broadcast: Emit = (channel, payload, clientId) => {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -27,6 +33,7 @@ const broadcast: Emit = (channel, payload, clientId) => {
 
 function createWindow(): void {
   const window = new BrowserWindow({
+    show: process.env.TIAN_AGENT_SHOW_WINDOW !== '0',
     width: 1280,
     height: 840,
     minWidth: 880,
@@ -61,9 +68,65 @@ if (primaryInstance)
     .whenReady()
     .then(() => {
       const paths = servicePaths();
-      runtime = new ServiceClient(paths.socketPath, broadcast);
-      if (process.platform === 'darwin')
-        void startService({ paths }).catch(console.error);
+      const jobIndex = process.argv.indexOf('--tian-update-job');
+      runtime = new DesktopController(
+        {
+          paths,
+          label: process.env.TIAN_AGENT_SERVICE_LABEL,
+          payloadDirectory: app.isPackaged
+            ? path.join(process.resourcesPath, 'service')
+            : path.join(app.getAppPath(), 'dist/service'),
+          updaterDirectory: app.isPackaged
+            ? path.join(process.resourcesPath, 'updater')
+            : path.join(app.getAppPath(), 'dist/updater'),
+          appBundle:
+            app.isPackaged && process.platform === 'darwin'
+              ? path.dirname(path.dirname(path.dirname(app.getPath('exe'))))
+              : null,
+          appVersion: app.getVersion(),
+          pid: process.pid,
+          updateJob: jobIndex >= 0 ? process.argv[jobIndex + 1] : undefined,
+          chooseApp: async () => {
+            const result = await dialog.showOpenDialog({
+              title: 'Choose a newer Tian Agent application',
+              properties: ['openFile'],
+              filters: [{ name: 'macOS application', extensions: ['app'] }],
+            });
+            return result.canceled ? null : (result.filePaths[0] ?? null);
+          },
+          quit: () => app.quit(),
+        },
+        broadcast,
+      );
+      ipcMain.handle(
+        'tian:desktop',
+        async (event, action: unknown, candidateId: unknown) => {
+          if (
+            event.senderFrame !== event.sender.mainFrame ||
+            !BrowserWindow.fromWebContents(event.sender)
+          )
+            throw new Error('Untrusted IPC sender');
+          if (
+            typeof action !== 'string' ||
+            !desktopActions.includes(action as DesktopAction)
+          )
+            throw new Error('Invalid desktop action');
+          const needsId = action === 'apply-app' || action === 'cancel-app';
+          if (
+            needsId
+              ? typeof candidateId !== 'string' ||
+                !/^[a-f0-9-]{36}$/.test(candidateId)
+              : candidateId !== undefined
+          )
+            throw new Error('Invalid desktop action arguments');
+          return runtime!
+            .action(action as DesktopAction, candidateId as string | undefined)
+            .catch((error) => {
+              console.error('Desktop action failed:', action, error);
+              throw error;
+            });
+        },
+      );
       ipcMain.handle(
         'tian:invoke',
         async (event, command: unknown, args: unknown) => {
@@ -82,7 +145,7 @@ if (primaryInstance)
           return runtime!.invoke(command, args as never, event.sender.id);
         },
       );
-      void runtime.start().catch(console.error);
+      void runtime.initialize().catch(console.error);
       createWindow();
       app.on('activate', () => {
         if (!BrowserWindow.getAllWindows().length) createWindow();

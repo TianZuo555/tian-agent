@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select';
 import { actions, useStore } from '../store';
 import { UsageHeatmap } from './UsageHeatmap';
+import { ServiceSettings } from './ServiceSettings';
 
 export function SettingsDialog() {
   const settings = useStore((s) => s.settings);
@@ -44,7 +45,7 @@ export function SettingsDialog() {
         actions.setSettingsOpen(o);
       }}
     >
-      <DialogPopup className="sm:max-w-lg">
+      <DialogPopup className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -133,6 +134,7 @@ export function SettingsDialog() {
             <span className="font-medium text-[12px]">Usage</span>
             <UsageHeatmap />
           </div>
+          <ServiceSettings active={open} />
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>

@@ -12,6 +12,7 @@ import {
 } from '../shared/service-paths.js';
 import { jsonPeer, isId, isRecord } from './protocol.js';
 import { checkDatabaseOwner } from './ownership.js';
+import { APP_VERSION, DATABASE_VERSION } from '../shared/version.js';
 
 interface Connection {
   socket: Socket;
@@ -35,8 +36,12 @@ export class ResidentServer {
   private nextClient = 0;
   private inFlight = new Set<Promise<void>>();
   private closing = false;
+  private maintenance = false;
   private initialization: Promise<void> = Promise.resolve();
   readonly info: ServiceInfo = {
+    serviceVersion: APP_VERSION,
+    databaseVersion: DATABASE_VERSION,
+    releaseId: process.env.TIAN_AGENT_RELEASE_ID ?? 'development',
     protocolVersion: SERVICE_PROTOCOL,
     pid: process.pid,
     startedAt: new Date().toISOString(),
@@ -91,7 +96,10 @@ export class ResidentServer {
       // Both the storage and endpoint have an exclusive owner before stale cleanup.
       if (existsSync(this.paths.socketPath)) unlinkSync(this.paths.socketPath);
       this.application = new Service(this.paths.dataDir, this.emit);
-      this.initialization = this.application.init();
+      this.maintenance = existsSync(
+        join(this.paths.installationDir, 'maintenance.json'),
+      );
+      this.initialization = this.application.init(this.maintenance);
       await this.initialization;
       if (this.closing) throw new Error('Service is closing');
       this.server = createServer((socket) => this.accept(socket));
@@ -175,10 +183,34 @@ export class ResidentServer {
       return;
     }
     connection.requests.add(id);
+    let enteredMaintenance = false;
     const operation = (async () => {
       try {
         if (this.closing) throw new Error('Service is closing');
         validateCommand(message.command, message.args);
+        if (
+          this.maintenance &&
+          !['getActivity', 'beginMaintenance', 'finishMaintenance'].includes(
+            message.command,
+          )
+        )
+          throw new Error(
+            'Service is in maintenance mode. Please wait for the update to finish.',
+          );
+        if (message.command === 'beginMaintenance') {
+          if (this.maintenance)
+            throw new Error('Service is already in maintenance mode');
+          this.maintenance = true;
+          enteredMaintenance = true;
+          await Promise.allSettled(this.inFlight);
+        }
+        if (
+          message.command === 'finishMaintenance' &&
+          existsSync(join(this.paths.installationDir, 'maintenance.json'))
+        )
+          throw new Error(
+            'The update has not committed; maintenance cannot be released yet',
+          );
         if (message.command === 'pickDir')
           throw new Error('Native dialogs belong to the desktop client');
         let canonical = connection.clients.get(localId);
@@ -191,8 +223,13 @@ export class ResidentServer {
           message.command
         ] as (...args: unknown[]) => unknown;
         const value = await handler(...(message.args as unknown[]));
+        if (message.command === 'finishMaintenance') {
+          this.maintenance = false;
+          this.emit('runtime', { status: 'ready' });
+        }
         this.send(connection, { type: 'result', id, value });
       } catch (error) {
+        if (enteredMaintenance) this.maintenance = false;
         this.send(connection, { type: 'result', id, error: String(error) });
       }
     })().finally(() => {

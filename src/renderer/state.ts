@@ -34,7 +34,7 @@ export interface State {
   loading: boolean;
   error: string | null;
   operationError: string | null;
-  runtimeStatus: 'starting' | 'ready' | 'failed';
+  runtimeStatus: 'starting' | 'ready' | 'failed' | 'disconnected';
 }
 
 /** Requests and event subscriptions are scoped to this store's lifetime. */
@@ -250,6 +250,15 @@ export function createAppStore(api: TianApi) {
                 ? (runtime.error ?? 'Runtime unavailable')
                 : null,
           });
+          if (runtime.status === 'disconnected') {
+            lifetime++;
+            watchedId = null;
+            set({
+              loading: false,
+              error: null,
+              view: state.view ? { ...state.view, busy: false } : null,
+            });
+          }
           if (runtime.status === 'starting') {
             watchedId = null;
             set({ view: null });

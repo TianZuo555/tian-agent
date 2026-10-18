@@ -243,6 +243,7 @@ export function ChatView() {
   const view = useStore((s) => s.view);
   const conversations = useStore((s) => s.conversations);
   const activeId = useStore((s) => s.activeConversationId);
+  const connected = useStore((s) => s.runtimeStatus === 'ready');
   const scopes = useStore((s) => s.scopes);
   const contextOpen = useStore((s) => s.contextOpen);
   const endRef = useRef<HTMLDivElement>(null);
@@ -346,6 +347,7 @@ export function ChatView() {
           <div className="shrink-0 px-5 pb-4">
             <div className="mx-auto w-full max-w-3xl">
               <ChatComposer
+                disabled={!connected}
                 busy={busy}
                 onSend={(text) => void actions.send(text)}
                 onStop={() => void actions.abort()}

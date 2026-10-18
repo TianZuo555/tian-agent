@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { tian } from './api';
 import { PanelRight } from 'lucide-react';
 import { actions, useStore } from './store';
 import { Sidebar } from './components/Sidebar';
@@ -19,10 +20,11 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 export function App() {
   const loading = useStore((s) => s.loading);
   const error = useStore((s) => s.error);
+  const operationError = useStore((s) => s.operationError);
+  const runtimeStatus = useStore((s) => s.runtimeStatus);
   const contextOpen = useStore((s) => s.contextOpen);
   const nav = useStore((s) => s.nav);
   const reduce = useReducedMotion();
-  const [init, setInit] = useState(false);
   const [navWidth, setNavWidth] = usePersistedWidth(
     'tian.navWidth',
     264,
@@ -36,12 +38,10 @@ export function App() {
     640,
   );
 
+  useEffect(() => actions.init(), []);
   useEffect(() => {
-    if (!init) {
-      setInit(true);
-      void actions.init();
-    }
-  }, [init]);
+    void tian.desktop('ready').catch(() => {});
+  }, []);
 
   return (
     <TooltipProvider delay={400}>
@@ -51,18 +51,30 @@ export function App() {
         className="flex h-screen overflow-hidden bg-background text-foreground"
       >
         {loading ? (
-          <div className="flex flex-1 items-center justify-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-4">
             <div className="flex items-center gap-2 font-mono text-[11px] text-content-secondary">
               <span className="size-1.5 animate-pulse rounded-full bg-content-secondary" />
               starting…
             </div>
+            <Button
+              variant="outline"
+              onClick={() => actions.setSettingsOpen(true)}
+            >
+              打开服务设置
+            </Button>
           </div>
         ) : error ? (
           <div
             role="alert"
-            className="flex flex-1 items-center justify-center px-8 text-center text-destructive-foreground text-sm"
+            className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center text-destructive-foreground text-sm"
           >
-            {error}
+            <p>{error}</p>
+            <Button
+              variant="outline"
+              onClick={() => actions.setSettingsOpen(true)}
+            >
+              打开服务设置
+            </Button>
           </div>
         ) : (
           <>
@@ -91,8 +103,39 @@ export function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={reduce ? undefined : { opacity: 0, y: -4 }}
                 transition={{ duration: 0.16, ease: EASE }}
-                className="flex min-h-0 min-w-0 flex-1"
+                className="flex min-h-0 min-w-0 flex-1 flex-col"
               >
+                {(operationError ||
+                  runtimeStatus === 'starting' ||
+                  runtimeStatus === 'disconnected') && (
+                  <div
+                    role={operationError ? 'alert' : 'status'}
+                    className="flex items-center gap-2 border-b px-4 py-2 text-xs"
+                  >
+                    <span className="min-w-0 flex-1 break-words text-muted-foreground">
+                      {operationError ??
+                        (runtimeStatus === 'disconnected'
+                          ? '已断开后台服务连接。任务继续在后台运行。'
+                          : '正在重新连接后台服务…')}
+                    </span>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => actions.setSettingsOpen(true)}
+                    >
+                      服务设置
+                    </Button>
+                    {operationError && (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={actions.clearError}
+                      >
+                        关闭提示
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {nav === 'chat' ? (
                   <ChatView />
                 ) : nav === 'schedule' ? (

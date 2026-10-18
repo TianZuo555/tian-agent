@@ -6,10 +6,21 @@ import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
+import { execFileSync } from 'node:child_process';
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    extraResource: ['dist/service', 'dist/updater'],
+  },
+  hooks: {
+    generateAssets: async () => {
+      execFileSync(
+        process.execPath,
+        ['node_modules/tsx/dist/cli.mjs', 'scripts/build-payload.mts'],
+        { stdio: 'inherit' },
+      );
+    },
   },
   rebuildConfig: {},
   makers: [
@@ -27,11 +38,6 @@ const config: ForgeConfig = {
           // `entry` is just an alias for `build.lib.entry` in the corresponding file of `config`.
           entry: 'src/main.ts',
           config: 'vite.main.config.mts',
-          target: 'main',
-        },
-        {
-          entry: 'src/service/entry.ts',
-          config: 'vite.service.config.mts',
           target: 'main',
         },
         {
