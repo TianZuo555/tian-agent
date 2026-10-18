@@ -18,7 +18,6 @@ import {
   RuleBasedExtractor,
   SkillRegistry,
   skillMatches,
-  type ExperienceInput,
 } from '../src/worker/skills';
 import {
   RunOrchestrator,
