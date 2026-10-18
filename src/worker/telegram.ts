@@ -279,6 +279,8 @@ export class TelegramAdapter {
     const loop = this.loop;
     this.loop = null;
     if (loop) await loop.catch(() => {});
+    // Watches are stopped, so nothing new is enqueued; drain what is running.
+    // `forwardChat` refuses to start while stopped, so this loop terminates.
     while (this.forwardRuns.size > 0)
       await Promise.allSettled(this.forwardRuns.values());
   }
@@ -467,7 +469,7 @@ export class TelegramAdapter {
    * next trigger, so restarts neither drop nor duplicate messages.
    */
   private forwardChat(chatId: string, conversationId: string): Promise<void> {
-    if (!this.allowed(chatId)) return Promise.resolve();
+    if (!this.running || !this.allowed(chatId)) return Promise.resolve();
     const running = this.forwardRuns.get(conversationId);
     if (running) {
       this.forwardDirty.add(conversationId);
