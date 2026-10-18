@@ -75,12 +75,15 @@ test('candidates stay out of wake/recall/export until promoted; dismiss removes 
 
   // Promote keeps agent_inferred trust and puts the line into Core Memory.
   assert.throws(() => memory.promote(0), /only candidates can be promoted/);
-  const promoted = memory.promote(candidate.seq, 'user');
+  const { memory: promoted } = memory.promote(candidate.seq, 'user');
   assert.equal(promoted.status, 'active');
   assert.equal(promoted.trustLevel, 'agent_inferred');
   assert.match(memory.wake(), /Tian prefers pnpm over npm/);
   assert.match(memory.recall('pnpm'), /Tian prefers pnpm/);
-  const fresh = readFileSync(join(f.projectPath, 'memory', 'MEMORY.md'), 'utf8');
+  const fresh = readFileSync(
+    join(f.projectPath, 'memory', 'MEMORY.md'),
+    'utf8',
+  );
   assert.match(fresh, /Tian prefers pnpm over npm/);
   assert.deepEqual(
     (

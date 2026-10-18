@@ -77,6 +77,8 @@ export interface MemoryRow {
   confidence: number | null;
   status: MemoryStatus;
   supersededBy: string | null;
+  /** For a candidate: the active seq it will replace when promoted. */
+  supersedes: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -117,6 +119,10 @@ const toMemory = (value: Record<string, unknown>): MemoryRow => ({
   confidence: (value.confidence as number | null) ?? null,
   status: value.status as MemoryStatus,
   supersededBy: (value.superseded_by as string | null) ?? null,
+  supersedes:
+    value.supersedes === null || value.supersedes === undefined
+      ? null
+      : Number(value.supersedes),
   createdAt: value.created_at as string,
   updatedAt: value.updated_at as string,
 });
@@ -129,7 +135,7 @@ function ensureSchema(db: Db): void {
       id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, seq INTEGER NOT NULL, goal_id TEXT,
       kind TEXT NOT NULL, content TEXT NOT NULL, source_type TEXT NOT NULL, source_ref TEXT,
       trust_level TEXT NOT NULL, confidence REAL, status TEXT NOT NULL DEFAULT 'active',
-      superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      superseded_by TEXT, supersedes INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       UNIQUE(scope_id, seq)
     );
     CREATE INDEX IF NOT EXISTS memories_scope_status ON memories(scope_id, status);
@@ -146,6 +152,12 @@ function ensureSchema(db: Db): void {
       content, mem_id UNINDEXED, tokenize='trigram'
     );
   `);
+  // Databases created before candidates existed gain the supersedes column.
+  const columns = db.sqlite.prepare('PRAGMA table_info(memories)').all() as {
+    name: string;
+  }[];
+  if (!columns.some((column) => column.name === 'supersedes'))
+    db.sqlite.exec('ALTER TABLE memories ADD COLUMN supersedes INTEGER');
   schemaReady.add(db.sqlite);
 }
 
@@ -262,8 +274,8 @@ export class MemoryStore {
   private insertMemoryTx(memory: MemoryRow): void {
     this.run(
       `INSERT INTO memories (id, scope_id, seq, goal_id, kind, content, source_type, source_ref,
-        trust_level, confidence, status, superseded_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        trust_level, confidence, status, superseded_by, supersedes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       memory.id,
       memory.scopeId,
       memory.seq,
@@ -276,6 +288,7 @@ export class MemoryStore {
       memory.confidence,
       memory.status,
       memory.supersededBy,
+      memory.supersedes,
       memory.createdAt,
       memory.updatedAt,
     );
@@ -422,6 +435,7 @@ export class MemoryStore {
       confidence: input.confidence ?? null,
       status: 'active',
       supersededBy: null,
+      supersedes: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -455,6 +469,8 @@ export class MemoryStore {
     kind: MemoryKind;
     confidence: number | null;
     sourceRef: string | null;
+    /** Active memory this candidate contradicts; applied on promote. */
+    supersedes?: number | null;
     reason?: string;
   }): MemoryRow {
     const content = normalizeLine(input.text, 'memory');
@@ -472,10 +488,18 @@ export class MemoryStore {
       confidence: input.confidence,
       status: 'candidate',
       supersededBy: null,
+      supersedes: input.supersedes ?? null,
       createdAt: now,
       updatedAt: now,
     };
     this.db.transaction(() => {
+      if (memory.supersedes !== null) {
+        const target = this.bySeqTx(memory.supersedes);
+        if (!target || target.status !== 'active')
+          throw new Error(
+            `supersede target #${memory.supersedes} is not an active memory`,
+          );
+      }
       memory.seq = this.nextSeqTx();
       this.insertMemoryTx(memory);
       this.recordVersionTx(
@@ -523,6 +547,8 @@ export class MemoryStore {
         confidence: superseded.confidence,
         status: 'active',
         supersededBy: null,
+        // The revision itself is the supersede; the target pointer is spent.
+        supersedes: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -591,14 +617,16 @@ export class MemoryStore {
 
   /**
    * Promote a candidate into Core Memory: status becomes active, trust stays
-   * at agent_inferred. Covering summary nodes go stale so the promoted line
-   * is rendered (and re-summarized) immediately.
+   * at agent_inferred. If the candidate contradicts an active memory
+   * (`supersedes`), that memory is superseded in the same transaction, so the
+   * contradiction never coexists in Core Memory. Covering summary nodes go
+   * stale so the promoted line renders immediately.
    */
   promote(
     seq: number,
     actor: MemoryActor = 'user',
     reason = 'promoted from candidates',
-  ): MemoryRow {
+  ): { memory: MemoryRow; superseded: MemoryRow | null } {
     const result = this.db.transaction(() => {
       const memory = this.bySeqTx(seq);
       if (!memory)
@@ -607,21 +635,57 @@ export class MemoryStore {
         throw new Error(
           `memory #${seq} is ${memory.status}; only candidates can be promoted`,
         );
+      const now = new Date().toISOString();
+      let superseded: MemoryRow | null = null;
+      if (memory.supersedes !== null) {
+        const target = this.bySeqTx(memory.supersedes);
+        if (target && target.status === 'active') {
+          superseded = {
+            ...target,
+            status: 'superseded',
+            supersededBy: memory.id,
+            updatedAt: now,
+          };
+          this.run(
+            'UPDATE memories SET status = ?, superseded_by = ?, updated_at = ? WHERE id = ?',
+            'superseded',
+            memory.id,
+            now,
+            target.id,
+          );
+          this.recordVersionTx(
+            target.id,
+            'supersede',
+            actor,
+            `${reason} (candidate #${seq})`,
+            target,
+            superseded,
+          );
+          this.markCoveringNodesStaleTx(target.seq);
+        }
+      }
       const updated: MemoryRow = {
         ...memory,
         status: 'active',
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       };
       this.run(
         'UPDATE memories SET status = ?, updated_at = ? WHERE id = ?',
         'active',
-        updated.updatedAt,
+        now,
         memory.id,
       );
-      this.recordVersionTx(memory.id, 'promote', actor, reason, memory, updated);
+      this.recordVersionTx(
+        memory.id,
+        'promote',
+        actor,
+        reason,
+        memory,
+        updated,
+      );
       this.markCoveringNodesStaleTx(seq);
       this.autoMergeEmptyTx();
-      return updated;
+      return { memory: updated, superseded };
     });
     this.bump();
     this.exportFile();
@@ -876,6 +940,7 @@ export class MemoryStore {
           confidence: null,
           status: 'active',
           supersededBy: null,
+          supersedes: null,
           createdAt,
           updatedAt: createdAt,
         };

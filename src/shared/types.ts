@@ -226,7 +226,11 @@ export interface MemoryItem {
   status: MemoryStatus;
   trustLevel: string;
   sourceType: string;
+  sourceRef: string | null;
+  confidence: number | null;
   supersededBy: string | null;
+  /** For a candidate: the active seq it will replace when promoted. */
+  supersedes: number | null;
   createdAt: string;
   updatedAt: string;
 }
