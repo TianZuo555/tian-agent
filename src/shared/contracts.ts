@@ -12,6 +12,7 @@ import type {
   TaskItem,
   SessionBinding,
   ServiceInfo,
+  UsageStats,
 } from './types';
 
 type Command<A extends unknown[], R> = { args: A; result: R };
@@ -48,6 +49,7 @@ export interface Commands {
   shipRun: Command<[id: string], string>;
   getSettings: Command<[], SettingsInfo>;
   setModel: Command<[model: SettingsInfo['model']], void>;
+  usageStats: Command<[scopeId: string | null], UsageStats>;
 }
 
 const id = Type.String({ minLength: 1, maxLength: 256 });
@@ -126,6 +128,7 @@ export const commandArgs = {
       { additionalProperties: false },
     ),
   ]),
+  usageStats: Type.Tuple([nullableId]),
 } satisfies Record<keyof Commands, TSchema>;
 
 export type CommandName = keyof Commands;

@@ -72,6 +72,7 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     discardRun: async () => {},
     shipRun: async () => '',
     setModel: async () => {},
+    usageStats: async () => ({ days: [] }),
     ...overrides,
     on(channel, callback) {
       const callbacks = listeners.get(channel) ?? new Set();

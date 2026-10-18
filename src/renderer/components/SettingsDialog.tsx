@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { actions, useStore } from '../store';
+import { UsageHeatmap } from './UsageHeatmap';
 
 const PROVIDERS = [
   { label: 'Anthropic', value: 'anthropic' },
@@ -82,6 +83,12 @@ export function SettingsDialog() {
             OPENAI_API_KEY / DEEPSEEK_API_KEY). Existing conversations keep the
             model they were created with.
           </p>
+          <div className="grid gap-1.5 border-t pt-3">
+            <span className="font-medium text-xs text-muted-foreground">
+              Usage
+            </span>
+            <UsageHeatmap />
+          </div>
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>

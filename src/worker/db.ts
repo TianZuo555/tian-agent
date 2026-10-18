@@ -411,6 +411,15 @@ export class Db {
       )
       .get(id);
   }
+  runConversationIds(projectId: string | null): string[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT conversation_id FROM runs WHERE conversation_id IS NOT NULL AND (? IS NULL OR project_id = ?)',
+        )
+        .all(projectId, projectId) as { conversation_id: string }[]
+    ).map((value) => value.conversation_id);
+  }
 
   runByConversation(conversationId: string): RunRow | undefined {
     const value = this.db

@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { Db } from './db.js';
+import { collectUsage, usageConversationIds } from './usage.js';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
 import { Settings } from './settings.js';
 import { DataService } from './data.js';
@@ -465,6 +466,9 @@ export class Service {
 
   getSettings() {
     return this.settings.get();
+  }
+  usageStats(scopeId: string | null) {
+    return collectUsage(this.agents, usageConversationIds(this.db, scopeId));
   }
   async setModel(model: SettingsInfo['model']): Promise<void> {
     this.settings.setModel(model);

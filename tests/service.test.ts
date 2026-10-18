@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { Conversation } from '@earendil-works/pi-durable';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { ResidentServer } from '../src/service/server';
 import { ServiceClient } from '../src/service/client';
 import { servicePaths } from '../src/shared/service-paths';
@@ -142,6 +145,123 @@ test('identical local client IDs from different connections cannot steal convers
   await b.invoke('watch', [second.conversationId], 1);
   assert.equal(bViews.length, 2);
   assert.ok(bViews.every((id) => id === second.conversationId));
+});
+
+test('usage stats bucket assistant tokens by local day for each scope', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const scopes = await client.invoke('addProject', ['project', project]);
+  const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
+  const agents = (
+    f.server.service as unknown as {
+      agents: {
+        conversation(id: string): Promise<Conversation>;
+        createChief(cwd: string): Promise<Conversation>;
+      };
+    }
+  ).agents;
+  const global = await agents.conversation(
+    (await client.invoke('createConversation', ['global'])).conversationId,
+  );
+  const scoped = await agents.conversation(
+    (await client.invoke('createConversation', [projectId])).conversationId,
+  );
+  const worker = await agents.createChief(project);
+  f.server.service.db.addRun({
+    id: 'r1',
+    projectId,
+    conversationId: String(worker.id),
+    chiefConversationId: null,
+    agentKind: 'durable-worker',
+    prompt: 'work',
+    currentPrompt: 'work',
+    rootPath: project,
+    baseBranch: 'main',
+    executionMode: 'in-place',
+    worktreePath: null,
+    branch: null,
+    status: 'done',
+    reviewStatus: 'pending',
+    attempt: 1,
+    error: null,
+    prUrl: null,
+    reportPath: null,
+    exitCode: 0,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    deadlineAt: '',
+  });
+
+  const record = (
+    conversation: Conversation,
+    timestamp: number,
+    tokens: number,
+    cost: number,
+  ) =>
+    conversation.commit(
+      (tx) =>
+        tx.appendEntry(conversation.id, {
+          kind: 'pi.assistant',
+          model: [
+            {
+              role: 'assistant',
+              content: [],
+              api: 'anthropic-messages',
+              provider: 'anthropic',
+              model: 'test-model',
+              usage: {
+                input: tokens,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: tokens,
+                cost: {
+                  input: cost,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: cost,
+                },
+              },
+              stopReason: 'stop',
+              timestamp,
+            } satisfies AssistantMessage,
+          ],
+        }),
+      BACKGROUND_CONTEXT,
+    );
+  const dayA = new Date('2026-10-01T12:00:00').getTime();
+  const dayB = new Date('2026-10-02T12:00:00').getTime();
+  await record(global, dayA, 100, 0.5);
+  await record(scoped, dayA, 200, 1);
+  await record(scoped, dayB, 50, 0.25);
+  await record(worker, dayB, 400, 2);
+
+  const all = await client.invoke('usageStats', [null]);
+  assert.deepEqual(
+    all.days.map((day) => [day.date, day.totalTokens]),
+    [
+      ['2026-10-01', 300],
+      ['2026-10-02', 450],
+    ],
+  );
+  assert.equal(all.days[1].cost, 2.25);
+  assert.equal(all.days[1].messages, 2);
+  const general = await client.invoke('usageStats', ['global']);
+  assert.deepEqual(
+    general.days.map((day) => [day.date, day.totalTokens]),
+    [['2026-10-01', 100]],
+  );
+  const scopedStats = await client.invoke('usageStats', [projectId]);
+  assert.deepEqual(
+    scopedStats.days.map((day) => [day.date, day.totalTokens]),
+    [
+      ['2026-10-01', 200],
+      ['2026-10-02', 450],
+    ],
+  );
 });
 
 test('a second daemon cannot open the same storage and socket permissions are private', async (t) => {

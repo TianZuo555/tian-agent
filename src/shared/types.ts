@@ -107,6 +107,21 @@ export interface SettingsInfo {
   model: { provider: string; modelId: string };
 }
 
+export interface UsageDay {
+  date: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number;
+  messages: number;
+}
+
+export interface UsageStats {
+  days: UsageDay[];
+}
+
 export interface ChatSnapshot {
   rows: MessageRow[];
   busy: boolean;
