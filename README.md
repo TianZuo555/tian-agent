@@ -8,19 +8,52 @@
 
 ## 开发与验证
 
+工具链、任务和本地环境变量都由 [mise](https://mise.jdx.dev/) 声明在 `mise.toml`：Node 26 与 pnpm 12.5.1 固定在项目内，不再依赖全局 mise 配置。进入目录后 mise 自动切换版本。
+
 ```sh
-pnpm install
-pnpm service:install
-pnpm start
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm package
-pnpm test:runtime
-pnpm test:launchd
-pnpm test:upgrade
-pnpm test:app-upgrade
+mise install
+mise run setup    # pnpm install + pnpm service:install
+mise run start    # 启动 App
+mise run verify   # typecheck + lint + react-doctor + test
+mise run check    # typecheck + lint
+mise run doctor   # 仅跑 react-doctor
 ```
+
+`mise tasks ls` 列出全部任务（`start`、`check`、`doctor`、`verify`、`test`、`test:*`、`service:*`、`package`），每个任务都只是对 `package.json` 脚本的薄封装，因此 CI 和不使用 mise 的机器仍可直接 `pnpm <script>`。
+
+### React 代码质量
+
+[React Doctor](https://react.doctor) 以确定性规则扫描正确性、性能、可访问性、安全与可维护性，`mise run verify` 会执行它。规则与例外写在 `doctor.config.ts`：
+
+- 扫描 `src/**`，跳过 `.vite/`、`dist/`、`out/` 构建产物。
+- 关闭 `use-lazy-motion`：App 在 Electron 内从磁盘加载，把约 30 kB 的 motion 特性包延迟加载没有收益，反而会让首帧出现无动画的 UI。
+
+新增诊断优先修根因；确属误报或有意为之，用单行 `// react-doctor-disable-next-line <rule>` 并写明原因，不要整条规则关掉。
+
+### 本地环境变量
+
+`mise.toml` 通过 `[env] _.file` 读取仓库根目录的 `.env`（已 gitignore，缺失也不报错，值标记为 redacted）。从模板开始：
+
+```sh
+cp .env.example .env
+```
+
+| 变量                                 | 作用                                                |
+| ------------------------------------ | --------------------------------------------------- |
+| `MAGPIE_BASE_URL` / `MAGPIE_API_KEY` | 模型网关地址与密钥，默认 `http://127.0.0.1:3425/v1` |
+| `TELEGRAM_BOT_TOKEN`                 | Telegram Bot token；为空时适配器不启动              |
+| `TELEGRAM_ALLOWED_CHAT_IDS`          | 允许对话的 chat id，逗号分隔                        |
+| `TIAN_AGENT_DATA_DIR`                | 数据目录；`mise run service:env` 也用它决定写到哪里 |
+| `TIAN_AGENT_SOCKET_PATH`             | Unix socket 路径（绝对路径，不超过 100 字节）       |
+
+`.env` 只影响 mise shell（App 与 `pnpm` 任务）。常驻服务由 launchd 启动，读不到 shell 环境，需要把 `MAGPIE_*` / `TELEGRAM_*` 写进 `<dataDir>/service.env`：
+
+```sh
+mise run service:env
+mise run service:restart
+```
+
+该任务只导出 `MAGPIE_*` 与 `TELEGRAM_*`，跳过空值，原子写入且权限为 `0600`；其余开发变量不会进入服务环境。
 
 - `pnpm test`：临时数据库、真实临时 Git 仓库和可控工兵；覆盖权限、记忆、Inbox、Run 状态、前端同步和多客户端服务。不调用模型。
 - `pnpm test:runtime`：验证打包后的服务产物可以离开 checkout、通过普通 Node 运行，并连接 sandbox preload 和真实 renderer；退出 Electron 后服务继续运行。不使用用户数据或模型。
@@ -31,7 +64,7 @@ pnpm test:app-upgrade
 
 ## 本机常驻服务
 
-开发构建要求 Node.js 24 或更新版本。首次安装或更新后端时运行 `pnpm service:install`，也可以在 App 设置的“服务与升级”中操作。安装器将完整构建产物和固定版本的 Node 运行时复制到独立 release，LaunchAgent 不依赖开发 checkout、系统 Node 安装、终端或 Electron 进程存活。
+开发构建要求 Node.js 24 或更新版本，`mise.toml` 固定为 Node 26。首次安装或更新后端时运行 `mise run service:install`（或 `pnpm service:install`），也可以在 App 设置的“服务与升级”中操作。安装器将完整构建产物和固定版本的 Node 运行时复制到独立 release，LaunchAgent 不依赖开发 checkout、系统 Node 安装、终端或 Electron 进程存活。
 
 | 操作                 | 命令                                          |
 | -------------------- | --------------------------------------------- |
@@ -52,11 +85,13 @@ pnpm test:app-upgrade
 
 使用 `TIAN_AGENT_DATA_DIR` 或 CLI 的 `--data-dir` 指定其他数据目录，`TIAN_AGENT_SOCKET_PATH` 可指定 socket 路径；App 与服务必须使用相同配置。存储和 socket 都有独占锁。旧版 App 仍占用数据库时，新服务会拒绝打开存储，需要先退出旧版 App。
 
-LaunchAgent 使用 release 内的独立 Node 运行时。环境变量密钥可以写入 `<dataDir>/service.env`，文件权限应为 `0600`，然后重启服务；当前模型由 Magpie 网关提供，可在此配置 `MAGPIE_BASE_URL` 与 `MAGPIE_API_KEY`。安装器不将模型密钥写入 plist。
+LaunchAgent 使用 release 内的独立 Node 运行时，其 Node 就是构建时 `mise` 选中的版本。环境变量密钥通过 `mise run service:env` 写入 `<dataDir>/service.env`（`0600`）后重启服务；当前模型由 Magpie 网关提供，可在此配置 `MAGPIE_BASE_URL` 与 `MAGPIE_API_KEY`。安装器不将模型密钥写入 plist。
 
 登录自启动、服务运行和 App 连接是独立状态。App 启动时只按偏好连接现有服务，不会把已经停止的服务自动启动。退出 App 仅关闭连接；明确“断开本窗口连接”会持久保存不自动重连的偏好。系统休眠或关机期间无法执行任务。
 
 ## 服务控制与升级
+
+打包结构、安装位置和一次完整升级的示例，见 [ADR-0009：App 与服务的打包和升级](docs/adr/0009-app-service-packaging-and-upgrades.md)。
 
 Settings 中的“服务与升级”在服务离线时也可访问，支持查看 App／配套服务／运行服务版本、连接、断开、启动、停止、登录自启动、安装配套服务和恢复未完成升级。停止或升级前检查 Durable tasks、queued submissions、Runs 和验收操作；仍有工作时拒绝操作，保留原服务运行。首次迁移没有版本信息的旧服务时，设置页会单独标识：旧版没有空闲检查，需确认工作可以暂停后先正常停止，再安装新版配套服务。数据保留；旧协议不再用于新版 App 的业务连接。
 
@@ -89,7 +124,7 @@ Settings 中的“服务与升级”在服务离线时也可访问，支持查�
 
 服务内置 Telegram Bot 适配器：Bot API long polling，无需公网入口。未配置 token 时适配器不启动，服务其余部分不受影响；网络故障按指数退避重试，不会阻塞服务。
 
-在 `<dataDir>/service.env`（0600）中配置后重启服务：
+在仓库 `.env` 中配置，再 `mise run service:env && mise run service:restart`（等价于写入 `<dataDir>/service.env`，权限 0600）：
 
 ```sh
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF...

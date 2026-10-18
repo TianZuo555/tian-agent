@@ -1,0 +1,100 @@
+[tools]
+node = "26"
+pnpm = "12.5.1"
+
+[env]
+# Local secrets for development. Missing file is fine; keys are marked redacted
+# so `mise env --redacted` and the shell prompt never print their values.
+_.file = { path = ".env", redact = true }
+
+[tasks.setup]
+description = "Install dependencies and the resident service"
+run = ["pnpm install", "pnpm service:install"]
+
+[tasks.start]
+alias = "dev"
+description = "Run the Electron app"
+run = "pnpm start"
+
+[tasks.check]
+description = "Typecheck and lint"
+run = ["pnpm typecheck", "pnpm lint"]
+
+[tasks.doctor]
+description = "Scan React code quality with react-doctor"
+run = "pnpm react:doctor"
+
+[tasks.verify]
+description = "Typecheck, lint, scan React code, and run the test suite"
+depends = ["check", "doctor", "test"]
+
+[tasks.test]
+description = "Tests over a temporary database and Git repos (no model calls)"
+run = "pnpm test"
+
+[tasks."test:runtime"]
+description = "Run the packaged service payload against a real renderer"
+run = "pnpm test:runtime"
+
+[tasks."test:launchd"]
+description = "Install a throwaway LaunchAgent and verify restart and recovery"
+run = "pnpm test:launchd"
+
+[tasks."test:upgrade"]
+description = "Verify service upgrade, rollback, and database restore"
+run = "pnpm test:upgrade"
+
+[tasks."test:app-upgrade"]
+description = "Build two real macOS apps and verify the app upgrade path"
+run = "pnpm test:app-upgrade"
+
+[tasks."test:dispatch"]
+description = "Manual integration check that spends real model tokens"
+run = "pnpm tsx scripts/e2e-dispatch.mts"
+
+[tasks.package]
+description = "Build the Electron app and its service payload"
+run = "pnpm package"
+
+[tasks."service:install"]
+description = "Install or update the resident service and start it"
+run = "pnpm service:install"
+
+[tasks."service:start"]
+description = "Start the resident service"
+run = "pnpm service:start"
+
+[tasks."service:stop"]
+description = "Stop the resident service"
+run = "pnpm service:stop"
+
+[tasks."service:restart"]
+description = "Restart the resident service"
+run = "pnpm service:restart"
+
+[tasks."service:status"]
+description = "Show service version, PID, and state"
+run = "pnpm service:status"
+
+[tasks."service:uninstall"]
+description = "Remove login autostart and keep application data"
+run = "pnpm service:uninstall"
+
+[tasks."service:run"]
+description = "Run the built service in the foreground (needs build:service)"
+run = "pnpm service:run"
+
+[tasks."service:env"]
+description = "Write MAGPIE_*/TELEGRAM_* from .env into <dataDir>/service.env (0600)"
+run = '''
+set -euo pipefail
+dir="${TIAN_AGENT_DATA_DIR:-$HOME/Library/Application Support/Tian Agent}"
+install -d -m 700 "$dir"
+tmp="$(mktemp "$dir/.service.env.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+chmod 600 "$tmp"
+env | grep -E '^(MAGPIE_|TELEGRAM_)' | grep -vE '=$' | sort >> "$tmp" || true
+mv "$tmp" "$dir/service.env"
+trap - EXIT
+echo "Wrote $dir/service.env"
+'''
