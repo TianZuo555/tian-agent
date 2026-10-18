@@ -21,6 +21,88 @@ function temporary(t: TestContext): string {
   return path;
 }
 
+test('candidates stay out of wake/recall/export until promoted; dismiss removes them', (t) => {
+  const f = fixture(t);
+  const memory = f.scopes.memory('p1');
+  memory.remember({ text: 'An active memory', actor: 'chief' });
+
+  const candidate = memory.candidate({
+    text: 'Tian prefers pnpm over npm',
+    kind: 'preference',
+    confidence: 0.7,
+    sourceRef: 'conv:1#2',
+  });
+  assert.equal(candidate.seq, 1);
+  assert.equal(candidate.status, 'candidate');
+  assert.equal(candidate.trustLevel, 'agent_inferred');
+  assert.equal(candidate.sourceType, 'agent');
+  assert.throws(
+    () =>
+      memory.candidate({
+        text: 'x'.repeat(281),
+        kind: 'fact',
+        confidence: 0.7,
+        sourceRef: null,
+      }),
+    /280/,
+  );
+
+  // wake() output is byte-identical with and without candidates: only active
+  // memory renders, and candidate-only ranges auto-mark as empty nodes.
+  const second = memory.candidate({
+    text: 'Second candidate fact',
+    kind: 'fact',
+    confidence: 0.7,
+    sourceRef: 'conv:1#3',
+  });
+  assert.equal(memory.wake(), '#0 An active memory');
+  // A pending merge may exist next to a candidate, but its source text only
+  // ever contains active lines — candidates never leak into summaries.
+  const merge = memory.nextMerge();
+  assert.deepEqual(merge && [merge.lo, merge.hi], [0, 1]);
+  assert.doesNotMatch(merge!.source, /pnpm|Second candidate/);
+  assert.equal(memory.recall('pnpm'), '(no matches)');
+  assert.match(
+    memory.recall('pnpm', { includeHistory: true }),
+    /#1 \[candidate\] Tian prefers pnpm/,
+  );
+  const exported = readFileSync(
+    join(f.projectPath, 'memory', 'MEMORY.md'),
+    'utf8',
+  );
+  assert.match(exported, /An active memory/);
+  assert.doesNotMatch(exported, /pnpm|Second candidate/);
+
+  // Promote keeps agent_inferred trust and puts the line into Core Memory.
+  assert.throws(() => memory.promote(0), /only candidates can be promoted/);
+  const promoted = memory.promote(candidate.seq, 'user');
+  assert.equal(promoted.status, 'active');
+  assert.equal(promoted.trustLevel, 'agent_inferred');
+  assert.match(memory.wake(), /Tian prefers pnpm over npm/);
+  assert.match(memory.recall('pnpm'), /Tian prefers pnpm/);
+  const fresh = readFileSync(join(f.projectPath, 'memory', 'MEMORY.md'), 'utf8');
+  assert.match(fresh, /Tian prefers pnpm over npm/);
+  assert.deepEqual(
+    (
+      f.db.sqlite
+        .prepare(
+          'SELECT action, actor FROM memory_versions WHERE memory_id = ? ORDER BY rowid',
+        )
+        .all(candidate.id) as { action: string; actor: string }[]
+    ).map((row) => [row.action, row.actor]),
+    [
+      ['create', 'worker'],
+      ['promote', 'user'],
+    ],
+  );
+
+  // Dismiss (forget) drops the candidate for good; history keeps the row.
+  memory.forget(second.seq, 'not useful', 'user');
+  assert.equal(dump(f.scopes, 'p1').items[2].status, 'deleted');
+  assert.doesNotMatch(memory.wake(), /Second candidate/);
+  assert.throws(() => memory.forget(second.seq, 'again', 'user'), /deleted/);
+});
+
 /** A project scope rooted inside `dir`, plus the global scope. */
 function fixture(t: TestContext) {
   const dir = temporary(t);

@@ -31,6 +31,10 @@ import type {
  * - A concurrent nap never overwrites an existing non-stale node.
  * - A due range with zero active memories is summarized automatically as an
  *   empty marker, without a model call, and wake omits it.
+ * - Candidate memories (auto-extracted by the memory worker, PRD §4.4 F03)
+ *   occupy seq slots but never render in wake, never feed merge sources, and
+ *   stay out of the export; ranges holding only candidates are auto-marked
+ *   as empty nodes, and promoting one re-stales the covering nodes.
  */
 
 export type MemoryKind =
@@ -39,7 +43,7 @@ export type MemoryKind =
   | 'decision'
   | 'outcome'
   | 'environment';
-export type MemoryStatus = 'active' | 'superseded' | 'deleted';
+export type MemoryStatus = 'active' | 'candidate' | 'superseded' | 'deleted';
 export type MemorySourceType =
   | 'user'
   | 'agent'
@@ -50,9 +54,10 @@ export type MemoryTrustLevel =
   | 'user_confirmed'
   | 'agent_inferred'
   | 'third_party';
-export type MemoryActor = 'chief' | 'user' | 'migration';
+export type MemoryActor = 'chief' | 'user' | 'worker' | 'migration';
 export type MemoryAction =
   | 'create'
+  | 'promote'
   | 'supersede'
   | 'delete'
   | 'restore'
@@ -440,6 +445,54 @@ export class MemoryStore {
   }
 
   /**
+   * Store one auto-extracted candidate (PRD §4.4 F03): status `candidate`,
+   * trust `agent_inferred`, operator `worker`. Candidates never render in
+   * wake() or default recall(); the MEMORY.md export ignores them until a
+   * user promotes them, so workers only ever read confirmed memory.
+   */
+  candidate(input: {
+    text: string;
+    kind: MemoryKind;
+    confidence: number | null;
+    sourceRef: string | null;
+    reason?: string;
+  }): MemoryRow {
+    const content = normalizeLine(input.text, 'memory');
+    const now = new Date().toISOString();
+    const memory: MemoryRow = {
+      id: newId(),
+      scopeId: this.scopeId,
+      seq: 0,
+      goalId: null,
+      kind: input.kind,
+      content,
+      sourceType: 'agent',
+      sourceRef: input.sourceRef,
+      trustLevel: 'agent_inferred',
+      confidence: input.confidence,
+      status: 'candidate',
+      supersededBy: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db.transaction(() => {
+      memory.seq = this.nextSeqTx();
+      this.insertMemoryTx(memory);
+      this.recordVersionTx(
+        memory.id,
+        'create',
+        'worker',
+        input.reason ?? 'auto-extracted from history',
+        null,
+        memory,
+      );
+      this.autoMergeEmptyTx();
+    });
+    this.bump();
+    return memory;
+  }
+
+  /**
    * Supersede memory #seq with a revised line: the new memory takes the next
    * seq, the old one stays as history and no longer enters Core Memory.
    */
@@ -511,9 +564,9 @@ export class MemoryStore {
       const memory = this.bySeqTx(seq);
       if (!memory)
         throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
-      if (memory.status !== 'active')
+      if (memory.status !== 'active' && memory.status !== 'candidate')
         throw new Error(
-          `memory #${seq} is ${memory.status}; only active memories can be forgotten`,
+          `memory #${seq} is ${memory.status}; only active or candidate memories can be forgotten`,
         );
       const updated: MemoryRow = {
         ...memory,
@@ -527,6 +580,45 @@ export class MemoryStore {
         memory.id,
       );
       this.recordVersionTx(memory.id, 'delete', actor, reason, memory, updated);
+      this.markCoveringNodesStaleTx(seq);
+      this.autoMergeEmptyTx();
+      return updated;
+    });
+    this.bump();
+    this.exportFile();
+    return result;
+  }
+
+  /**
+   * Promote a candidate into Core Memory: status becomes active, trust stays
+   * at agent_inferred. Covering summary nodes go stale so the promoted line
+   * is rendered (and re-summarized) immediately.
+   */
+  promote(
+    seq: number,
+    actor: MemoryActor = 'user',
+    reason = 'promoted from candidates',
+  ): MemoryRow {
+    const result = this.db.transaction(() => {
+      const memory = this.bySeqTx(seq);
+      if (!memory)
+        throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+      if (memory.status !== 'candidate')
+        throw new Error(
+          `memory #${seq} is ${memory.status}; only candidates can be promoted`,
+        );
+      const updated: MemoryRow = {
+        ...memory,
+        status: 'active',
+        updatedAt: new Date().toISOString(),
+      };
+      this.run(
+        'UPDATE memories SET status = ?, updated_at = ? WHERE id = ?',
+        'active',
+        updated.updatedAt,
+        memory.id,
+      );
+      this.recordVersionTx(memory.id, 'promote', actor, reason, memory, updated);
       this.markCoveringNodesStaleTx(seq);
       this.autoMergeEmptyTx();
       return updated;

@@ -217,7 +217,7 @@ export interface RunInfo {
   finishedAt: string | null;
 }
 
-export type MemoryStatus = 'active' | 'superseded' | 'deleted';
+export type MemoryStatus = 'active' | 'candidate' | 'superseded' | 'deleted';
 
 export interface MemoryItem {
   seq: number;
