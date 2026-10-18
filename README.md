@@ -1,8 +1,8 @@
 # Tian Agent
 
-一个总管、按项目划分的 scope，以及在 worktree 中执行任务的无头工兵。总管运行在独立的本机常驻 Node 服务中；Electron App 是它的桌面客户端。
+一个总管、按项目划分的 scope，以及在 worktree 中执行任务的无头工兵。总管与工兵之间有双向消息通道：工兵可以在执行中向总管提问并等待答复，总管也可以中途下达指令。总管运行在独立的本机常驻 Node 服务中；Electron App 是它的桌面客户端。
 
-当前已实现聊天、项目注册、记忆、任务、Inbox、Run 派发与验收，以及多渠道独立 Session 的后端接口。
+当前已实现聊天、项目注册、记忆、任务、Inbox、Run 派发与验收、总管与工兵的双向消息（agent-to-agent），以及多渠道独立 Session 的后端接口。
 
 ## 开发与验证
 
@@ -75,6 +75,7 @@ LaunchAgent 保存安装时 Node 的绝对路径与 PATH。更换或删除该 No
 | `worker/service.ts`   | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知  |
 | `worker/commands.ts`  | 各 transport 共用的业务命令                       |
 | `worker/agents.ts`    | Pi API 适配和总管／工兵能力配置                   |
+| `worker/worker-tools.ts` | 工兵消息工具：ask_chief、tell_chief、check_msgs |
 | `worker/runs.ts`      | Run 状态、attempt、收集、恢复及验收               |
 | `worker/data.ts`      | task、memory、Inbox 操作和更新事件                |
 | `worker/db.ts`        | 业务数据、渠道绑定、通知 outbox、幂等记录         |
@@ -86,9 +87,9 @@ LaunchAgent 保存安装时 Node 的绝对路径与 PATH。更换或删除该 No
 
 ## 权限与 scope
 
-总管只启用 chief extension：task、memory、notes、Inbox、dispatch 和 Run 查询，没有 `bash/read/write/edit`。读取结果使用 `read_run_report` / `read_run_diff`。启动时也会重新限制已有总管会话的 extension。
+总管只启用 chief extension：task、memory、notes、Inbox、dispatch 和 Run 查询，以及 Run 消息（`send_run_msg` / `list_run_msgs`），没有 `bash/read/write/edit`。读取结果使用 `read_run_report` / `read_run_diff`。启动时也会重新限制已有总管会话的 extension。
 
-工兵只启用 CodingTools，默认在 Git worktree 中工作，没有总管的 memory 写入工具。指令要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，当前不提供操作系统文件访问沙箱。
+工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可在执行中用 `ask_chief` 向总管提问并阻塞等待答复，用 `tell_chief` 发送进度通知，用 `check_msgs` 接收总管指令；问题通过通知管道唤醒总管，答复与指令落在按 run 持久化的消息线程（`agent_messages` 表）里，重启不丢。指令要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，当前不提供操作系统文件访问沙箱。
 
 Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。
 
@@ -137,6 +138,17 @@ dispatch → queued → running → collecting → done / failed
 - land 合入保存的 base branch，要求主 checkout 位于该分支且无已跟踪文件的未提交修改；land 后不能 follow-up。
 - ship 推送分支，再查询或创建 PR，重复请求复用 PR URL。
 - 已开始的 land/ship/discard 先入库，启动时继续或核对。
+
+## Agent 消息（总管 ⇄ 工兵）
+
+每个 Run 有一条持久消息线程（`agent_messages` 表），双向可达：
+
+- 工兵 `ask_chief(question, wait_seconds?)`：提问并阻塞等待答复。问题经通知管道立即唤醒总管（不等待 Run 结束），总管用 `send_run_msg` 回复；等待窗口内无答复则指示工兵自行判断并在报告中记录。Run 被 discard 时提问立即返回并要求停止。
+- 工兵 `tell_chief(text)`：发送不等待的进度通知。
+- 工兵 `check_msgs`：读取总管发来的木读消息（答复之外的主动指令）。
+- 总管 `send_run_msg(run, body)`：回复提问中的工兵，或对运行中的 Run 主动下达指令；`list_run_msgs(run)` 查看完整线程。
+
+消息 ID 与通知 ID 均由调用派生，Durable 重放不产生重复消息；已读状态持久化。工兵被指示优先自行决策，只在破坏性操作、缺失凭据或根本性歧义时提问。
 
 报告从 `TIAN_REPORT.md` 收集到 `<project root>/.tian/runs/`，每轮独立保留，报告不进入代码提交。
 

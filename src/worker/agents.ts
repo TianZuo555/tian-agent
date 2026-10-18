@@ -18,6 +18,7 @@ import type { WorkerConversation, WorkerRuntime } from './runs.js';
 export class AgentRuntime implements WorkerRuntime {
   harness!: Harness;
   private chief!: Extension;
+  private worker!: Extension;
   constructor(
     private userDataDir: string,
     private globalDir: string,
@@ -25,10 +26,12 @@ export class AgentRuntime implements WorkerRuntime {
     private db: Db,
   ) {}
 
-  async open(chief: Extension): Promise<void> {
+  async open(chief: Extension, worker: Extension): Promise<void> {
     this.chief = chief;
+    this.worker = worker;
     const registry = createRegistry();
     registry.install(chief);
+    registry.install(worker);
     registry.install(CodingTools);
     this.harness = await Harness.open(
       await openNodeSqliteStorage(join(this.userDataDir, 'pi-session.sqlite')),
@@ -48,6 +51,18 @@ export class AgentRuntime implements WorkerRuntime {
       );
       await conversation?.configure(
         { extensions: [chief] },
+        BACKGROUND_CONTEXT,
+      );
+    }
+    // Existing worker conversations gain the messaging tools after an upgrade.
+    for (const run of this.db.listRuns(null)) {
+      if (!run.conversationId || run.reviewStatus === 'discarded') continue;
+      const conversation = await this.harness.conversation(
+        Number(run.conversationId) as ConversationId,
+        BACKGROUND_CONTEXT,
+      );
+      await conversation?.configure(
+        { extensions: [CodingTools, worker] },
         BACKGROUND_CONTEXT,
       );
     }
@@ -82,9 +97,9 @@ export class AgentRuntime implements WorkerRuntime {
         agent: {
           model: this.settings.get().model,
           cwd: run.worktreePath ?? run.rootPath,
-          extensions: [CodingTools],
+          extensions: [CodingTools, this.worker],
           instructions: [
-            'You are a worker coding agent. Complete the task unattended; do not ask questions.',
+            'You are a worker coding agent. Complete the task unattended and make reasonable decisions yourself. Only when a decision genuinely needs the chief (destructive or irreversible action, missing credentials, fundamental ambiguity) ask once with ask_chief and wait for its reply; use tell_chief for short progress notes, never for chatter.',
             'Edit only files inside the current working directory. Do not run git commit, merge, push, or change branches; the application manages Git.',
             `Shared context can be read from ${join(run.rootPath, 'memory')} and ${join(run.rootPath, 'notes')}. Never modify memory or the project main checkout.`,
             'Write a report of at most one page to TIAN_REPORT.md in the working directory: changes, validation, key decisions, and limitations.',

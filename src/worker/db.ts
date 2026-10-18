@@ -35,6 +35,18 @@ export interface Notification {
   content: string;
 }
 
+export interface AgentMessageRow {
+  id: string;
+  /** Insertion order within the run's thread. */
+  seq: number;
+  runId: string;
+  sender: 'chief' | 'worker';
+  body: string;
+  createdAt: string;
+  /** When the recipient read it; null while pending. */
+  deliveredAt: string | null;
+}
+
 const snake = (key: string) =>
   key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const row = <T>(value: unknown): T =>
@@ -91,6 +103,10 @@ export class Db {
         scope_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (scope_id, id)
       );
+      CREATE TABLE IF NOT EXISTS agent_messages (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL, sender TEXT NOT NULL,
+        body TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
+      );
       CREATE TABLE IF NOT EXISTS notifications (
         id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, conversation_id TEXT, content TEXT NOT NULL, delivered_at TEXT
       );
@@ -98,6 +114,7 @@ export class Db {
       CREATE INDEX IF NOT EXISTS tasks_scope_status ON tasks(scope_id, status);
       CREATE INDEX IF NOT EXISTS conversations_scope ON conversations(scope_id, created_at);
       CREATE INDEX IF NOT EXISTS runs_project_status ON runs(project_id, status);
+      CREATE INDEX IF NOT EXISTS agent_messages_run ON agent_messages(run_id);
     `);
     this.ensureColumns('projects', {
       allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
@@ -393,6 +410,71 @@ export class Db {
         "SELECT 1 FROM runs WHERE project_id = ? AND (status IN ('queued','running','collecting') OR (worktree_path IS NOT NULL AND review_status != 'discarded')) LIMIT 1",
       )
       .get(id);
+  }
+
+  runByConversation(conversationId: string): RunRow | undefined {
+    const value = this.db
+      .prepare('SELECT * FROM runs WHERE conversation_id = ?')
+      .get(conversationId);
+    return value ? row<RunRow>(value) : undefined;
+  }
+
+  addAgentMessage(
+    value: Omit<AgentMessageRow, 'createdAt' | 'deliveredAt' | 'seq'>,
+  ): AgentMessageRow {
+    this.db
+      .prepare(
+        'INSERT INTO agent_messages (id,run_id,sender,body,created_at) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+      )
+      .run(
+        value.id,
+        value.runId,
+        value.sender,
+        value.body,
+        new Date().toISOString(),
+      );
+    const record = this.db
+      .prepare('SELECT rowid AS seq, * FROM agent_messages WHERE id = ?')
+      .get(value.id) as Record<string, unknown>;
+    if (!record) throw new Error(`Unknown agent message: ${value.id}`);
+    return row<AgentMessageRow>(record);
+  }
+  listAgentMessages(runId: string): AgentMessageRow[] {
+    return rows(
+      this.db
+        .prepare(
+          'SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? ORDER BY rowid',
+        )
+        .all(runId),
+    );
+  }
+  chiefReplyAfter(runId: string, seq: number): AgentMessageRow | undefined {
+    const value = this.db
+      .prepare(
+        "SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? AND sender = 'chief' AND rowid > ? ORDER BY rowid LIMIT 1",
+      )
+      .get(runId, seq);
+    return value ? row<AgentMessageRow>(value) : undefined;
+  }
+  undeliveredAgentMessages(runId: string): AgentMessageRow[] {
+    return rows(
+      this.db
+        .prepare(
+          "SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? AND delivered_at IS NULL AND sender = 'chief' ORDER BY rowid",
+        )
+        .all(runId),
+    );
+  }
+  markAgentMessagesDelivered(ids: string[]): void {
+    if (ids.length === 0) return;
+    this.transaction(() => {
+      for (const id of ids)
+        this.db
+          .prepare(
+            'UPDATE agent_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL',
+          )
+          .run(new Date().toISOString(), id);
+    });
   }
 
   importMessage(scopeId: string, message: InboxItem): void {

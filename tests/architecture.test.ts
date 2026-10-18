@@ -21,6 +21,7 @@ import { DataService } from '../src/worker/data';
 import { AgentRuntime } from '../src/worker/agents';
 import { Settings } from '../src/worker/settings';
 import { chiefExtension } from '../src/worker/tools';
+import { workerExtension } from '../src/worker/worker-tools';
 import {
   RunOrchestrator,
   type WorkerConversation,
@@ -264,6 +265,9 @@ test('chief and worker capabilities remain separate, including previously contam
     dispatch: (input) => f.runs.dispatch(input),
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),
+    sendRunMessage: (runId, body, operationId) =>
+      data.sendRunMessage(runId, body, operationId),
+    runMessages: (runId) => data.runMessages(runId),
   });
   let agents = new AgentRuntime(
     f.userData,
@@ -271,7 +275,8 @@ test('chief and worker capabilities remain separate, including previously contam
     settings,
     f.db,
   );
-  await agents.open(extension);
+  const worker = workerExtension({ db: f.db, wake: async () => {} });
+  await agents.open(extension, worker);
   const chief = await agents.createChief(f.projectPath);
   f.db.mapConversation(String(chief.id), 'p1');
   const names = (await chief.agent(BACKGROUND_CONTEXT)).tools.map(
@@ -289,7 +294,7 @@ test('chief and worker capabilities remain separate, including previously contam
     settings,
     f.db,
   );
-  await agents.open(extension);
+  await agents.open(extension, worker);
   try {
     const restored = await agents.conversation(String(chief.id));
     assert.ok(
@@ -325,7 +330,22 @@ test('chief and worker capabilities remain separate, including previously contam
     const workerNames = (
       await (await agents.conversation(worker.id)).agent(BACKGROUND_CONTEXT)
     ).tools.map((tool) => tool.name);
-    assert.deepEqual(workerNames.sort(), ['bash', 'edit', 'read', 'write']);
+    assert.deepEqual(workerNames.sort(), [
+      'ask_chief',
+      'bash',
+      'check_msgs',
+      'edit',
+      'read',
+      'tell_chief',
+      'write',
+    ]);
+    // The chief keeps its narrow envelope: no coding, no worker messaging.
+    const chiefNames = (
+      await restored.agent(BACKGROUND_CONTEXT)
+    ).tools.map((tool) => tool.name);
+    assert.ok(chiefNames.includes('send_run_msg'));
+    assert.ok(!chiefNames.includes('ask_chief'));
+    assert.ok(!chiefNames.includes('bash'));
   } finally {
     await agents.close();
   }

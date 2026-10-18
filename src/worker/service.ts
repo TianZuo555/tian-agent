@@ -14,6 +14,7 @@ import { DataService } from './data.js';
 import { AgentRuntime } from './agents.js';
 import { RunOrchestrator, type DispatchInput } from './runs.js';
 import { chiefExtension } from './tools.js';
+import { workerExtension } from './worker-tools.js';
 import { toRows, type ConversationView } from '../shared/messages.js';
 import type {
   Emit,
@@ -79,6 +80,16 @@ export class Service {
         dispatch: (input) => this.runs.dispatch(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
+        sendRunMessage: (runId, body, operationId) =>
+          this.data.sendRunMessage(runId, body, operationId),
+        runMessages: (runId) => this.data.runMessages(runId),
+      }),
+      workerExtension({
+        db: this.db,
+        wake: async (notification) => {
+          this.db.queueNotification(notification);
+          await this.deliverNotifications();
+        },
       }),
     );
     await this.runs.recover();

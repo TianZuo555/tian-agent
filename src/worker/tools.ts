@@ -5,7 +5,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
-import type { Db, RunRow } from './db.js';
+import type { AgentMessageRow, Db, RunRow } from './db.js';
 import type { DataService } from './data.js';
 
 export interface ChiefDeps {
@@ -21,6 +21,14 @@ export interface ChiefDeps {
     chiefConversationId: string | null;
     operationId: string;
   }) => Promise<RunRow>;
+  /** Post a message into a run's mailbox — a reply or mid-run guidance. */
+  sendRunMessage: (
+    runId: string,
+    body: string,
+    operationId: string,
+  ) => AgentMessageRow;
+  /** Read the durable message thread between the chief and a run's worker. */
+  runMessages: (runId: string) => AgentMessageRow[];
 }
 
 const text = (t: string) => ({ output: [{ type: 'text' as const, text: t }] });
@@ -71,6 +79,8 @@ MEMORY. Your memory outlives every session — without it you do not know who Ti
 WORLD. <state> shows unread inbox, open tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox.
 
 DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to check progress; Tian can also follow up, land, ship or discard a run from the UI.
+
+WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
 SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to note.`,
     { tag: false },
@@ -491,6 +501,56 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
     },
   });
 
+  const sendRunMsg = defineTool({
+    name: 'send_run_msg',
+    replay: 'safe',
+    description:
+      'Reply to a run worker waiting on ask_chief, or send it mid-run guidance. A waiting worker receives it immediately; otherwise it reads it on its next check.',
+    parameters: Type.Object({
+      run: Type.String({
+        description: 'Run id from the question or list_runs.',
+      }),
+      body: Type.String({
+        description: 'Short, concrete, self-contained answer or instruction.',
+      }),
+    }),
+    execute: async (args, api) => {
+      try {
+        deps.sendRunMessage(
+          args.run,
+          args.body,
+          `send-run-msg:${api.taskId}:${api.callId}`,
+        );
+        return text(`message delivered to run ${args.run}.`);
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const listRunMsgs = defineTool({
+    name: 'list_run_msgs',
+    description:
+      "Read the durable message thread between you and a run's worker.",
+    parameters: Type.Object({ run: Type.String() }),
+    execute: async (args) => {
+      try {
+        const messages = deps.runMessages(args.run);
+        if (messages.length === 0) return text('(no messages)');
+        return text(
+          messages
+            .map(
+              (m) =>
+                `[${m.createdAt}] ${m.sender === 'chief' ? 'you' : 'worker'}:\n${m.body}`,
+            )
+            .join('\n---\n'),
+        );
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
   return defineExtension({
     name: 'chief',
     sections: [preamble, memorySection, stateSection],
@@ -514,6 +574,8 @@ SCOPES. This conversation is bound to one scope. Tools take an optional scope pa
       listRuns,
       readRunReport,
       readRunDiff,
+      sendRunMsg,
+      listRunMsgs,
     ],
   });
 }

@@ -1,4 +1,5 @@
-import type { Db } from './db.js';
+import { randomUUID } from 'node:crypto';
+import type { AgentMessageRow, Db } from './db.js';
 import type { Scopes } from './scopes.js';
 import type { Emit } from '../shared/types.js';
 
@@ -65,5 +66,27 @@ export class DataService {
     const id = this.scopes.sendMessage(scopeId, 'chief', body, to, thread);
     this.emit('inbox', scopeId);
     return id;
+  }
+
+  sendRunMessage(
+    runId: string,
+    body: string,
+    operationId?: string,
+  ): AgentMessageRow {
+    if (!this.db.getRun(runId)) throw new Error(`Unknown run: ${runId}`);
+    if (!body.trim()) throw new Error('Message body cannot be empty');
+    return this.db.once(operationId, () =>
+      this.db.addAgentMessage({
+        id: `msg:${runId}:${operationId ?? randomUUID()}`,
+        runId,
+        sender: 'chief',
+        body: body.trim(),
+      }),
+    );
+  }
+
+  runMessages(runId: string): AgentMessageRow[] {
+    if (!this.db.getRun(runId)) throw new Error(`Unknown run: ${runId}`);
+    return this.db.listAgentMessages(runId);
   }
 }
