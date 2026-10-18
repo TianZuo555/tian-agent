@@ -104,7 +104,8 @@ export class RunOrchestrator {
       const startedAt = new Date().toISOString();
       // Match approved skills once, at dispatch; the run row records exactly
       // which versions the worker was given (PRD §6.2).
-      const matches = this.skills?.matchApproved(project.id, input.prompt) ?? [];
+      const matches =
+        this.skills?.matchApproved(project.id, input.prompt) ?? [];
       const run: RunRow = {
         id,
         projectId: project.id,

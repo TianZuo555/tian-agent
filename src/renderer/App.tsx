@@ -25,6 +25,9 @@ const InboxView = lazy(() =>
 const GoalsView = lazy(() =>
   import('./components/NavViews').then((m) => ({ default: m.GoalsView })),
 );
+const SkillsView = lazy(() =>
+  import('./components/NavViews').then((m) => ({ default: m.SkillsView })),
+);
 const ContextPane = lazy(() =>
   import('./components/ContextPane').then((m) => ({ default: m.ContextPane })),
 );
@@ -182,6 +185,9 @@ export function App() {
       } else if (key === '3') {
         event.preventDefault();
         actions.setNav('inbox');
+      } else if (key === '4') {
+        event.preventDefault();
+        actions.setNav('skills');
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -338,6 +344,10 @@ export function App() {
                     ) : nav === 'goals' ? (
                       <Suspense fallback={null}>
                         <GoalsView />
+                      </Suspense>
+                    ) : nav === 'skills' ? (
+                      <Suspense fallback={null}>
+                        <SkillsView />
                       </Suspense>
                     ) : (
                       <Suspense fallback={null}>

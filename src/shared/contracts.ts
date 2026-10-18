@@ -10,7 +10,6 @@ import type {
   MemoryDump,
   ProjectPatch,
   RunInfo,
-  RunInjection,
   ScopeInfo,
   SettingsInfo,
   ModelCatalog,

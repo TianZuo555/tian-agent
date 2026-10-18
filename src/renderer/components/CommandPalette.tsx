@@ -4,6 +4,7 @@ import {
   ChatCircleDots,
   Folder,
   Gear,
+  Lightning,
   SidebarSimple,
   Target,
   Tray,
@@ -45,7 +46,7 @@ export function CommandPalette() {
 
   const items = useMemo<PaletteItem[]>(() => {
     const close = () => actions.setPaletteOpen(false);
-    const go = (nav: 'chat' | 'goals' | 'inbox') => () => {
+    const go = (nav: 'chat' | 'goals' | 'skills' | 'inbox') => () => {
       actions.setNav(nav);
       close();
     };
@@ -82,6 +83,13 @@ export function CommandPalette() {
         shortcut: '⌘3',
         icon: Tray,
         run: go('inbox'),
+      },
+      {
+        value: 'go skills',
+        label: 'Go to Skills',
+        shortcut: '⌘4',
+        icon: Lightning,
+        run: go('skills'),
       },
       {
         value: 'toggle context pane',

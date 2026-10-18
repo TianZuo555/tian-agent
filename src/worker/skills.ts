@@ -148,9 +148,6 @@ function findStepSection(report: string): StepSection | null {
   return null;
 }
 
-const snake = (key: string) =>
-  key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-
 const mapSkill = (value: Record<string, unknown>): SkillRow => ({
   id: value.id as string,
   scopeId: value.scope_id as string,
@@ -267,7 +264,11 @@ export class SkillRegistry {
   ): SkillRow {
     return this.db.transaction(() => {
       const latest = this.latest(input.scopeId, input.name);
-      if (latest && latest.status === 'candidate' && latest.body === input.body) {
+      if (
+        latest &&
+        latest.status === 'candidate' &&
+        latest.body === input.body
+      ) {
         const merged = [
           ...new Set([...latest.sourceRefs, ...input.sourceRefs]),
         ];
@@ -341,7 +342,9 @@ export class SkillRegistry {
         )
         .run(now.toISOString(), skill.scopeId, skill.name, skill.version);
       this.db.sqlite
-        .prepare("UPDATE skills SET status = 'approved', updated_at = ? WHERE id = ?")
+        .prepare(
+          "UPDATE skills SET status = 'approved', updated_at = ? WHERE id = ?",
+        )
         .run(now.toISOString(), id);
       this.record(id, 'approved', skill.scopeId, {
         name: skill.name,
@@ -363,7 +366,9 @@ export class SkillRegistry {
           `Only candidate or approved skills can be retired (${skill.name} v${skill.version} is ${skill.status})`,
         );
       this.db.sqlite
-        .prepare("UPDATE skills SET status = 'retired', updated_at = ? WHERE id = ?")
+        .prepare(
+          "UPDATE skills SET status = 'retired', updated_at = ? WHERE id = ?",
+        )
         .run(now.toISOString(), id);
       this.record(id, 'retired', skill.scopeId, {
         name: skill.name,

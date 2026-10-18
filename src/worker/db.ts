@@ -80,7 +80,8 @@ export class Db {
     // consistent snapshot first and runs inside one transaction: if any step
     // throws, the schema rolls back and the backup file remains for recovery.
     const upgrading = version > 0 && version < DATABASE_VERSION;
-    if (upgrading) this.backupDatabase(join(userDataDir, `tian.db_v${version}.backup`));
+    if (upgrading)
+      this.backupDatabase(join(userDataDir, `tian.db_v${version}.backup`));
     const migrate = () => {
       this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
@@ -135,45 +136,45 @@ export class Db {
       CREATE INDEX IF NOT EXISTS runs_project_status ON runs(project_id, status);
       CREATE INDEX IF NOT EXISTS agent_messages_run ON agent_messages(run_id);
     `);
-    this.ensureColumns('projects', {
-      allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
-    });
-    this.ensureColumns('tasks', {
-      goal_id: 'TEXT',
-      owner: "TEXT NOT NULL DEFAULT 'user'",
-      outcome: 'TEXT',
-      summary: 'TEXT',
-      trigger: "TEXT NOT NULL DEFAULT 'manual'",
-      trigger_ref: 'TEXT',
-      // UNIQUE comes from the tasks_dedupe_key index created after this call.
-      dedupe_key: 'TEXT',
-      attempts: 'INTEGER NOT NULL DEFAULT 0',
-      max_attempts: 'INTEGER NOT NULL DEFAULT 3',
-      started_at: 'TEXT',
-      updated_at: 'TEXT',
-    });
-    this.ensureColumns('runs', {
-      chief_conversation_id: 'TEXT',
-      current_prompt: "TEXT NOT NULL DEFAULT ''",
-      root_path: "TEXT NOT NULL DEFAULT ''",
-      base_branch: "TEXT NOT NULL DEFAULT 'main'",
-      execution_mode: "TEXT NOT NULL DEFAULT 'worktree'",
-      review_status: "TEXT NOT NULL DEFAULT 'pending'",
-      attempt: 'INTEGER NOT NULL DEFAULT 1',
-      error: 'TEXT',
-      pr_url: 'TEXT',
-      task_id: 'INTEGER',
-      injected_skills: 'TEXT',
-      deadline_at: "TEXT NOT NULL DEFAULT ''",
-    });
-    this.db.exec(`
+      this.ensureColumns('projects', {
+        allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
+      });
+      this.ensureColumns('tasks', {
+        goal_id: 'TEXT',
+        owner: "TEXT NOT NULL DEFAULT 'user'",
+        outcome: 'TEXT',
+        summary: 'TEXT',
+        trigger: "TEXT NOT NULL DEFAULT 'manual'",
+        trigger_ref: 'TEXT',
+        // UNIQUE comes from the tasks_dedupe_key index created after this call.
+        dedupe_key: 'TEXT',
+        attempts: 'INTEGER NOT NULL DEFAULT 0',
+        max_attempts: 'INTEGER NOT NULL DEFAULT 3',
+        started_at: 'TEXT',
+        updated_at: 'TEXT',
+      });
+      this.ensureColumns('runs', {
+        chief_conversation_id: 'TEXT',
+        current_prompt: "TEXT NOT NULL DEFAULT ''",
+        root_path: "TEXT NOT NULL DEFAULT ''",
+        base_branch: "TEXT NOT NULL DEFAULT 'main'",
+        execution_mode: "TEXT NOT NULL DEFAULT 'worktree'",
+        review_status: "TEXT NOT NULL DEFAULT 'pending'",
+        attempt: 'INTEGER NOT NULL DEFAULT 1',
+        error: 'TEXT',
+        pr_url: 'TEXT',
+        task_id: 'INTEGER',
+        injected_skills: 'TEXT',
+        deadline_at: "TEXT NOT NULL DEFAULT ''",
+      });
+      this.db.exec(`
       -- A fresh tasks table declares dedupe_key UNIQUE, but migrated databases
       -- got it through ALTER TABLE, where UNIQUE is not allowed. The index makes
       -- task creation dedupe work on both shapes (NULLs stay allowed, so plain
       -- to-dos are unaffected). It must run after ensureColumns added the column.
       CREATE UNIQUE INDEX IF NOT EXISTS tasks_dedupe_key ON tasks(dedupe_key);
     `);
-    this.db.exec(`
+      this.db.exec(`
       UPDATE runs SET root_path = COALESCE((SELECT root_path FROM projects WHERE projects.id = runs.project_id), '') WHERE root_path = '';
       UPDATE runs SET current_prompt = prompt WHERE current_prompt = '';
       -- ADR 0005: migrate the old todo statuses to the task state machine, idempotently.
@@ -634,34 +635,28 @@ export class Db {
     return value ? this.readRun(value) : undefined;
   }
   listRuns(projectId: string | null): RunRow[] {
-    return (
-      this.db
-        .prepare(
-          'SELECT * FROM runs WHERE (? IS NULL OR project_id = ?) ORDER BY started_at DESC LIMIT 200',
-        )
-        .all(projectId, projectId)
-        .map((value) => this.readRun(value))
-    );
+    return this.db
+      .prepare(
+        'SELECT * FROM runs WHERE (? IS NULL OR project_id = ?) ORDER BY started_at DESC LIMIT 200',
+      )
+      .all(projectId, projectId)
+      .map((value) => this.readRun(value));
   }
   activeRuns(): RunRow[] {
-    return (
-      this.db
-        .prepare(
-          "SELECT * FROM runs WHERE status IN ('queued','running','collecting') AND review_status != 'discarded'",
-        )
-        .all()
-        .map((value) => this.readRun(value))
-    );
+    return this.db
+      .prepare(
+        "SELECT * FROM runs WHERE status IN ('queued','running','collecting') AND review_status != 'discarded'",
+      )
+      .all()
+      .map((value) => this.readRun(value));
   }
   unsettledReviews(): RunRow[] {
-    return (
-      this.db
-        .prepare(
-          "SELECT * FROM runs WHERE review_status IN ('landing','shipping','discarding')",
-        )
-        .all()
-        .map((value) => this.readRun(value))
-    );
+    return this.db
+      .prepare(
+        "SELECT * FROM runs WHERE review_status IN ('landing','shipping','discarding')",
+      )
+      .all()
+      .map((value) => this.readRun(value));
   }
   projectHasRuns(id: string): boolean {
     return !!this.db

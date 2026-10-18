@@ -4,6 +4,7 @@ import {
   ChatCircleDots,
   ChatCircleText,
   FolderPlus,
+  Lightning,
   MagnifyingGlass,
   Plus,
   SlidersHorizontal,
@@ -238,6 +239,7 @@ export function Sidebar() {
   const nav = useStore((s) => s.nav);
   const inbox = useStore((s) => s.inbox);
   const tasks = useStore((s) => s.tasks);
+  const skills = useStore((s) => s.skills);
   const runtimeStatus = useStore((s) => s.runtimeStatus);
   const [query, setQuery] = useState('');
   const [name, setName] = useState('');
@@ -353,6 +355,13 @@ export function Sidebar() {
           active={nav === 'goals'}
           badge={pendingTasks}
           onClick={() => actions.setNav('goals')}
+        />
+        <NavItem
+          icon={Lightning}
+          label="Skills"
+          active={nav === 'skills'}
+          badge={skills.filter((s) => s.status === 'candidate').length}
+          onClick={() => actions.setNav('skills')}
         />
         <NavItem
           icon={Tray}
