@@ -518,18 +518,21 @@ function MemoryPanel() {
   const [forgetting, setForgetting] = useState<MemoryItem | null>(null);
   const reduce = useReducedMotion();
 
-  const items = (memory?.items ?? []).filter(
-    (item) => showHistory || item.status === 'active',
-  );
-  const activeCount = (memory?.items ?? []).filter(
-    (item) => item.status === 'active',
-  ).length;
+  const items = memory?.items ?? [];
+  const candidates = items.filter((item) => item.status === 'candidate');
+  const active = items.filter((item) => item.status === 'active');
+  const historical = showHistory
+    ? items.filter(
+        (item) => item.status === 'superseded' || item.status === 'deleted',
+      )
+    : [];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-border border-b px-2 py-1">
         <span className="font-mono text-[9.5px] text-content-disabled">
-          {activeCount} active
+          {active.length} active
+          {candidates.length > 0 ? ` · ${candidates.length} candidates` : ''}
           {memory && memory.pendingMerges > 0
             ? ` · ${memory.pendingMerges} merges pending`
             : ''}
@@ -552,11 +555,40 @@ function MemoryPanel() {
             <EmptyPanel
               icon={Stack}
               title={showHistory ? 'No memories at all' : 'No memories yet'}
-              hint="Facts the chief chooses to keep will live here."
+              hint="Facts the chief keeps, plus candidates extracted from history, live here."
             />
           )}
+          {candidates.length > 0 && (
+            <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
+              Candidates — extracted from history
+            </div>
+          )}
           <AnimatePresence initial={false}>
-            {items.map((item) => (
+            {candidates.map((item) => (
+              <motion.div
+                key={item.seq}
+                layout={!reduce}
+                initial={reduce ? false : { opacity: 0, y: -3 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, height: 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="overflow-hidden"
+              >
+                <MemoryRow
+                  item={item}
+                  onPromote={() => void actions.memoryPromote(item.seq)}
+                  onDismiss={() => void actions.memoryDismiss(item.seq)}
+                />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {candidates.length > 0 && (
+            <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
+              Active — in Core Memory
+            </div>
+          )}
+          <AnimatePresence initial={false}>
+            {active.map((item) => (
               <motion.div
                 key={item.seq}
                 layout={!reduce}
@@ -571,6 +603,26 @@ function MemoryPanel() {
                   onRevise={() => setRevising(item)}
                   onForget={() => setForgetting(item)}
                 />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {historical.length > 0 && (
+            <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
+              History
+            </div>
+          )}
+          <AnimatePresence initial={false}>
+            {historical.map((item) => (
+              <motion.div
+                key={item.seq}
+                layout={!reduce}
+                initial={reduce ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={reduce ? undefined : { opacity: 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="overflow-hidden"
+              >
+                <MemoryRow item={item} />
               </motion.div>
             ))}
           </AnimatePresence>
@@ -595,12 +647,17 @@ function MemoryRow({
   item,
   onRevise,
   onForget,
+  onPromote,
+  onDismiss,
 }: {
   item: MemoryItem;
-  onRevise: () => void;
-  onForget: () => void;
+  onRevise?: () => void;
+  onForget?: () => void;
+  onPromote?: () => void;
+  onDismiss?: () => void;
 }) {
-  const historical = item.status !== 'active';
+  const candidate = item.status === 'candidate';
+  const historical = item.status === 'superseded' || item.status === 'deleted';
   return (
     <div className="group flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-secondary">
       <span
@@ -616,7 +673,9 @@ function MemoryRow({
           className={`block text-[12px] leading-snug ${
             historical
               ? 'text-content-disabled line-through'
-              : 'text-foreground'
+              : candidate
+                ? 'text-content-secondary'
+                : 'text-foreground'
           }`}
         >
           {item.content}
@@ -632,6 +691,11 @@ function MemoryRow({
           >
             {item.trustLevel}·{item.sourceType}
           </Badge>
+          {item.supersedes !== null && item.supersedes !== undefined && (
+            <Badge variant="warning" size="sm" className="font-mono">
+              replaces #{item.supersedes}
+            </Badge>
+          )}
           {historical && (
             <Badge
               variant={item.status === 'deleted' ? 'destructive' : 'secondary'}
@@ -646,26 +710,48 @@ function MemoryRow({
           </span>
         </span>
       </span>
-      {!historical && (
+      {candidate ? (
         <span className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Revise memory #${item.seq}`}
-            onClick={onRevise}
+            aria-label={`Promote memory #${item.seq}`}
+            onClick={onPromote}
           >
-            <PencilSimple size={11} />
+            <CheckCircle size={11} weight="fill" />
           </Button>
           <Button
             variant="ghost"
             size="icon-xs"
             className="text-destructive-foreground"
-            aria-label={`Forget memory #${item.seq}`}
-            onClick={onForget}
+            aria-label={`Dismiss candidate #${item.seq}`}
+            onClick={onDismiss}
           >
-            <Trash size={11} />
+            <XCircle size={11} />
           </Button>
         </span>
+      ) : (
+        !historical && (
+          <span className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`Revise memory #${item.seq}`}
+              onClick={onRevise}
+            >
+              <PencilSimple size={11} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="text-destructive-foreground"
+              aria-label={`Forget memory #${item.seq}`}
+              onClick={onForget}
+            >
+              <Trash size={11} />
+            </Button>
+          </span>
+        )
       )}
     </div>
   );
