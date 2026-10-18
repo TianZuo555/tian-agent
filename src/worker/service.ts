@@ -18,6 +18,13 @@ import { EventLog } from './events.js';
 import { HistoryIndex } from './history.js';
 import { chiefExtension } from './tools.js';
 import { workerExtension } from './worker-tools.js';
+import {
+  TelegramAdapter,
+  fetchBotApi,
+  telegramConfigFromEnv,
+  type TelegramBotApi,
+  type TelegramOptions,
+} from './telegram.js';
 import { toRows, type ConversationView } from '../shared/messages.js';
 import type {
   Emit,
@@ -36,6 +43,7 @@ export class Service {
   readonly runs: RunOrchestrator;
   readonly events: EventLog;
   readonly history: HistoryIndex;
+  private telegram: TelegramAdapter | null = null;
   private agents: AgentRuntime;
   private settings: Settings;
   private globalDir: string;
@@ -56,6 +64,10 @@ export class Service {
   constructor(
     userDataDir: string,
     private emit: Emit,
+    private telegramSetup?: {
+      api?: TelegramBotApi;
+      options?: Partial<TelegramOptions>;
+    },
   ) {
     this.db = new Db(userDataDir);
     this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
@@ -144,6 +156,30 @@ export class Service {
     }
     await this.deliverNotifications();
     this.agents.harness.resume();
+    await this.startTelegram();
+  }
+
+  /** Start the Telegram gateway; without a configured token it stays off. */
+  private async startTelegram(): Promise<void> {
+    if (this.closing || this.maintenanceMode) return;
+    const config = telegramConfigFromEnv();
+    if (!config) return;
+    if (!this.telegram)
+      this.telegram = new TelegramAdapter(
+        {
+          db: this.db,
+          scopes: this.scopes,
+          openSession: (binding) => this.openSession(binding),
+          submit: async (conversationId, content, requestId) => {
+            await this.submit(conversationId, content, requestId);
+          },
+          conversation: (id) => this.agents.conversation(id),
+        },
+        config,
+        this.telegramSetup?.api ?? fetchBotApi(config.token),
+        this.telegramSetup?.options,
+      );
+    await this.telegram.start();
   }
 
   async activity() {
@@ -170,6 +206,7 @@ export class Service {
         throw new Error(
           'Tasks or conversations are still running. Wait for them to finish before stopping or updating the service.',
         );
+      await this.telegram?.stop();
       return activity;
     } catch (error) {
       this.maintenanceMode = false;
@@ -187,6 +224,7 @@ export class Service {
     this.closing = true;
     this.runs.pause();
     clearInterval(this.maintenance);
+    await this.telegram?.stop();
     for (const timer of this.inboxTimers.values()) clearTimeout(timer);
     for (const watcher of this.inboxWatches.values()) watcher.close();
     this.inboxTimers.clear();
