@@ -46,6 +46,8 @@ export interface State {
   loading: boolean;
   error: string | null;
   operationError: string | null;
+  /** Transient Memory-panel notice, e.g. a correction dropped out of Core. */
+  memoryNotice: string | null;
   runtimeStatus: 'starting' | 'ready' | 'failed' | 'disconnected';
 }
 
@@ -74,6 +76,7 @@ export function createAppStore(api: TianApi) {
     loading: true,
     error: null,
     operationError: null,
+    memoryNotice: null,
     runtimeStatus: 'starting',
   };
   const listeners = new Set<() => void>();
@@ -413,14 +416,35 @@ export function createAppStore(api: TianApi) {
           },
         });
       }),
-    memoryRevise: (seq: number, text: string, reason: string) =>
-      safe(() => api.memoryRevise(state.activeScopeId, seq, text, reason)),
+    memoryRevise: async (seq: number, text: string, reason: string) => {
+      try {
+        const result = await api.memoryRevise(
+          state.activeScopeId,
+          seq,
+          text,
+          reason,
+        );
+        // Surface Core effects: the correction is saved, but it may live
+        // outside Core when the rendered budget cannot fit it.
+        set({
+          memoryNotice: result.coreDropped
+            ? `Saved #${result.seq}, but it no longer fits Core Memory and is only searchable. Free Core budget and select it to make it resident again.`
+            : null,
+        });
+      } catch (reason) {
+        error(reason);
+      }
+    },
     memoryForget: (seq: number, reason: string) =>
       safe(() => api.memoryForget(state.activeScopeId, seq, reason)),
     memoryPromote: (seq: number) =>
       safe(() => api.memoryPromote(state.activeScopeId, seq)),
     memoryDismiss: (seq: number) =>
       safe(() => api.memoryDismiss(state.activeScopeId, seq)),
+    memorySelect: (seq: number) =>
+      safe(() => api.memorySelect(state.activeScopeId, seq)),
+    memoryDeselect: (seq: number) =>
+      safe(() => api.memoryDeselect(state.activeScopeId, seq)),
     skillApprove: (id: string) => safe(() => api.skillApprove(id)),
     skillRetire: (id: string) => safe(() => api.skillRetire(id, null)),
     skillRollback: (id: string) => safe(() => api.skillRollback(id, null)),

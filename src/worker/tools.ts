@@ -10,7 +10,6 @@ import type { DataService } from './data.js';
 import {
   ScopeParam,
   memoryTools,
-  mergeNotice,
   resolveScope,
   toolErr as err,
   toolText as text,
@@ -55,8 +54,23 @@ export interface ChiefDeps {
   ) => AgentMessageRow;
   /** Read the durable message thread between the chief and a run's worker. */
   runMessages: (runId: string) => AgentMessageRow[];
-  /** Newest user entry in a conversation, to detect a new user turn. */
-  latestUserEntry: (conversationId: string) => Promise<string | null>;
+  /**
+   * Newest input entry of ANY kind (user submission, system wake, worker
+   * input). This is the Core-snapshot turn marker: a notification-driven
+   * request must still see memory written after the previous turn.
+   */
+  latestInputEntry: (conversationId: string) => Promise<string | null>;
+  /**
+   * The current request's input entry with its kind. `kind: "user"` can
+   * confirm provenance; system wakes and worker input are traceable but never
+   * confirm. Memory provenance is verified against this, never against a
+   * model claim.
+   */
+  currentInput: (conversationId: string) => Promise<{
+    entryId: string;
+    kind: 'user' | 'system.notification' | 'worker.input';
+    text: string;
+  } | null>;
   /** Derived history backing search_history/read_history (event log + transcript index). */
   history: HistoryDeps;
 }
@@ -87,8 +101,8 @@ The user is Tian. Answer in the language they use (Chinese by default). Be direc
 MEMORY. Your memory outlives every session — without it you do not know who Tian is or what was decided. It is already loaded into context (see <memory>), do not re-read it.
 - remember "<one line>" whenever you learn something lasting: a fact about Tian, a project decision, an outcome, a preference. Judge what is worth keeping; never record trivia. Set source "user" when Tian states it explicitly, target "global" for facts about Tian, "project" for facts about the project.
 - When Tian corrects something, call revise on that memory's #seq — never append a contradicting line. forget #seq removes a memory that should not exist at all.
-- recall "<query>" full-text search over memory (Chinese included; queries under 3 characters use substring matching); pass include_history to see superseded or deleted memories. zoom <lo>-<hi> drills a summary node down to raw lines.
-- If a compression is due, do it immediately: call nap with the range and a one-line summary before anything else.
+- recall "<query>" keyword search over memory (Chinese included; all words must appear, words under 3 characters use substring matching); results carry #seq, kind, trust, date and source. Pass include_history to see superseded or deleted memories.
+- Core Memory is a small explicit selection, not everything you know. New memories are searchable but NOT resident: call select #seq when a fact must be visible every turn, and deselect #seq to free budget without forgetting. Over-budget selections are rejected with current usage — nothing is silently dropped or evicted. A memory leaving Core is still active and searchable.
 - You are the only writer of memory. Dispatched workers read only the exported memory/MEMORY.md and never write memory.
 
 WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each belongs to a scope with success criteria, constraints, a current state and a next action, and gets its own conversation (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. dispatch(project, prompt, task) records code work on a task id from <state>.
@@ -116,18 +130,11 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   >();
   const renderMemory = (scope: string): string => {
     const parts: string[] = [];
-    const pending = (scopeId: string) => {
-      const merge = scopes.memory(scopeId).nextMerge();
-      return merge
-        ? `\nCOMPRESSION DUE: call nap with scope="${scopeId}", lo=${merge.lo}, hi=${merge.hi}. Summarize:\n${merge.source}`
-        : '';
-    };
-    const globalWake = scopes.memory(GLOBAL_SCOPE).wake();
-    parts.push(`[global]\n${globalWake}${pending(GLOBAL_SCOPE)}`);
+    parts.push(`[global]\n${scopes.memory(GLOBAL_SCOPE).wake()}`);
     if (scope !== GLOBAL_SCOPE) {
       const project = db.getProject(scope);
       parts.push(
-        `[project: ${project?.name ?? scope}]\n${scopes.memory(scope).wake()}${pending(scope)}`,
+        `[project: ${project?.name ?? scope}]\n${scopes.memory(scope).wake()}`,
       );
     }
     return parts.join('\n\n');
@@ -139,7 +146,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     const version = `${scopes.memory(GLOBAL_SCOPE).version()}/${scope === GLOBAL_SCOPE ? '' : scopes.memory(scope).version()}`;
     let turn: string | null;
     try {
-      turn = await deps.latestUserEntry(conversationId);
+      turn = await deps.latestInputEntry(conversationId);
     } catch {
       turn = `unavailable-${Date.now()}`; // degradation: recompute every request
     }
@@ -211,43 +218,23 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       : header.join('\n');
   });
 
-  const nap = defineTool({
-    name: 'nap',
-    description:
-      'Answer a pending memory compression: write a one-line summary covering the given range of memory #seq values. Call this when remember/revise reports a compression due.',
-    parameters: Type.Object({
-      lo: Type.Integer({ minimum: 0 }),
-      hi: Type.Integer({ minimum: 1 }),
-      summary: Type.String({
-        description: 'One line summarizing memories #lo..#hi.',
-      }),
-      scope: ScopeParam,
-    }),
-    execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      try {
-        const next = data.nap(scope, args.lo, args.hi, args.summary);
-        return text(`merged ${args.lo}-${args.hi}.${mergeNotice(scope, next)}`);
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
   const recall = defineTool({
     name: 'recall',
     description:
-      "Full-text search over a scope's memories (FTS, Chinese included; queries under 3 characters fall back to substring matching). Active memories by default.",
+      "Keyword search over a scope's memories (Chinese included; every word must appear, words under 3 characters fall back to substring matching). Active memories by default; each hit shows #seq, kind, trust, date and source. Results are relevance-ranked and bounded by limit and a token budget.",
     parameters: Type.Object({
       query: Type.String({
         description:
-          'Search text; at least 3 characters for full-text matching.',
+          'Search words; several words must all appear. Single characters work via substring matching.',
       }),
       include_history: Type.Optional(
         Type.Boolean({
           description:
             'Include superseded and deleted memories (marked with their status). Default: false.',
         }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({ minimum: 1, maximum: 100, description: 'Default 20.' }),
       ),
       scope: ScopeParam,
     }),
@@ -257,27 +244,9 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         return text(
           scopes.memory(scope).recall(args.query, {
             includeHistory: args.include_history ?? false,
+            limit: args.limit,
           }),
         );
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
-  const zoom = defineTool({
-    name: 'zoom',
-    description:
-      'Open a memory summary node into its two halves, down to raw #seq lines.',
-    parameters: Type.Object({
-      lo: Type.Integer({ minimum: 0 }),
-      hi: Type.Integer({ minimum: 1 }),
-      scope: ScopeParam,
-    }),
-    execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      try {
-        return text(scopes.memory(scope).zoom(args.lo, args.hi));
       } catch (e) {
         return err(String(e));
       }
@@ -422,12 +391,18 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
 
   const readNote = defineTool({
     name: 'read_note',
-    description: 'Read a markdown note of a scope.',
-    parameters: Type.Object({ name: Type.String(), scope: ScopeParam }),
+    description:
+      'Read a markdown note of a scope. Pass a search_notes hit like "plan.md:42" to open a bounded window around that line.',
+    parameters: Type.Object({
+      name: Type.String({
+        description: 'Note name, optionally with ":<line>" from search_notes.',
+      }),
+      scope: ScopeParam,
+    }),
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        return text(scopes.readNote(scope, args.name));
+        return text(scopes.readNoteWindow(scope, args.name));
       } catch (e) {
         return err(String(e));
       }
@@ -470,12 +445,21 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
 
   const searchNotes = defineTool({
     name: 'search_notes',
-    description: 'Regex-search the notes of a scope, returning file:line hits.',
-    parameters: Type.Object({ pattern: Type.String(), scope: ScopeParam }),
+    description:
+      'Keyword search over the notes of a scope: every word must appear on the line (case-insensitive). Returns bounded file:line hits that read_note can open.',
+    parameters: Type.Object({
+      query: Type.String({
+        description: 'One or more words; all must appear.',
+      }),
+      limit: Type.Optional(
+        Type.Integer({ minimum: 1, maximum: 100, description: 'Default 40.' }),
+      ),
+      scope: ScopeParam,
+    }),
     execute: async (args, api) => {
       const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        return text(scopes.searchNotes(scope, args.pattern));
+        return text(scopes.searchNotes(scope, args.query, args.limit));
       } catch (e) {
         return err(String(e));
       }
@@ -620,9 +604,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     sections: [preamble, memorySection, stateSection],
     tools: [
       ...memoryTools(deps),
-      nap,
       recall,
-      zoom,
       listScopes,
       addTask,
       listTasks,

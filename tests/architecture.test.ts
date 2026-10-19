@@ -225,25 +225,20 @@ test('IPC rejects unknown fields, unsupported workers, and invalid settings', ()
   );
 });
 
-test('memory persists, supports recall/zoom, and validates UTF-8 bytes and summary ranges', (t) => {
+test('memory persists, supports recall and explicit Core selection, and validates length', (t) => {
   const path = temporary(t);
   const db = new Db(path);
   t.after(() => db.close());
   const memory = new MemoryStore(db, 'global', path);
-  assert.throws(() => memory.remember({ text: '中'.repeat(94) }), /280/);
-  memory.remember({ text: 'Tian prefers Chinese' });
-  const { merge } = memory.remember({ text: 'Project uses Electron' });
-  assert.deepEqual(merge && [merge.lo, merge.hi], [0, 1]);
-  assert.throws(() => memory.nap(0, 3, 'invalid'), /missing/);
-  assert.throws(() => memory.nap(0.5, 1.5, 'invalid'), /bad node/);
-  assert.throws(() => memory.nap(0, 1, ''), /summary/);
-  memory.nap(0, 1, 'Chinese conversations; Electron project');
+  assert.doesNotThrow(() => memory.remember({ text: '中'.repeat(94) }));
+  assert.throws(() => memory.remember({ text: '中'.repeat(1001) }), /1000/);
+  const first = memory.remember({ text: 'Tian prefers Chinese' });
+  memory.remember({ text: 'Project uses Electron' });
+  memory.select(first.memory.seq, 'user');
   const reopened = new MemoryStore(db, 'global', path);
-  assert.match(reopened.wake(), /Chinese conversations/);
+  assert.match(reopened.wake(), /Tian prefers Chinese/);
   assert.match(reopened.recall('Electron'), /Project uses Electron/);
-  assert.match(reopened.zoom(0, 1), /Tian prefers Chinese/);
-  reopened.nap(0, 1, 'a concurrent replacement');
-  assert.match(reopened.wake(), /Chinese conversations/);
+  assert.equal(reopened.coreUsage().selected, 1);
 });
 
 test('UI and agent application operations emit updates; task operation IDs deduplicate', async (t) => {
@@ -257,9 +252,8 @@ test('UI and agent application operations emit updates; task operation IDs dedup
   data.doneTask(id, true);
   data.remember('p1', 'A durable fact');
   data.remember('p1', 'A second fact');
-  data.nap('p1', 0, 1, 'Two project facts');
   assert.equal(f.db.listTasks('p1')[0].status, 'completed');
-  assert.equal(f.events.filter((event) => event === 'memory').length, 3);
+  assert.equal(f.events.filter((event) => event === 'memory').length, 2);
   assert.equal(f.events.filter((event) => event === 'tasks').length, 3);
 });
 
@@ -303,7 +297,8 @@ test('chief and worker capabilities remain separate, including previously contam
     scopes: f.scopes,
     db: f.db,
     data,
-    latestUserEntry: async () => null,
+    latestInputEntry: async () => null,
+    currentInput: async () => null,
     history: { db: f.db, events, history },
     goals: new GoalStore(f.db),
     improvements: new ImprovementStore(f.db),

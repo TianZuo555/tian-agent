@@ -64,6 +64,7 @@ const rows = <T>(values: unknown[]): T[] =>
 
 export class Db {
   private db: DatabaseSync;
+  private pendingAfterCommit: (() => void)[] | undefined;
 
   constructor(userDataDir: string) {
     mkdirSync(userDataDir, { recursive: true });
@@ -181,13 +182,76 @@ export class Db {
       UPDATE tasks SET status = 'pending' WHERE status = 'open';
       UPDATE tasks SET status = 'completed' WHERE status = 'done';
       UPDATE tasks SET updated_at = COALESCE(updated_at, created_at);
-      PRAGMA user_version = ${DATABASE_VERSION};
       UPDATE runs SET execution_mode = 'in-place' WHERE branch IS NULL;
       UPDATE runs SET status = 'interrupted', review_status = 'discarded' WHERE status = 'discarded';
     `);
+      // Memory schema changes live in the same versioned transaction, so a
+      // failure rolls back the version bump instead of marking an old schema
+      // as current for MemoryStore to patch outside any transaction.
+      this.migrateMemory();
+      this.db.exec(`PRAGMA user_version = ${DATABASE_VERSION};`);
     };
     if (upgrading) this.transaction(migrate);
     else migrate();
+  }
+
+  /**
+   * D4: explicit Core selection replaced the summary tree. Columns are added
+   * before indexes mention them; retired tree rows are renamed (never read) so
+   * the derived data stays inspectable, and the memory FTS index is rebuilt
+   * from the surviving content when the table existed before.
+   */
+  private migrateMemory(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, seq INTEGER NOT NULL, goal_id TEXT,
+        kind TEXT NOT NULL, content TEXT NOT NULL, source_type TEXT NOT NULL, source_ref TEXT,
+        trust_level TEXT NOT NULL, confidence REAL, status TEXT NOT NULL DEFAULT 'active',
+        core INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, supersedes INTEGER,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(scope_id, seq)
+      );
+      CREATE TABLE IF NOT EXISTS memory_versions (
+        memory_id TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT,
+        before TEXT, after TEXT, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS memory_meta (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL
+      );
+    `);
+    this.ensureColumns('memories', {
+      supersedes: 'INTEGER',
+      core: 'INTEGER NOT NULL DEFAULT 0',
+    });
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS memories_scope_status ON memories(scope_id, status);
+      CREATE INDEX IF NOT EXISTS memories_scope_core ON memories(scope_id, core);
+    `);
+    const hasNodes = this.db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_nodes'",
+      )
+      .get();
+    if (hasNodes) {
+      this.db.exec('DROP TABLE IF EXISTS memory_nodes_retired');
+      this.db.exec('ALTER TABLE memory_nodes RENAME TO memory_nodes_retired');
+    }
+    const hasFts = this.db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'",
+      )
+      .get();
+    if (!hasFts) {
+      this.db.exec(`CREATE VIRTUAL TABLE memory_fts USING fts5(
+        content, mem_id UNINDEXED, tokenize='trigram'
+      );`);
+    } else if (hasNodes) {
+      // Index format changed with the tree retirement: rebuild from memory rows.
+      this.db.exec(`
+        DELETE FROM memory_fts;
+        INSERT INTO memory_fts (content, mem_id) SELECT content, id FROM memories;
+      `);
+    }
   }
 
   /** Consistent pre-upgrade snapshot; a leftover from a failed attempt is stale. */
@@ -215,11 +279,19 @@ export class Db {
 
   private txDepth = 0;
 
+  /** True while a transaction or savepoint is open on this connection. */
+  get inTransaction(): boolean {
+    return this.txDepth > 0;
+  }
+
   transaction<T>(action: () => T): T {
     if (this.txDepth > 0) {
       // Nested calls become savepoints so helpers with their own transaction
       // compose inside a larger one (operation-id replay, schedule fires).
-      const savepoint = `tian_sp_${this.txDepth}`;
+      // Each level owns its own name and queue mark: rolling a savepoint back
+      // discards exactly the after-commit callbacks queued inside it.
+      const mark = this.pendingAfterCommit?.length ?? 0;
+      const savepoint = `tian_sp_${++this.txDepth}`;
       this.db.exec(`SAVEPOINT ${savepoint}`);
       try {
         const result = action();
@@ -228,21 +300,39 @@ export class Db {
       } catch (error) {
         this.db.exec(`ROLLBACK TO ${savepoint}`);
         this.db.exec(`RELEASE ${savepoint}`);
+        if (this.pendingAfterCommit) this.pendingAfterCommit.length = mark;
         throw error;
+      } finally {
+        this.txDepth--;
       }
     }
     this.db.exec('BEGIN IMMEDIATE');
     this.txDepth = 1;
+    const afterCommit: (() => void)[] = [];
+    this.pendingAfterCommit = afterCommit;
+    let result: T;
     try {
-      const result = action();
+      result = action();
       this.db.exec('COMMIT');
-      return result;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
     } finally {
       this.txDepth = 0;
+      this.pendingAfterCommit = undefined;
     }
+    for (const callback of afterCommit) callback();
+    return result;
+  }
+
+  /**
+   * Run `action` only if the outermost transaction commits. Nested calls queue
+   * with the outer one, so a feature store can write a file or bump an
+   * in-memory version without publishing data that a rollback discards.
+   */
+  afterCommit(action: () => void): void {
+    if (this.pendingAfterCommit) this.pendingAfterCommit.push(action);
+    else action();
   }
 
   once<T>(operationId: string | undefined, action: () => T): T {
@@ -786,6 +876,16 @@ export class Db {
     this.db
       .prepare('UPDATE notifications SET conversation_id = ? WHERE id = ?')
       .run(conversationId, id);
+  }
+  /** Whether a delivered notification carries exactly this content. */
+  deliveredNotificationWith(conversationId: string, content: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          'SELECT 1 FROM notifications WHERE conversation_id = ? AND delivered_at IS NOT NULL AND content = ? LIMIT 1',
+        )
+        .get(conversationId, content),
+    );
   }
   deliveredNotification(id: string): void {
     this.db

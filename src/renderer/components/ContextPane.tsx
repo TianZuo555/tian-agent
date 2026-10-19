@@ -7,6 +7,8 @@ import {
   CheckCircle,
   CircleDashed,
   CircleNotch,
+  Eye,
+  EyeSlash,
   FileCode,
   GitMerge,
   Lightning,
@@ -554,6 +556,7 @@ function RunsPanel() {
 
 function MemoryPanel() {
   const memory = useStore((s) => s.memory);
+  const notice = useStore((s) => s.memoryNotice);
   const historyId = useId();
   const [showHistory, setShowHistory] = useState(false);
   const [revising, setRevising] = useState<MemoryItem | null>(null);
@@ -563,6 +566,8 @@ function MemoryPanel() {
   const items = memory?.items ?? [];
   const candidates = items.filter((item) => item.status === 'candidate');
   const active = items.filter((item) => item.status === 'active');
+  const core = active.filter((item) => item.core);
+  const searchable = active.filter((item) => !item.core);
   const historical = showHistory
     ? items.filter(
         (item) => item.status === 'superseded' || item.status === 'deleted',
@@ -571,12 +576,20 @@ function MemoryPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {notice && (
+        <p
+          role="status"
+          className="shrink-0 border-border border-b bg-surface-amber/20 px-2 py-1 text-[11px] text-content-secondary"
+        >
+          {notice}
+        </p>
+      )}
       <div className="flex shrink-0 items-center gap-2 border-border border-b px-2 py-1">
         <span className="font-mono text-[9.5px] text-content-disabled">
           {active.length} active
           {candidates.length > 0 ? ` · ${candidates.length} candidates` : ''}
-          {memory && memory.pendingMerges > 0
-            ? ` · ${memory.pendingMerges} merges pending`
+          {memory
+            ? ` · core ${memory.core.selected}/${memory.core.budget} tokens ${memory.core.tokens}`
             : ''}
         </span>
         <label
@@ -624,13 +637,13 @@ function MemoryPanel() {
               </motion.div>
             ))}
           </AnimatePresence>
-          {candidates.length > 0 && (
+          {core.length > 0 && (
             <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
-              Active — in Core Memory
+              Core — injected every turn
             </div>
           )}
           <AnimatePresence initial={false}>
-            {active.map((item) => (
+            {core.map((item) => (
               <motion.div
                 key={item.seq}
                 layout={!reduce}
@@ -644,6 +657,32 @@ function MemoryPanel() {
                   item={item}
                   onRevise={() => setRevising(item)}
                   onForget={() => setForgetting(item)}
+                  onDeselect={() => void actions.memoryDeselect(item.seq)}
+                />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {searchable.length > 0 && (
+            <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
+              Active — searchable, not resident
+            </div>
+          )}
+          <AnimatePresence initial={false}>
+            {searchable.map((item) => (
+              <motion.div
+                key={item.seq}
+                layout={!reduce}
+                initial={reduce ? false : { opacity: 0, y: -3 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduce ? undefined : { opacity: 0, height: 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="overflow-hidden"
+              >
+                <MemoryRow
+                  item={item}
+                  onRevise={() => setRevising(item)}
+                  onForget={() => setForgetting(item)}
+                  onSelect={() => void actions.memorySelect(item.seq)}
                 />
               </motion.div>
             ))}
@@ -691,12 +730,16 @@ function MemoryRow({
   onForget,
   onPromote,
   onDismiss,
+  onSelect,
+  onDeselect,
 }: {
   item: MemoryItem;
   onRevise?: () => void;
   onForget?: () => void;
   onPromote?: () => void;
   onDismiss?: () => void;
+  onSelect?: () => void;
+  onDeselect?: () => void;
 }) {
   const candidate = item.status === 'candidate';
   const historical = item.status === 'superseded' || item.status === 'deleted';
@@ -733,6 +776,11 @@ function MemoryRow({
           >
             {item.trustLevel}·{item.sourceType}
           </Badge>
+          {item.core && (
+            <Badge variant="success" size="sm" className="font-mono">
+              core
+            </Badge>
+          )}
           {item.supersedes !== null && item.supersedes !== undefined && (
             <Badge variant="warning" size="sm" className="font-mono">
               replaces #{item.supersedes}
@@ -775,6 +823,25 @@ function MemoryRow({
       ) : (
         !historical && (
           <span className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            {item.core ? (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Remove memory #${item.seq} from Core`}
+                onClick={onDeselect}
+              >
+                <EyeSlash size={11} />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Select memory #${item.seq} into Core`}
+                onClick={onSelect}
+              >
+                <Eye size={11} />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon-xs"
@@ -827,9 +894,12 @@ function ReviseMemoryForm({
   const [text, setText] = useState(item.content);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  // The backend limit is 1000 Unicode code points; maxLength counts UTF-16
+  // units, so it only guards the input and the error stays authoritative.
+  const tooLong = [...text].length > 1000;
 
   const submit = async () => {
-    if (!text.trim() || !reason.trim() || busy) return;
+    if (!text.trim() || !reason.trim() || busy || tooLong) return;
     setBusy(true);
     try {
       await actions.memoryRevise(item.seq, text.trim(), reason.trim());
@@ -854,9 +924,15 @@ function ReviseMemoryForm({
             <Input
               value={text}
               onChange={(e) => setText(e.target.value)}
-              maxLength={280}
+              maxLength={4000}
               aria-label="Revised memory text"
+              aria-invalid={tooLong}
             />
+            <p
+              className={`text-[10px] ${tooLong ? 'text-destructive-foreground' : 'text-content-disabled'}`}
+            >
+              {[...text].length}/1000 characters
+            </p>
           </Field>
           <Field>
             <FieldLabel>Reason</FieldLabel>
@@ -875,7 +951,7 @@ function ReviseMemoryForm({
           <Button
             size="sm"
             loading={busy}
-            disabled={!text.trim() || !reason.trim()}
+            disabled={!text.trim() || !reason.trim() || tooLong}
             onClick={() => void submit()}
           >
             Revise

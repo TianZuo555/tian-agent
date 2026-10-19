@@ -49,14 +49,14 @@
 
 ## 2. 核心对象
 
-| 对象                    | 定义                                | 生命周期   | 代码现状                                                                                                               |
-| ----------------------- | ----------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Goal                    | 用户希望长期达成或维持的结果        | 数天至数年 | 【已有】`goals` + Goal 专属会话 + 调度                                                                                 |
-| Task                    | 为 Goal（或独立）完成的一件具体工作 | 分钟至数天 | 【已有】状态机、`owner`、`trigger`、`dedupe_key`（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)） |
-| Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                                                        |
-| Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                                           |
-| Memory                  | 跨会话保留的事实与经验              | 长期       | 【已有】SQLite、来源与版本、摘要树（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)）         |
-| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批；语义匹配与模型提取待做                                                            |
+| 对象                    | 定义                                | 生命周期   | 代码现状                                                                                                                             |
+| ----------------------- | ----------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Goal                    | 用户希望长期达成或维持的结果        | 数天至数年 | 【已有】`goals` + Goal 专属会话 + 调度                                                                                               |
+| Task                    | 为 Goal（或独立）完成的一件具体工作 | 分钟至数天 | 【已有】状态机、`owner`、`trigger`、`dedupe_key`（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)）               |
+| Run                     | Worker 对代码类 Task 的一次隔离执行 | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                                                                      |
+| Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`                                                                                         |
+| Memory                  | 跨会话保留的事实与经验              | 长期       | 【已有】SQLite、来源与版本、显式选择的 Core Memory（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)） |
+| Skill                   | 可复用、可验证的工作流程            | 长期       | 【部分】`skills` 表、版本与人工审批；语义匹配与模型提取待做                                                                          |
 
 约束：
 
@@ -93,7 +93,7 @@
 | Agent Gateway         | `service/server.ts`、`openSession` 渠道绑定、Telegram 适配器            | 审批按钮（M3）                       |
 | Agent Orchestrator    | `worker/service.ts`、`worker/runs.ts`                                   | —                                    |
 | Agent Runtime Adapter | `worker/agents.ts`                                                      | —                                    |
-| Memory Service        | `worker/memory.ts`（SQLite、来源、版本、摘要树）                        | 向量检索（M4）                       |
+| Memory Service        | `worker/memory.ts`（SQLite、来源、版本、显式 Core 选择）                | 向量检索（M4）                       |
 | Memory Worker         | `worker/memory-worker.ts`（候选提取，确定性启发式）                     | 接入模型提取器待问题 6               |
 | Goal Store            | `worker/goals.ts`、`worker/db.ts` 的 `tasks`                            | —                                    |
 | Scheduler             | `worker/scheduler.ts`（cron、单事务触发、每日预算）                     | —                                    |
@@ -107,30 +107,30 @@
 
 ### 4.1 分层
 
-| 层          | PRD 名称          | 本项目实现                                          |
-| ----------- | ----------------- | --------------------------------------------------- |
-| Core Memory | Core Memory       | 有效 Memory + Summary Node，按 Token 预算渲染并注入 |
-| History     | Episodic Memory   | Pi transcript 的派生全文索引 + Event 表             |
-| Semantic    | Semantic Memory   | M4：由 Memory Worker 合并归纳                       |
-| Procedural  | Procedural Memory | M5：Skill                                           |
+| 层          | PRD 名称          | 本项目实现                                     |
+| ----------- | ----------------- | ---------------------------------------------- |
+| Core Memory | Core Memory       | 显式选入的有效 Memory，按 Token 预算渲染并注入 |
+| History     | Episodic Memory   | Pi transcript 的派生全文索引 + Event 表        |
+| Semantic    | Semantic Memory   | M4：由 Memory Worker 合并归纳                  |
+| Procedural  | Procedural Memory | M5：Skill                                      |
 
 Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
-### 4.2 F01 — Core Memory　P0　【部分】
+### 4.2 F01 — Core Memory　P0　【已有】
 
-现状：每次请求注入 Global 与当前 Project 的 `wake()` 视图，按 Token 预算（默认每 scope 1500）截断；Chief 用 `remember` / `revise` / `forget` / `recall`（FTS）/ `nap` / `zoom` 读写，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
+现状：每次请求注入 Global 与当前 Project 的 `wake()` 视图。Core 是由用户或 Chief **明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 用 `remember` / `revise` / `forget` / `recall` / `select` / `deselect` 读写，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、选入/移出、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
 
 需求：
 
 - 保存用户偏好、长期事实、项目约定；Chief 可新增、取代、删除 Memory；用户可明确要求记住或纠正。
 - 作用域：Global、Project；Memory 可选关联到某个 Goal，只在该 Goal 的 Conversation 中优先加载。
-- Token 预算可配置。建议默认：Global 1,500 tokens + Project 1,500 tokens；超出时由摘要树压缩，失效节点下探。
+- Token 预算可配置。默认：Global 1,500 tokens + Project 1,500 tokens；预算覆盖最终渲染文本（含元数据与用量页脚），超限时拒绝选入而不是静默截断。
 - 同一 Conversation 内使用稳定的记忆快照，避免 Prompt 前缀缓存失效。
 
-设计要点（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)）：
+设计要点（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)）：
 
-- 工具改名并补齐：`remember`（替代 `note`，避免与 Markdown Note 混淆）、`revise`（取代）、`forget`（标记删除）、`recall`（改为 FTS）、`nap` / `zoom` 保留。
-- 快照：Core Memory 在 Conversation 内按"记忆版本号"缓存，只在版本变化后的下一次 Conversation 开始或压缩完成时刷新；会话中的新写入通过工具返回值告知模型。
+- 工具：`remember`（替代 `note`，避免与 Markdown Note 混淆）、`revise`（取代）、`forget`（标记删除）、`recall`（关键词 AND + 相关性排序）、`select` / `deselect`（显式 Core 管理）。旧的摘要树 `nap` / `zoom` 已删除。
+- 快照：Core Memory 在 Conversation 内按"记忆版本号"缓存，只在新用户轮次且版本变化时刷新；会话中的新写入通过工具返回值告知模型。
 - 待验证：Pi 的 `section` 是否位于可缓存的前缀。当前 `state` section 含精确到分钟的 `now`，若位于前缀，每分钟都会使缓存失效；应把易变内容移到前缀之后或用户输入侧。
 
 验收：
@@ -152,7 +152,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 - Pi 存储仍是 transcript 的唯一来源；`tian.db` 中建立派生的 FTS5 索引，键为 `(conversation_id, entry_id)`，按每个 Conversation 的游标增量同步，启动时补齐。索引可随时丢弃重建。
 - 已验证：Node 内置 `node:sqlite` 支持 FTS5 与 `trigram` 分词，中文可检索。trigram 不能匹配少于 3 个字符的查询（例如两字中文词），需要 `LIKE` 兜底。
-- 工具：`search_history(query, scope?, since?, until?)` 返回片段与引用 `conv:<id>#<entry>`；`read_history(ref, around?)` 展开上下文。
+- 工具：`search_history(query, scope?, since?, until?, limit?)` 返回片段与引用 `conv:<id>#<entry>`；`read_history(ref, offset?, limit?, around?)` 从原始 transcript 分页展开，长工具结果中后段同样可搜、可继续读取。
 - 检索流程：确定 Scope 与权限 → FTS → 去重排序 → 按 Token 预算截断 → 附引用。无命中时明确返回"无记录"，不编造。
 
 验收：
@@ -169,30 +169,32 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 自动提取的 Memory 可信度为"Agent 推断"，进入 candidate 状态，不直接进入 Core Memory；用户在 Memory 面板 promote（转 active，trust 不变；若候选与 active 记忆矛盾则同事务取代旧记忆）或 dismiss（标记删除且不再重复提取）。
 
-### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【缺失】
+### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【部分】
 
-三阶段：Light（候选提取）→ Consolidate（合并、冲突检测、建立来源关系）→ Promote（按重要性、频率、近期性、来源可信度、实际使用晋升）。
+现状：Light 阶段（候选提取、冲突检测、来源引用）已由 Memory Worker 实现；Consolidate 与 Promote 仍以确定性去重、用户晋升和显式 Core 选择为主，没有后台 Dreaming，也不按频率自动提高权重。摘要树压缩已删除，不再作为 Consolidate 的雏形。
 
-要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。现有摘要树压缩是 Consolidate 的雏形，可由 Memory Worker 在后台接管 `nap`，不再占用 Chief 的对话回合。
+要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。
 
 ### 4.6 F05 — Provenance　P0　【已有】
 
 每条 Memory 字段（`memories` 表；来源、可信度、版本与取代关系均已实现）：
 
-| 字段                        | 说明                                                                                |
-| --------------------------- | ----------------------------------------------------------------------------------- |
-| `id`、`scope_id`、`seq`     | `seq` 为 Scope 内不可变序号，摘要树叶子位置                                         |
-| `goal_id`                   | 可选                                                                                |
-| `kind`                      | preference / fact / decision / outcome / environment                                |
-| `content`                   | ≤280 UTF-8 字节                                                                     |
-| `source_type`、`source_ref` | user / agent / tool / external / legacy；引用 Conversation entry、Run、Inbox 消息等 |
-| `trust_level`、`confidence` | 用户确认 / Agent 推断 / 第三方                                                      |
-| `status`、`superseded_by`   | active / superseded / deleted                                                       |
-| `created_at`、`updated_at`  |                                                                                     |
+| 字段                        | 说明                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `id`、`scope_id`、`seq`     | `seq` 为 Scope 内不可变序号                                                                    |
+| `goal_id`                   | 可选                                                                                           |
+| `kind`                      | preference / fact / decision / outcome / environment                                           |
+| `content`                   | ≤1000 Unicode 字符                                                                             |
+| `source_type`、`source_ref` | user / agent / tool / external / legacy；`source_ref` 精确到 `conv:<id>#<entry>` 或事件、UI 等 |
+| `trust_level`、`confidence` | 用户确认 / Agent 推断 / 第三方；`confidence` 仅由候选提取写入，暂不参与选择                    |
+| `core`                      | 是否显式选入 Core Memory                                                                       |
+| `status`、`superseded_by`   | candidate / active / superseded / deleted                                                      |
+| `created_at`、`updated_at`  |                                                                                                |
 
 - `memory_versions` 追加记录每次写入、取代、删除（操作者、原因、前后内容），支持恢复。
-- 外部工具结果和第三方内容不得以高优先级指令的形式进入 Prompt；Summary Node 的可信度不高于其覆盖的 Memory。
-- 现有 `LOG.txt` / `TREE/` 一次性导入，之后单向导出供 Worker 与人阅读。
+- 操作者（谁执行写入）与来源（谁陈述事实）分开；`source: "user"` 需要当前请求确实由真实用户轮次发起的 Runtime 证据，系统唤醒/通知不算，否则降为 `agent_inferred`。
+- 外部工具结果和第三方内容不得以高优先级指令的形式进入 Prompt。
+- 现有 `LOG.txt` 一次性导入；旧 `TREE/` 只移入 legacy、不再读取；之后单向导出供 Worker 与人阅读。
 
 ---
 
@@ -316,7 +318,7 @@ Goals 视图内已有 Task Board：按 pending / running / waiting_approval / bl
 | `tasks`                                                           | 已有   | Goal、负责方、状态机、去重键（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)）                        |
 | `runs`、`run_attempts`、`agent_messages`                          | 已有   | `runs.task_id`、`runs.injected_skills`、双向消息线程                                                                      |
 | `inbox`、`notifications`、`operations`                            | 已有   | 通知 outbox、Goal 提醒去重、幂等操作记录                                                                                  |
-| `memories`、`memory_versions`、`memory_nodes`                     | 已有   | [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)                                                  |
+| `memories`、`memory_versions`、`memory_meta`                      | 已有   | [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)                                            |
 | `memory_fts`、`history_entries`、`history_fts`、`history_cursors` | 已有   | 派生索引，可重建（[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)）                      |
 | `events`                                                          | 已有   | 业务事件与审计                                                                                                            |
 | `memory_worker_runs`                                              | 已有   | Memory Worker 提取轮次审计（触发原因、候选计数）                                                                          |
@@ -340,8 +342,8 @@ MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行�
 
 ### M1 — Memory Foundation　【已完成】
 
-- `memories` / `memory_versions` / `memory_nodes` + FTS；`LOG.txt` / `TREE/` 导入；单向导出。
-- Chief 工具：`remember` / `revise` / `forget` / `recall`（FTS）/ `nap` / `zoom`。
+- `memories` / `memory_versions` / `memory_meta` + FTS；`LOG.txt` 导入；单向导出。
+- Chief 工具：`remember` / `revise` / `forget` / `recall`（关键词 AND）/ `select` / `deselect`。
 - Core Memory 按 Token 预算渲染，Conversation 内使用快照。
 - `events` 表；History 派生索引与 `search_history` / `read_history`。
 - Memory UI：显示来源、状态、版本，支持晋升、驳回与修订。
@@ -418,7 +420,7 @@ MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复
 | #   | 问题                               | 结论                                                                                                                             |
 | --- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | Always-on Runtime 是否独立后台进程 | **已决**：是，launchd 常驻服务（已实现）                                                                                         |
-| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，摘要树压缩，会话内快照                                                               |
+| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，显式选择 + 原子超限拒绝，会话内快照                                                  |
 | 3   | History 是否复用 Pi 原生存储       | **建议**：Pi 为唯一来源，`tian.db` 建可重建的派生 FTS 索引                                                                       |
 | 4   | 多 Gateway 并发执行同一任务        | **建议**：只有常驻服务执行，渠道只提交；`dedupe_key` + Durable 去重                                                              |
 | 5   | 权限按 Agent / Goal / Task 授权    | **建议**：Goal 声明允许的操作类别，每次受控操作单独审批                                                                          |
@@ -426,7 +428,7 @@ MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复
 | 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量                                         |
 | 8   | Worker 的写权限如何真正受限        | **未决**：MVP 以 worktree + 审批 Land/Ship 为边界；沙箱或去除推送凭据另行评估                                                    |
 
-问题 2–5、7 已分别落到 [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)、[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)、[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)、[D7](decisions.md#d7--调度以一次触发一个事务推进唤醒内容只带-goal-状态与-task)；问题 1 见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)。设计决策集中在 [decisions.md](decisions.md)。
+问题 2–5、7 已分别落到 [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)、[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)、[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)、[D7](decisions.md#d7--调度以一次触发一个事务推进唤醒内容只带-goal-状态与-task)；问题 1 见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)。设计决策集中在 [decisions.md](decisions.md)。
 
 ---
 

@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 
 export const SERVICE_LABEL = 'dev.tian.agent';
-export const SERVICE_PROTOCOL = 3;
+export const SERVICE_PROTOCOL = 4;
 
 export interface ServicePaths {
   dataDir: string;

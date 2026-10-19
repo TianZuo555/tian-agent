@@ -141,8 +141,15 @@ export class AgentRuntime implements WorkerRuntime {
     return {
       id: String(conversation.id),
       submit: async (content, requestId) => {
+        // Worker input is task guidance, not a user statement; the entry kind
+        // keeps it out of memory provenance.
         const submission = await conversation.submit(
-          { type: 'input', content, requestId },
+          {
+            type: 'input',
+            content,
+            requestId,
+            entry: { kind: 'worker.input' },
+          },
           BACKGROUND_CONTEXT,
         );
         return {

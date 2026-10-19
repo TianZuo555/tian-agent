@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { EntryId, EntryRecord } from '@earendil-works/pi-durable';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   realpathSync,
@@ -45,6 +46,7 @@ import type {
   SessionBinding,
   ConversationInfo,
   TaskItem,
+  MemoryRevisionResult,
 } from '../shared/types.js';
 
 /** Application composition and conversation/project operations; owned by one resident service. */
@@ -165,8 +167,9 @@ export class Service {
         scopes: this.scopes,
         db: this.db,
         data: this.data,
-        latestUserEntry: (conversationId) =>
-          this.latestUserEntry(conversationId),
+        latestInputEntry: (conversationId) =>
+          this.latestInputEntry(conversationId),
+        currentInput: (conversationId) => this.currentInput(conversationId),
         goals: this.goals,
         improvements: this.improvements,
         openGoalConversation: (goalId, scopeId) =>
@@ -509,6 +512,9 @@ export class Service {
 
   async submit(id: string, content: string, requestId?: string) {
     const scopeId = this.db.conversationScope(id);
+    // A real user submission keeps the default `pi.user` entry (the UI and
+    // History expect it); system wakes use their own kinds below so memory
+    // provenance can tell them apart.
     const submission = await (
       await this.agents.conversation(id)
     ).submit({ type: 'input', content, requestId }, BACKGROUND_CONTEXT);
@@ -675,6 +681,8 @@ export class Service {
               content: notification.content,
               requestId: notification.id,
               whenBusy: 'followUp',
+              // System wake (goal, run, inbox): never a user statement.
+              entry: { kind: 'system.notification' },
             },
             BACKGROUND_CONTEXT,
           );
@@ -929,8 +937,20 @@ export class Service {
     seq: number,
     text: string,
     reason: string,
-  ): void {
-    this.data.revise(scopeId, seq, text, reason, 'user');
+  ): MemoryRevisionResult {
+    // A user editing in the Memory panel is the source of the correction.
+    const result = this.data.revise(scopeId, seq, text, reason, 'user', {
+      sourceRef: 'ui:memory-panel',
+      trustLevel: 'user_confirmed',
+      sourceType: 'user',
+    });
+    return {
+      seq: result.memory.seq,
+      supersededSeq: result.superseded.seq,
+      changed: result.changed,
+      evidenceAdded: result.evidenceAdded,
+      coreDropped: result.coreDropped,
+    };
   }
   memoryForget(scopeId: string, seq: number, reason: string): void {
     this.data.forget(scopeId, seq, reason, 'user');
@@ -941,21 +961,127 @@ export class Service {
   memoryDismiss(scopeId: string, seq: number): void {
     this.data.dismiss(scopeId, seq);
   }
+  memorySelect(scopeId: string, seq: number): void {
+    this.data.select(scopeId, seq, 'user');
+  }
+  memoryDeselect(scopeId: string, seq: number): void {
+    this.data.deselect(scopeId, seq, 'user');
+  }
 
-  /** Newest user entry of a conversation; the Core Memory snapshot refresh marker. */
-  private async latestUserEntry(
+  private static readonly INPUT_KINDS = new Set([
+    'pi.user',
+    'system.notification',
+    'worker.input',
+  ]);
+
+  private entryText(entry: EntryRecord): string {
+    return (entry.model ?? [])
+      .map((message) =>
+        typeof message.content === 'string'
+          ? message.content
+          : message.content
+              .filter((block) => block.type === 'text')
+              .map((block) => block.text)
+              .join(''),
+      )
+      .join('\n')
+      .trim();
+  }
+
+  /**
+   * Newest input entry of any kind, paging past long tool chains so a source
+   * written 40 entries ago is still findable. Any input kind marks a turn:
+   * this drives the Core-snapshot refresh, so a wake that arrives after a
+   * memory change must not keep serving the previous snapshot.
+   */
+  private async latestInputEntry(
     conversationId: string,
   ): Promise<string | null> {
     const conversation = await this.agents.conversation(conversationId);
-    const page = await conversation.entries(
-      { order: 'descending' },
-      30,
-      undefined,
-      BACKGROUND_CONTEXT,
-    );
-    const user = page.items.find((entry) => entry.kind === 'pi.user');
-    return user ? String(user.id) : null;
+    let cursor: number | undefined;
+    for (let pageAt = 0; pageAt < 20; pageAt++) {
+      const page = await conversation.entries(
+        {
+          order: 'descending',
+          ...(cursor !== undefined ? { maxEntryId: cursor as EntryId } : {}),
+        },
+        50,
+        undefined,
+        BACKGROUND_CONTEXT,
+      );
+      if (page.items.length === 0) break;
+      const found = page.items.find((entry) =>
+        Service.INPUT_KINDS.has(entry.kind),
+      );
+      if (found) return String(found.id);
+      const last = page.items.at(-1);
+      if (!page.next || !last) break;
+      cursor = Number(last.id) - 1;
+      if (cursor < 0) break;
+    }
+    return null;
   }
+
+  /**
+   * The current request's input entry and its kind. A system wake or worker
+   * input is returned for accurate `sourceRef` binding but can never confirm
+   * user provenance; legacy `pi.user` rows whose text exactly matches a
+   * delivered notification are treated as the system wakes they were.
+   */
+  private async currentInput(conversationId: string): Promise<{
+    entryId: string;
+    kind: 'user' | 'system.notification' | 'worker.input';
+    text: string;
+  } | null> {
+    const conversation = await this.agents.conversation(conversationId);
+    let cursor: number | undefined;
+    for (let pageAt = 0; pageAt < 20; pageAt++) {
+      const page = await conversation.entries(
+        {
+          order: 'descending',
+          ...(cursor !== undefined ? { maxEntryId: cursor as EntryId } : {}),
+        },
+        50,
+        undefined,
+        BACKGROUND_CONTEXT,
+      );
+      if (page.items.length === 0) break;
+      for (const entry of page.items) {
+        if (!Service.INPUT_KINDS.has(entry.kind)) continue;
+        // The newest input is the evidence, even when it carries no text (an
+        // image-only or empty submission). Scanning further back would bind
+        // this request to an older turn that did not start it.
+        const text = this.entryText(entry);
+        if (entry.kind === 'pi.user') {
+          // Transcripts written before system wakes got their own entry kind
+          // stored notification text as `pi.user`; those are system wakes.
+          // Return the wake itself (traceable, non-confirming) instead of
+          // scanning back to an older user turn that did not start this one.
+          if (text && this.db.deliveredNotificationWith(conversationId, text))
+            return {
+              entryId: String(entry.id),
+              kind: 'system.notification',
+              text,
+            };
+          return { entryId: String(entry.id), kind: 'user', text };
+        }
+        return {
+          entryId: String(entry.id),
+          kind:
+            entry.kind === 'worker.input'
+              ? 'worker.input'
+              : 'system.notification',
+          text,
+        };
+      }
+      const last = page.items.at(-1);
+      if (!page.next || !last) break;
+      cursor = Number(last.id) - 1;
+      if (cursor < 0) break;
+    }
+    return null;
+  }
+
   inboxList(scopeId: string) {
     return this.scopes.listMessages(scopeId);
   }

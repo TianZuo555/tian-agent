@@ -63,23 +63,27 @@ _Avoid_: hook, wakeup
 ## 记忆
 
 **Memory**:
-一条跨会话保留、带来源与可信度的事实、偏好、决策或结论，单行且不超过 280 字节。
+一条跨会话保留、带来源与可信度的事实、偏好、决策或结论，单行且不超过 1000 个字符。
 _Avoid_: note, fact, log line
 
 **Core Memory**:
-在 Token 预算内，由某 Scope 的有效 Memory 与 Summary Node 渲染出、在会话开始时注入的记忆视图。
-_Avoid_: wake, profile, system memory
+某 Scope 中由用户或 Chief 明确选入、在 Token 预算内渲染并注入每次会话的少量 Memory。
+_Avoid_: wake, profile, system memory, 摘要树
 
-**Summary Node**:
-Chief 为一段对齐区间内的 Memory 写下的单行摘要；所覆盖的 Memory 被取代时失效。
-_Avoid_: digest, tree node, nap
+**Select（选入）/ Deselect（移出）**:
+把一条有效 Memory 放进或移出 Core Memory。移出不等于遗忘：Memory 仍有效、仍可检索。
+_Avoid_: pin, unpin, promote（promote 专指候选转有效）
+
+**Core Usage（Core 用量）**:
+当前选入条目按最终渲染文本（含序号、类型、可信度与用量页脚）估算的 Token 数与预算之比。
+_Avoid_: 截断, overflow log
 
 **Supersede（取代）**:
-用修订后的 Memory 替换旧 Memory；旧 Memory 保留为历史，不再进入 Core Memory。
+用修订后的 Memory 替换旧 Memory；旧 Memory 保留为历史，不再进入 Core Memory，也不会被自动重新选入。
 _Avoid_: overwrite, edit, update
 
 **Provenance（来源）**:
-Memory 的来源对象与可信级别：用户确认、Agent 推断或第三方数据。
+Memory 的来源对象与可信级别：用户确认、Agent 推断或第三方数据。操作者（谁执行写入）与来源（谁陈述事实）分开记录；只有当前请求确实由真实用户轮次发起时，才可标为用户确认。
 _Avoid_: origin, citation
 
 **History**:

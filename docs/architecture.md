@@ -14,7 +14,7 @@
 ## 桌面客户端
 
 - 主导航：Chat、Goals、Skills、Inbox 四个视图；侧栏底部的齿轮打开整页 Settings。
-- Context Pane：Tasks / Runs / Memory 标签页。Memory 面板区分有效记忆与候选，可直接晋升、驳回、修订（`memoryPromote` / `memoryDismiss` / `memoryRevise`）。
+- Context Pane：Tasks / Runs / Memory 标签页。Memory 面板区分候选、Core 与可检索未常驻条目，显示 Core 用量，可直接晋升、驳回、选入/移出、修订（`memoryPromote` / `memoryDismiss` / `memorySelect` / `memoryDeselect` / `memoryRevise`）。
 - ⌘K 命令面板：新建会话、切换视图、开关 Context Pane。
 - Settings 页：模型选择与 Gateway 状态、用量统计热力图、改进日志（Log）、服务与升级（见 [service.md](service.md)）。
 - 聊天渲染：Streamdown 输出 Markdown，Mermaid 图表按需懒加载。
@@ -48,7 +48,9 @@
 | `worker/data.ts`               | task、memory、Inbox 操作和更新事件                                                 |
 | `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录                                          |
 | `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入                                                |
-| `worker/memory.ts`             | SQLite 记忆、来源与版本、摘要树（见 [memory.md](memory.md)）                       |
+| `worker/memory.ts`             | SQLite 记忆、来源与版本、显式 Core 选择（见 [memory.md](memory.md)）               |
+| `worker/provenance.ts`         | 用户来源证据校验（区分用户轮次与系统唤醒）                                         |
+| `worker/search.ts`             | Memory / History / Notes 共用的查询计划、Token 估算与 code point 分页              |
 | `worker/memory-worker.ts`      | 后台候选记忆提取：触发、游标、启发式提取器                                         |
 | `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索                                    |
 | `worker/events.ts`             | 业务事件与审计日志（`events` 表）                                                  |

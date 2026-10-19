@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentMessageRow, Db } from './db.js';
-import type { MemoryActor, MemoryKind, MemoryRow, MergeDue } from './memory.js';
+import type {
+  MemoryActor,
+  MemoryKind,
+  MemoryRow,
+  RememberResult,
+  ReviseResult,
+} from './memory.js';
 import type { Scopes } from './scopes.js';
 import type { Emit } from '../shared/types.js';
 
@@ -44,26 +50,41 @@ export class DataService {
     if (done && scopeId) this.hooks.onTaskCompleted?.(scopeId);
   }
 
-  /** Record a memory; `source: 'user'` means Tian stated it explicitly. */
+  /**
+   * Record a memory. Provenance is decided by the caller (the tool layer
+   * verifies the user turn); `sourceType`/`trustLevel` are stored as given.
+   * `operationId` makes a durable replay a no-op instead of a second write.
+   */
   remember(
     scopeId: string,
     text: string,
     options?: {
       kind?: MemoryKind;
-      source?: 'user' | 'agent';
+      sourceType?: 'user' | 'agent' | 'tool' | 'external';
+      trustLevel?: 'user_confirmed' | 'agent_inferred' | 'third_party';
       goalId?: string | null;
       sourceRef?: string | null;
+      core?: boolean;
+      actor?: MemoryActor;
+      operationId?: string;
     },
-  ): { memory: MemoryRow; merge: MergeDue | null } {
-    const source = options?.source ?? 'agent';
-    const result = this.scopes.memory(scopeId).remember({
-      text,
-      kind: options?.kind,
-      sourceType: source,
-      sourceRef: options?.sourceRef ?? null,
-      trustLevel: source === 'user' ? 'user_confirmed' : 'agent_inferred',
-      goalId: options?.goalId ?? null,
-    });
+  ): RememberResult {
+    // Resolve (and fully initialize) the store before the replayable write
+    // transaction: legacy import and the initial Core selection must commit on
+    // their own, so a failing write cannot roll them back.
+    const memory = this.scopes.memory(scopeId);
+    const result = this.db.once(options?.operationId, () =>
+      memory.remember({
+        text,
+        kind: options?.kind,
+        sourceType: options?.sourceType,
+        sourceRef: options?.sourceRef ?? null,
+        trustLevel: options?.trustLevel,
+        goalId: options?.goalId ?? null,
+        core: options?.core,
+        actor: options?.actor,
+      }),
+    );
     this.emit('memory', scopeId);
     return result;
   }
@@ -74,8 +95,17 @@ export class DataService {
     text: string,
     reason: string,
     actor: MemoryActor,
-  ) {
-    const result = this.scopes.memory(scopeId).revise(seq, text, reason, actor);
+    options?: {
+      sourceRef?: string | null;
+      trustLevel?: 'user_confirmed' | 'agent_inferred' | 'third_party';
+      sourceType?: 'user' | 'agent' | 'tool' | 'external';
+      operationId?: string;
+    },
+  ): ReviseResult {
+    const memory = this.scopes.memory(scopeId);
+    const result = this.db.once(options?.operationId, () =>
+      memory.revise(seq, text, reason, actor, options),
+    );
     this.emit('memory', scopeId);
     // A correction is an extraction trigger (PRD §4.4 F03).
     this.hooks.onCorrection?.(scopeId);
@@ -87,11 +117,41 @@ export class DataService {
     seq: number,
     reason: string,
     actor: MemoryActor,
+    operationId?: string,
   ): MemoryRow {
-    const memory = this.scopes.memory(scopeId).forget(seq, reason, actor);
+    const store = this.scopes.memory(scopeId);
+    const { memory } = this.db.once(operationId, () =>
+      store.forget(seq, reason, actor),
+    );
     this.emit('memory', scopeId);
     this.hooks.onCorrection?.(scopeId);
     return memory;
+  }
+
+  /** Explicit Core selection; over budget rejects with current usage. */
+  select(
+    scopeId: string,
+    seq: number,
+    actor: MemoryActor = 'user',
+    operationId?: string,
+  ) {
+    const memory = this.scopes.memory(scopeId);
+    const result = this.db.once(operationId, () => memory.select(seq, actor));
+    this.emit('memory', scopeId);
+    return result;
+  }
+
+  /** Remove from Core only; the memory stays active and searchable. */
+  deselect(
+    scopeId: string,
+    seq: number,
+    actor: MemoryActor = 'user',
+    operationId?: string,
+  ) {
+    const memory = this.scopes.memory(scopeId);
+    const result = this.db.once(operationId, () => memory.deselect(seq, actor));
+    this.emit('memory', scopeId);
+    return result;
   }
 
   /** User promotion of a candidate; trust stays agent_inferred. */
@@ -110,12 +170,6 @@ export class DataService {
   /** User dismissal of a candidate; the extraction remembers the rejection. */
   dismiss(scopeId: string, seq: number): void {
     this.forget(scopeId, seq, 'candidate dismissed', 'user');
-  }
-
-  nap(scopeId: string, lo: number, hi: number, summary: string) {
-    const merge = this.scopes.memory(scopeId).nap(lo, hi, summary);
-    this.emit('memory', scopeId);
-    return merge;
   }
 
   checkInbox(scopeId: string) {

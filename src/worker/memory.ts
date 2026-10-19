@@ -1,40 +1,33 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Db } from './db.js';
 import { atomicWrite } from './files.js';
-import type {
-  MemoryDump,
-  MemoryItem,
-  MemoryNodeInfo,
-} from '../shared/types.js';
+import { escapeLike, planSearch, tokenCost } from './search.js';
+import type { MemoryDump, MemoryItem } from '../shared/types.js';
 
 /**
- * SQLite-backed memory with provenance, versions, and the aligned dyadic
- * summary tree (D4). The database is the only source of truth; files in
- * the scope's memory directory are a one-way read-only export for workers and
- * humans, plus the legacy LOG.txt/TREE import source.
+ * SQLite-backed memory with provenance, versions, and an explicitly selected
+ * Core Memory (D4). The database is the only source of truth; files in the
+ * scope's memory directory are a one-way read-only export for workers and
+ * humans, plus the legacy LOG.txt import source.
  *
- * Tree rules carried over from the OptMem file implementation:
- * - Nodes cover aligned dyadic intervals of immutable per-scope `seq` values;
- *   node lo-hi (size 2^k) covers children lo-mid and mid+1-hi, leaves two seqs.
- * - A merge becomes due when a node is missing (or stale) and both halves
- *   exist; merges are offered one at a time, smallest intervals first.
- * - Superseding or deleting a memory marks every covering node stale; stale
- *   nodes count as missing (they get re-summarized) and are skipped by wake.
- * - A concurrent nap never overwrites an existing non-stale node.
- * - A due range with zero active memories is summarized automatically as an
- *   empty marker, without a model call, and wake omits it.
- * - Candidate memories (auto-extracted by the memory worker, PRD §4.4 F03)
- *   occupy seq slots but never render in wake, never feed merge sources, and
- *   stay out of the export; ranges holding only candidates are auto-marked
- *   as empty nodes, and promoting one re-stales the covering nodes.
+ * Rules:
+ * - Every active memory is searchable; only memories selected into Core are
+ *   rendered by wake(). Selection is explicit (remember core=true, select), and
+ *   moving a memory out of Core (deselect) is not forget.
+ * - Core is a small, ordered set bounded by a token budget that counts the
+ *   rendered metadata (seq, kind, trust) and the usage footer. A selection that
+ *   would exceed the budget is rejected atomically; runtime never silently
+ *   truncates or evicts.
+ * - Candidates (auto-extracted by the memory worker, PRD §4.4 F03) occupy seq
+ *   slots but never render in wake(), never enter the export, and are promoted
+ *   only by an explicit user action.
+ * - Superseding or deleting a memory keeps the row as history; it never stays
+ *   in Core.
+ * - An old database gets one deterministic Core selection during migration:
+ *   user-confirmed and preference/decision memories first, within budget; all
+ *   other active memories stay active and searchable.
  */
 
 export type MemoryKind =
@@ -61,12 +54,15 @@ export type MemoryAction =
   | 'supersede'
   | 'delete'
   | 'restore'
-  | 'import';
+  | 'import'
+  | 'select'
+  | 'deselect'
+  | 'evidence';
 
 export interface MemoryRow {
   id: string;
   scopeId: string;
-  /** Per-scope, immutable, 0-based; also the summary-tree leaf index. */
+  /** Per-scope, immutable, 0-based insertion order. */
   seq: number;
   goalId: string | null;
   kind: MemoryKind;
@@ -76,6 +72,8 @@ export interface MemoryRow {
   trustLevel: MemoryTrustLevel;
   confidence: number | null;
   status: MemoryStatus;
+  /** Explicitly selected into the Core Memory view. */
+  core: boolean;
   supersededBy: string | null;
   /** For a candidate: the active seq it will replace when promoted. */
   supersedes: number | null;
@@ -83,11 +81,11 @@ export interface MemoryRow {
   updatedAt: string;
 }
 
-export interface MergeDue {
-  lo: number;
-  hi: number;
-  /** The text the model should compress: child summaries, or active raw lines. */
-  source: string;
+export interface CoreUsage {
+  budget: number;
+  tokens: number;
+  selected: number;
+  active: number;
 }
 
 export interface RememberInput {
@@ -98,13 +96,50 @@ export interface RememberInput {
   trustLevel?: MemoryTrustLevel;
   confidence?: number | null;
   goalId?: string | null;
+  /** Select into Core in the same transaction; over budget rejects the write. */
+  core?: boolean;
   actor?: MemoryActor;
   reason?: string | null;
 }
 
-/** Summary written for a due range with zero active memories; wake omits it. */
-export const EMPTY_NODE = '(empty)';
-const MAX_BYTES = 280;
+export interface RememberResult {
+  memory: MemoryRow;
+  /** False when normalized content already existed in this scope. */
+  created: boolean;
+  /** True when the duplicate added trust or a source reference. */
+  evidenceAdded: boolean;
+  /** True when added evidence pushed a selected memory out of Core. */
+  coreDropped: boolean;
+}
+
+export interface ReviseResult {
+  memory: MemoryRow;
+  superseded: MemoryRow;
+  /** False when the replacement text equals the old text. */
+  changed: boolean;
+  /** True when trust or the source reference was added without a new row. */
+  evidenceAdded: boolean;
+  /** True when the old memory was in Core but the replacement could not fit. */
+  coreDropped: boolean;
+}
+
+/** The default per-scope Core Memory budget, in estimated tokens. */
+export const CORE_BUDGET = 1500;
+/** One memory line, measured in Unicode code points. */
+export const MAX_MEMORY_CHARS = 1000;
+
+/** Explicit no-match result; also the smallest possible recall output. */
+const NO_MATCHES = '(no matches)';
+
+/** Row format for recall results, with stable provenance and status. */
+const recallLine = (memory: MemoryRow): string =>
+  `#${memory.seq} [${memory.kind}] ${memory.trustLevel}${
+    memory.core ? ' core' : ''
+  } ${memory.updatedAt.slice(0, 10)}${
+    memory.sourceRef ? ` ${memory.sourceRef}` : ''
+  } — ${memory.content}${memory.status === 'active' ? '' : ` (${memory.status})`}`;
+
+const newId = () => `mem-${randomUUID()}`;
 
 const toMemory = (value: Record<string, unknown>): MemoryRow => ({
   id: value.id as string,
@@ -118,6 +153,7 @@ const toMemory = (value: Record<string, unknown>): MemoryRow => ({
   trustLevel: value.trust_level as MemoryTrustLevel,
   confidence: (value.confidence as number | null) ?? null,
   status: value.status as MemoryStatus,
+  core: Number(value.core ?? 0) === 1,
   supersededBy: (value.superseded_by as string | null) ?? null,
   supersedes:
     value.supersedes === null || value.supersedes === undefined
@@ -127,65 +163,76 @@ const toMemory = (value: Record<string, unknown>): MemoryRow => ({
   updatedAt: value.updated_at as string,
 });
 
-const schemaReady = new WeakSet<object>();
-function ensureSchema(db: Db): void {
-  if (schemaReady.has(db.sqlite)) return;
-  db.sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, seq INTEGER NOT NULL, goal_id TEXT,
-      kind TEXT NOT NULL, content TEXT NOT NULL, source_type TEXT NOT NULL, source_ref TEXT,
-      trust_level TEXT NOT NULL, confidence REAL, status TEXT NOT NULL DEFAULT 'active',
-      superseded_by TEXT, supersedes INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-      UNIQUE(scope_id, seq)
-    );
-    CREATE INDEX IF NOT EXISTS memories_scope_status ON memories(scope_id, status);
-    CREATE TABLE IF NOT EXISTS memory_versions (
-      memory_id TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT,
-      before TEXT, after TEXT, created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS memory_nodes (
-      scope_id TEXT NOT NULL, lo INTEGER NOT NULL, hi INTEGER NOT NULL,
-      summary TEXT NOT NULL, stale INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
-      PRIMARY KEY (scope_id, lo, hi)
-    );
-    CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-      content, mem_id UNINDEXED, tokenize='trigram'
-    );
-  `);
-  // Databases created before candidates existed gain the supersedes column.
-  const columns = db.sqlite.prepare('PRAGMA table_info(memories)').all() as {
-    name: string;
-  }[];
-  if (!columns.some((column) => column.name === 'supersedes'))
-    db.sqlite.exec('ALTER TABLE memories ADD COLUMN supersedes INTEGER');
-  schemaReady.add(db.sqlite);
-}
-
-/** One memory line: single-line, non-empty, at most 280 UTF-8 bytes. */
+/** One line: whitespace collapsed, at most 1000 Unicode code points. */
 function normalizeLine(text: string, what: string): string {
   const body = text.replace(/\s+/g, ' ').trim();
-  if (!body) throw new Error(`${what} must contain at least 1 UTF-8 byte`);
-  if (Buffer.byteLength(body, 'utf8') > MAX_BYTES)
-    throw new Error(`${what} must be at most ${MAX_BYTES} UTF-8 bytes`);
+  if (!body) throw new Error(`${what} must contain at least 1 character`);
+  const length = [...body].length;
+  if (length > MAX_MEMORY_CHARS)
+    throw new Error(
+      `${what} must be at most ${MAX_MEMORY_CHARS} Unicode code points`,
+    );
   return body;
 }
 
-function highestPow2(n: number): number {
-  let p = 1;
-  while (p * 2 <= n) p *= 2;
-  return p;
+/**
+ * Comparison key for exact duplicates: whitespace is normalized, case and
+ * identifiers are preserved (`Foo` and `foo` may be different paths or names).
+ */
+const dedupeKey = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * How a selected memory renders in Core. Provenance stays compact but
+ * locatable — kind, trust, date and the source ref — and every character of it
+ * is part of the measured budget.
+ */
+const renderLine = (memory: MemoryRow): string =>
+  `#${memory.seq} [${memory.kind}] ${memory.trustLevel} ${memory.updatedAt.slice(0, 10)}${memory.sourceRef ? ` ${memory.sourceRef}` : ''} — ${memory.content}`;
+
+interface CoreRender {
+  /** Exactly what wake() emits. */
+  text: string;
+  /** Estimated tokens of `text`, including metadata, newlines, and footer. */
+  tokens: number;
+  /** Tokens the full selection would need, even when `text` is an overflow notice. */
+  needed: number;
+  overflow: boolean;
 }
 
-const tokenCost = (text: string): number =>
-  Math.ceil(Buffer.byteLength(text, 'utf8') / 3);
-
-const newId = () => `mem-${randomUUID()}`;
-
-interface NodeRow {
-  lo: number;
-  hi: number;
-  summary: string;
-  stale: number;
+/**
+ * Render the selected memories with a usage footer. Everything is measured on
+ * the final output string — metadata, newlines, the empty-selection hint, and
+ * the footer itself — and the footer's own token count is resolved to a fixed
+ * point. `tokens` therefore equals the estimate of exactly what wake emits.
+ */
+function renderCore(
+  memories: MemoryRow[],
+  budget: number,
+  activeCount: number,
+): CoreRender {
+  const body =
+    memories.length > 0
+      ? memories.map(renderLine).join('\n')
+      : `(no core memories selected; ${activeCount} active memories are searchable with recall)`;
+  // Resolve the footer's own token count to a fixed point, then render once
+  // more with that exact number so the displayed usage equals `tokens`.
+  let used = tokenCost(
+    `${body}\ncore: ${memories.length} selected · 0/${budget} tokens`,
+  );
+  for (let i = 0; i < 5; i++) {
+    const footer = `core: ${memories.length} selected · ${used}/${budget} tokens`;
+    const next = tokenCost(`${body}\n${footer}`);
+    if (next === used) break;
+    used = next;
+  }
+  const footer = `core: ${memories.length} selected · ${used}/${budget} tokens`;
+  const full = `${body}\n${footer}`;
+  const needed = tokenCost(full);
+  if (needed > budget) {
+    const text = `core: ${memories.length} selected need ${needed} tokens, budget ${budget}. Deselect memories or shorten them; nothing is truncated.`;
+    return { text, tokens: tokenCost(text), needed, overflow: true };
+  }
+  return { text: full, tokens: needed, needed, overflow: false };
 }
 
 export class MemoryStore {
@@ -197,9 +244,14 @@ export class MemoryStore {
     readonly dir: string,
   ) {
     mkdirSync(dir, { recursive: true });
-    ensureSchema(db);
+    // Schema (tables, columns, indexes, tree retirement, FTS rebuild) is part
+    // of Db's version migration; by the time a store exists it is in place.
     this.migrateLegacy();
+    this.migrateCoreSelection();
     this.versionCounter = this.loadVersion();
+    // Always regenerate the read-only export: this repairs a stale file left by
+    // a failed write or an interrupted upgrade, not just after a migration.
+    this.db.afterCommit(() => this.exportFile());
   }
 
   // ---- schema helpers
@@ -235,47 +287,39 @@ export class MemoryStore {
     );
     return value ? toMemory(value) : undefined;
   }
-  private activeBetweenTx(lo: number, hi: number): MemoryRow[] {
+  private activeTx(): MemoryRow[] {
     return this.all(
-      `SELECT * FROM memories WHERE scope_id = ? AND seq BETWEEN ? AND ? AND status = 'active' ORDER BY seq`,
+      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' ORDER BY seq",
       this.scopeId,
-      lo,
-      hi,
     ).map(toMemory);
   }
-  private nodeTx(lo: number, hi: number): NodeRow | undefined {
-    return this.get<{ lo: number; hi: number; summary: string; stale: number }>(
-      'SELECT lo, hi, summary, stale FROM memory_nodes WHERE scope_id = ? AND lo = ? AND hi = ?',
+  private selectedTx(): MemoryRow[] {
+    return this.all(
+      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' AND core = 1 ORDER BY seq",
       this.scopeId,
-      lo,
-      hi,
-    );
+    ).map(toMemory);
   }
-  /** A node that counts for the tree: present and not stale. */
-  private hasNodeTx(lo: number, hi: number): boolean {
-    const node = this.nodeTx(lo, hi);
-    return node !== undefined && node.stale === 0;
-  }
-  private nodeTextTx(lo: number, hi: number): string | undefined {
-    const node = this.nodeTx(lo, hi);
-    return node && node.stale === 0 ? node.summary : undefined;
-  }
-  private writeNodeTx(lo: number, hi: number, summary: string): void {
-    this.run(
-      `INSERT INTO memory_nodes (scope_id, lo, hi, summary, stale, created_at) VALUES (?, ?, ?, ?, 0, ?)
-       ON CONFLICT(scope_id, lo, hi) DO UPDATE SET summary = excluded.summary, stale = 0`,
+  private activeByTextTx(key: string): MemoryRow | undefined {
+    return this.all(
+      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' ORDER BY seq",
       this.scopeId,
-      lo,
-      hi,
-      summary,
-      new Date().toISOString(),
-    );
+    )
+      .map(toMemory)
+      .find((memory) => dedupeKey(memory.content) === key);
+  }
+  private candidateByTextTx(key: string): MemoryRow | undefined {
+    return this.all(
+      "SELECT * FROM memories WHERE scope_id = ? AND status = 'candidate' ORDER BY seq",
+      this.scopeId,
+    )
+      .map(toMemory)
+      .find((memory) => dedupeKey(memory.content) === key);
   }
   private insertMemoryTx(memory: MemoryRow): void {
     this.run(
       `INSERT INTO memories (id, scope_id, seq, goal_id, kind, content, source_type, source_ref,
-        trust_level, confidence, status, superseded_by, supersedes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        trust_level, confidence, status, core, superseded_by, supersedes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       memory.id,
       memory.scopeId,
       memory.seq,
@@ -287,6 +331,7 @@ export class MemoryStore {
       memory.trustLevel,
       memory.confidence,
       memory.status,
+      memory.core ? 1 : 0,
       memory.supersededBy,
       memory.supersedes,
       memory.createdAt,
@@ -317,152 +362,258 @@ export class MemoryStore {
       new Date().toISOString(),
     );
   }
-  private markCoveringNodesStaleTx(seq: number): void {
+  private setCoreTx(seq: number, core: boolean): void {
     this.run(
-      'UPDATE memory_nodes SET stale = 1 WHERE scope_id = ? AND lo <= ? AND ? <= hi AND stale = 0',
+      'UPDATE memories SET core = ?, updated_at = ? WHERE scope_id = ? AND seq = ?',
+      core ? 1 : 0,
+      new Date().toISOString(),
       this.scopeId,
-      seq,
       seq,
     );
   }
-  private nextSeqTx(): number {
-    return this.seqCountTx();
+
+  /** Current Core usage; `tokens` includes the rendered metadata and footer. */
+  coreUsage(budget = CORE_BUDGET): CoreUsage {
+    return this.db.transaction(() => this.coreUsageTx(budget));
   }
-
-  // ---- summary tree
-
-  /** Whether node lo-hi is due to be merged (missing/stale and both halves present). */
-  private mergeDueTx(lo: number, hi: number): boolean {
-    if (this.hasNodeTx(lo, hi)) return false;
-    const size = hi - lo + 1;
-    if (size === 2) return true;
-    const mid = lo + size / 2 - 1;
-    return this.hasNodeTx(lo, mid) && this.hasNodeTx(mid + 1, hi);
+  private coreUsageTx(budget: number): CoreUsage {
+    const selected = this.selectedTx();
+    const active = this.activeTx();
+    return {
+      budget,
+      tokens: renderCore(selected, budget, active.length).tokens,
+      selected: selected.length,
+      active: active.length,
+    };
   }
 
   /**
-   * Write empty-marker nodes for every due range whose memories are all
-   * inactive, cascading upwards; no model call is needed for those.
+   * Reject a projected Core selection that would exceed the budget. The error
+   * carries current usage so the agent can deselect or shorten something.
    */
-  private autoMergeEmptyTx(): void {
-    let changed = true;
-    while (changed) {
-      changed = false;
-      const n = this.seqCountTx();
-      for (let size = 2; size <= n; size *= 2) {
-        for (let lo = 0; lo + size <= n; lo += size) {
-          const hi = lo + size - 1;
-          if (!this.mergeDueTx(lo, hi)) continue;
-          if (this.activeBetweenTx(lo, hi).length > 0) continue;
-          this.writeNodeTx(lo, hi, EMPTY_NODE);
-          changed = true;
-        }
-      }
-    }
-  }
-
-  /** The text a merge would compress: the halves' summaries, or active raw lines. */
-  private mergeSourceTx(lo: number, hi: number): string {
-    const half = (a: number, b: number): string => {
-      const text = this.nodeTextTx(a, b);
-      if (text !== undefined && text !== EMPTY_NODE)
-        return `#${a}-${b} ${text}`;
-      return this.activeBetweenTx(a, b)
-        .map((m) => `#${m.seq} ${m.content}`)
-        .join('\n');
-    };
-    const mid = lo + (hi - lo + 1) / 2 - 1;
-    return [half(lo, mid), half(mid + 1, hi)]
-      .filter((part) => part !== '')
-      .join('\n');
-  }
-
-  /** The earliest pending merge, or null. Smallest intervals first, left to right. */
-  nextMerge(): MergeDue | null {
-    return this.db.transaction(() => this.nextMergeTx());
-  }
-
-  private nextMergeTx(): MergeDue | null {
-    const n = this.seqCountTx();
-    for (let size = 2; size <= Math.max(n, 2); size *= 2) {
-      for (let lo = 0; lo + size <= n; lo += size) {
-        const hi = lo + size - 1;
-        if (!this.mergeDueTx(lo, hi)) continue;
-        if (this.activeBetweenTx(lo, hi).length === 0) continue; // auto-marked instead
-        return { lo, hi, source: this.mergeSourceTx(lo, hi) };
-      }
-    }
-    return null;
-  }
-
-  pendingMergeCount(): number {
-    return this.db.transaction(() => this.pendingMergeCountTx());
-  }
-
-  private pendingMergeCountTx(): number {
-    let count = 0;
-    const n = this.seqCountTx();
-    for (let size = 2; size <= Math.max(n, 2); size *= 2) {
-      for (let lo = 0; lo + size <= n; lo += size) {
-        const hi = lo + size - 1;
-        if (!this.mergeDueTx(lo, hi)) continue;
-        if (this.activeBetweenTx(lo, hi).length === 0) continue;
-        count++;
-      }
-    }
-    return count;
+  private assertCoreFitsTx(
+    projected: MemoryRow[],
+    budget: number,
+    activeCount = this.activeTx().length,
+  ): void {
+    const render = renderCore(projected, budget, activeCount);
+    if (!render.overflow) return;
+    const usage = this.coreUsageTx(budget);
+    const overflow = render.needed - budget;
+    throw new Error(
+      `Core Memory is full: ${usage.selected} selected, ${usage.tokens}/${budget} tokens. This selection needs ${render.needed} tokens (${overflow} over). Deselect a memory or shorten it; active memories stay searchable outside Core.`,
+    );
   }
 
   // ---- writes
 
-  /** Record a new memory; returns the merge now due, if any. */
-  remember(input: RememberInput): {
-    memory: MemoryRow;
-    merge: MergeDue | null;
-  } {
+  /**
+   * Record a new memory. Normalized exact duplicates in the same scope return
+   * the existing row; new user confirmation or a new source reference is
+   * appended as evidence (trust upgrade + version row), never silently dropped.
+   * A duplicate of an inactive historical row is not revived: a new active row
+   * is written instead.
+   */
+  remember(input: RememberInput): RememberResult {
     const content = normalizeLine(input.text, 'memory');
-    const now = new Date().toISOString();
-    const memory: MemoryRow = {
-      id: newId(),
-      scopeId: this.scopeId,
-      seq: 0,
-      goalId: input.goalId ?? null,
-      kind: input.kind ?? 'fact',
-      content,
-      sourceType: input.sourceType ?? 'agent',
-      sourceRef: input.sourceRef ?? null,
-      trustLevel: input.trustLevel ?? 'agent_inferred',
-      confidence: input.confidence ?? null,
-      status: 'active',
-      supersededBy: null,
-      supersedes: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    const merge = this.db.transaction(() => {
-      memory.seq = this.nextSeqTx();
+    const key = dedupeKey(content);
+    const actor = input.actor ?? 'chief';
+    const sourceType = input.sourceType ?? 'agent';
+    const trustLevel = input.trustLevel ?? 'agent_inferred';
+    const result = this.db.transaction((): RememberResult => {
+      const active = this.activeByTextTx(key);
+      const candidate = active ? undefined : this.candidateByTextTx(key);
+      const existing = active ?? candidate;
+      if (existing) {
+        // A candidate is never promoted implicitly by a repeat: only the user
+        // approval path moves it to active. New evidence is still recorded.
+        const pending = existing.status === 'candidate';
+        const upgraded =
+          !pending &&
+          trustLevel === 'user_confirmed' &&
+          existing.trustLevel !== 'user_confirmed';
+        // An unconfirmed write never overwrites the evidence of an already
+        // confirmed row: a passing mention is not a new confirmation.
+        const mayAddEvidence =
+          trustLevel === 'user_confirmed' ||
+          existing.trustLevel !== 'user_confirmed';
+        const newEvidence =
+          mayAddEvidence &&
+          input.sourceRef !== null &&
+          input.sourceRef !== undefined &&
+          input.sourceRef !== existing.sourceRef;
+        let updated = existing;
+        let coreDropped = false;
+        if (pending) {
+          // The candidate keeps its status and trust. New evidence is recorded
+          // for the user's later decision, never applied to the row.
+          if (newEvidence)
+            this.recordVersionTx(
+              existing.id,
+              'evidence',
+              actor,
+              [
+                input.reason ?? 'duplicate remember',
+                `source ${input.sourceRef}`,
+                'candidate kept pending for user approval',
+              ].join('; '),
+              existing,
+              existing,
+            );
+          if (input.core)
+            throw new Error(
+              `memory #${existing.seq} is a candidate; promote it before selecting it into Core`,
+            );
+          return {
+            memory: existing,
+            created: false,
+            evidenceAdded: newEvidence,
+            coreDropped: false,
+          };
+        }
+        if (upgraded || newEvidence) {
+          updated = {
+            ...existing,
+            trustLevel: upgraded ? 'user_confirmed' : existing.trustLevel,
+            sourceType:
+              upgraded && sourceType === 'user' ? 'user' : existing.sourceType,
+            sourceRef: newEvidence ? input.sourceRef! : existing.sourceRef,
+            updatedAt: new Date().toISOString(),
+          };
+          this.run(
+            'UPDATE memories SET trust_level = ?, source_type = ?, source_ref = ?, updated_at = ? WHERE id = ?',
+            updated.trustLevel,
+            updated.sourceType,
+            updated.sourceRef,
+            updated.updatedAt,
+            existing.id,
+          );
+          this.recordVersionTx(
+            existing.id,
+            'evidence',
+            actor,
+            [
+              input.reason ?? 'duplicate remember',
+              newEvidence ? `source ${input.sourceRef}` : null,
+              upgraded ? 'trust upgraded to user_confirmed' : null,
+            ]
+              .filter(Boolean)
+              .join('; '),
+            existing,
+            updated,
+          );
+          // Metadata can grow (e.g. a longer trust label), so re-check the
+          // rendered selection; never leave Core in an overflowing state.
+          if (updated.core) {
+            const projected = this.selectedTx().map((item) =>
+              item.seq === updated.seq ? updated : item,
+            );
+            if (
+              renderCore(projected, CORE_BUDGET, this.activeTx().length)
+                .overflow
+            ) {
+              this.setCoreTx(updated.seq, false);
+              updated = { ...updated, core: false };
+              coreDropped = true;
+              this.recordVersionTx(
+                updated.id,
+                'deselect',
+                actor,
+                'evidence made the rendered Core exceed its budget',
+                existing,
+                updated,
+              );
+            }
+          }
+        }
+        if (input.core && !updated.core) {
+          // The projected set is the current selection minus this row, plus
+          // this row selected. Over budget rejects the whole write — evidence
+          // updates included — inside the same transaction.
+          this.assertCoreFitsTx(
+            [
+              ...this.selectedTx().filter((item) => item.seq !== updated.seq),
+              { ...updated, core: true },
+            ],
+            CORE_BUDGET,
+          );
+          this.setCoreTx(updated.seq, true);
+          updated = { ...updated, core: true };
+          this.recordVersionTx(
+            updated.id,
+            'select',
+            actor,
+            input.reason ?? 'selected on remember',
+            existing,
+            updated,
+          );
+        }
+        return {
+          memory: updated,
+          created: false,
+          evidenceAdded: Boolean(
+            upgraded || newEvidence || (input.core && !existing.core),
+          ),
+          coreDropped,
+        };
+      }
+
+      const now = new Date().toISOString();
+      const memory: MemoryRow = {
+        id: newId(),
+        scopeId: this.scopeId,
+        seq: this.seqCountTx(),
+        goalId: input.goalId ?? null,
+        kind: input.kind ?? 'fact',
+        content,
+        sourceType,
+        sourceRef: input.sourceRef ?? null,
+        trustLevel,
+        confidence: input.confidence ?? null,
+        status: 'active',
+        core: false,
+        supersededBy: null,
+        supersedes: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (input.core)
+        this.assertCoreFitsTx([...this.selectedTx(), memory], CORE_BUDGET);
+      memory.core = input.core === true;
       this.insertMemoryTx(memory);
       this.recordVersionTx(
         memory.id,
         'create',
-        input.actor ?? 'chief',
+        actor,
         input.reason ?? null,
         null,
         memory,
       );
-      this.autoMergeEmptyTx();
-      return this.nextMergeTx();
+      if (memory.core)
+        this.recordVersionTx(
+          memory.id,
+          'select',
+          actor,
+          input.reason ?? 'selected on remember',
+          null,
+          memory,
+        );
+      return {
+        memory,
+        created: true,
+        evidenceAdded: false,
+        coreDropped: false,
+      };
     });
-    this.bump();
-    this.exportFile();
-    return { memory, merge };
+    if (result.created || result.evidenceAdded) this.publish();
+    return result;
   }
 
   /**
    * Store one auto-extracted candidate (PRD §4.4 F03): status `candidate`,
    * trust `agent_inferred`, operator `worker`. Candidates never render in
-   * wake() or default recall(); the MEMORY.md export ignores them until a
-   * user promotes them, so workers only ever read confirmed memory.
+   * wake(), default recall(), or the MEMORY.md export until a user promotes
+   * them. A candidate that repeats an existing row is not written twice.
    */
   candidate(input: {
     text: string;
@@ -472,27 +623,29 @@ export class MemoryStore {
     /** Active memory this candidate contradicts; applied on promote. */
     supersedes?: number | null;
     reason?: string;
-  }): MemoryRow {
+  }): MemoryRow | null {
     const content = normalizeLine(input.text, 'memory');
-    const now = new Date().toISOString();
-    const memory: MemoryRow = {
-      id: newId(),
-      scopeId: this.scopeId,
-      seq: 0,
-      goalId: null,
-      kind: input.kind,
-      content,
-      sourceType: 'agent',
-      sourceRef: input.sourceRef,
-      trustLevel: 'agent_inferred',
-      confidence: input.confidence,
-      status: 'candidate',
-      supersededBy: null,
-      supersedes: input.supersedes ?? null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.db.transaction(() => {
+    const key = dedupeKey(content);
+    const result = this.db.transaction((): MemoryRow | null => {
+      if (this.activeByTextTx(key) || this.candidateByTextTx(key)) return null;
+      const memory: MemoryRow = {
+        id: newId(),
+        scopeId: this.scopeId,
+        seq: this.seqCountTx(),
+        goalId: null,
+        kind: input.kind,
+        content,
+        sourceType: 'agent',
+        sourceRef: input.sourceRef,
+        trustLevel: 'agent_inferred',
+        confidence: input.confidence,
+        status: 'candidate',
+        core: false,
+        supersededBy: null,
+        supersedes: input.supersedes ?? null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
       if (memory.supersedes !== null) {
         const target = this.bySeqTx(memory.supersedes);
         if (!target || target.status !== 'active')
@@ -500,7 +653,6 @@ export class MemoryStore {
             `supersede target #${memory.supersedes} is not an active memory`,
           );
       }
-      memory.seq = this.nextSeqTx();
       this.insertMemoryTx(memory);
       this.recordVersionTx(
         memory.id,
@@ -510,24 +662,32 @@ export class MemoryStore {
         null,
         memory,
       );
-      this.autoMergeEmptyTx();
+      return memory;
     });
-    this.bump();
-    return memory;
+    if (result) this.publish();
+    return result;
   }
 
   /**
-   * Supersede memory #seq with a revised line: the new memory takes the next
-   * seq, the old one stays as history and no longer enters Core Memory.
+   * Supersede memory #seq with a revised line. The old memory leaves Core and
+   * stays as history. If it was selected and the replacement cannot fit, the
+   * new fact is still saved but starts outside Core and `coreDropped` is true:
+   * the correction always takes effect, and the caller must re-select or free
+   * budget explicitly.
    */
   revise(
     seq: number,
     text: string,
     reason: string,
     actor: MemoryActor = 'chief',
-  ): { memory: MemoryRow; superseded: MemoryRow; merge: MergeDue | null } {
+    options: {
+      sourceRef?: string | null;
+      trustLevel?: MemoryTrustLevel;
+      sourceType?: MemorySourceType;
+    } = {},
+  ): ReviseResult {
     const content = normalizeLine(text, 'memory');
-    const result = this.db.transaction(() => {
+    const result = this.db.transaction((): ReviseResult => {
       const superseded = this.bySeqTx(seq);
       if (!superseded)
         throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
@@ -535,38 +695,148 @@ export class MemoryStore {
         throw new Error(
           `memory #${seq} is ${superseded.status}; only active memories can be revised`,
         );
+      if (dedupeKey(content) === dedupeKey(superseded.content)) {
+        // Same fact: "content unchanged" is not "nothing changed". New user
+        // confirmation or a new source ref is recorded, published, and
+        // re-checked against the rendered Core budget like any evidence update.
+        const upgraded =
+          (options.trustLevel === 'user_confirmed' || actor === 'user') &&
+          superseded.trustLevel !== 'user_confirmed';
+        const mayAddEvidence =
+          options.trustLevel === 'user_confirmed' ||
+          actor === 'user' ||
+          superseded.trustLevel !== 'user_confirmed';
+        const newEvidence =
+          mayAddEvidence &&
+          options.sourceRef !== null &&
+          options.sourceRef !== undefined &&
+          options.sourceRef !== superseded.sourceRef;
+        let updated = superseded;
+        let evidenceAdded = false;
+        let coreDropped = false;
+        if (upgraded || newEvidence) {
+          evidenceAdded = true;
+          updated = {
+            ...superseded,
+            trustLevel: upgraded ? 'user_confirmed' : superseded.trustLevel,
+            sourceType: upgraded ? 'user' : superseded.sourceType,
+            sourceRef: newEvidence ? options.sourceRef! : superseded.sourceRef,
+            updatedAt: new Date().toISOString(),
+          };
+          this.run(
+            'UPDATE memories SET trust_level = ?, source_type = ?, source_ref = ?, updated_at = ? WHERE id = ?',
+            updated.trustLevel,
+            updated.sourceType,
+            updated.sourceRef,
+            updated.updatedAt,
+            superseded.id,
+          );
+          this.recordVersionTx(
+            superseded.id,
+            'evidence',
+            actor,
+            [
+              reason,
+              newEvidence ? `source ${options.sourceRef}` : null,
+              upgraded ? 'trust upgraded to user_confirmed' : null,
+            ]
+              .filter(Boolean)
+              .join('; '),
+            superseded,
+            updated,
+          );
+          // New metadata renders wider: keep Core inside its budget.
+          if (updated.core) {
+            const projected = this.selectedTx().map((item) =>
+              item.seq === updated.seq ? updated : item,
+            );
+            if (
+              renderCore(projected, CORE_BUDGET, this.activeTx().length)
+                .overflow
+            ) {
+              this.setCoreTx(updated.seq, false);
+              updated = { ...updated, core: false };
+              coreDropped = true;
+              this.recordVersionTx(
+                updated.id,
+                'deselect',
+                actor,
+                'evidence made the rendered Core exceed its budget',
+                superseded,
+                updated,
+              );
+            }
+          }
+        }
+        return {
+          memory: updated,
+          superseded: updated,
+          changed: false,
+          evidenceAdded,
+          coreDropped,
+        };
+      }
+      const duplicate = this.activeByTextTx(dedupeKey(content));
+      if (duplicate && duplicate.seq !== seq)
+        throw new Error(
+          `memory #${duplicate.seq} already says that; revise #${duplicate.seq} instead of duplicating it`,
+        );
       const now = new Date().toISOString();
+      const trustLevel =
+        options.trustLevel ??
+        (actor === 'user' ? 'user_confirmed' : 'agent_inferred');
       const memory: MemoryRow = {
         ...superseded,
         id: newId(),
-        seq: this.nextSeqTx(),
+        seq: this.seqCountTx(),
         content,
-        sourceType: actor === 'user' ? 'user' : 'agent',
-        sourceRef: superseded.sourceRef,
-        trustLevel: actor === 'user' ? 'user_confirmed' : 'agent_inferred',
+        sourceType: options.sourceType ?? (actor === 'user' ? 'user' : 'agent'),
+        // Never inherit the old source: a correction points at its own evidence.
+        sourceRef: options.sourceRef ?? null,
+        trustLevel,
         confidence: superseded.confidence,
         status: 'active',
+        core: false,
         supersededBy: null,
         // The revision itself is the supersede; the target pointer is spent.
         supersedes: null,
         createdAt: now,
         updatedAt: now,
       };
+      let coreDropped = false;
+      if (superseded.core) {
+        const projected = [...this.selectedTx(), memory].filter(
+          (item) => item.seq !== superseded.seq,
+        );
+        if (renderCore(projected, CORE_BUDGET, this.activeTx().length).overflow)
+          coreDropped = true;
+        else memory.core = true;
+      }
       const revisedOld: MemoryRow = {
         ...superseded,
         status: 'superseded',
+        core: false,
         supersededBy: memory.id,
         updatedAt: now,
       };
       this.insertMemoryTx(memory);
       this.run(
-        'UPDATE memories SET status = ?, superseded_by = ?, updated_at = ? WHERE id = ?',
+        'UPDATE memories SET status = ?, core = 0, superseded_by = ?, updated_at = ? WHERE id = ?',
         'superseded',
         memory.id,
         now,
         superseded.id,
       );
       this.recordVersionTx(memory.id, 'create', actor, reason, null, memory);
+      if (memory.core)
+        this.recordVersionTx(
+          memory.id,
+          'select',
+          actor,
+          `${reason} (replacement for #${seq})`,
+          null,
+          memory,
+        );
       this.recordVersionTx(
         superseded.id,
         'supersede',
@@ -575,79 +845,183 @@ export class MemoryStore {
         superseded,
         revisedOld,
       );
-      this.markCoveringNodesStaleTx(seq);
-      this.autoMergeEmptyTx();
-      return { memory, superseded: revisedOld, merge: this.nextMergeTx() };
+      return {
+        memory,
+        superseded: revisedOld,
+        changed: true,
+        evidenceAdded: false,
+        coreDropped,
+      };
     });
-    this.bump();
-    this.exportFile();
+    if (result.changed || result.evidenceAdded || result.coreDropped)
+      this.publish();
     return result;
   }
 
-  /** Mark memory #seq deleted; rows are never physically removed. */
-  forget(seq: number, reason: string, actor: MemoryActor = 'chief'): MemoryRow {
-    const result = this.db.transaction(() => {
-      const memory = this.bySeqTx(seq);
-      if (!memory)
-        throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
-      if (memory.status !== 'active' && memory.status !== 'candidate')
-        throw new Error(
-          `memory #${seq} is ${memory.status}; only active or candidate memories can be forgotten`,
+  /** Mark memory #seq deleted and out of Core; rows are never physically removed. */
+  forget(
+    seq: number,
+    reason: string,
+    actor: MemoryActor = 'chief',
+  ): { memory: MemoryRow; changed: boolean } {
+    const result = this.db.transaction(
+      (): { memory: MemoryRow; changed: boolean } => {
+        const memory = this.bySeqTx(seq);
+        if (!memory)
+          throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+        if (memory.status === 'deleted') return { memory, changed: false };
+        if (memory.status !== 'active' && memory.status !== 'candidate')
+          throw new Error(
+            `memory #${seq} is ${memory.status}; only active or candidate memories can be forgotten`,
+          );
+        const updated: MemoryRow = {
+          ...memory,
+          status: 'deleted',
+          core: false,
+          updatedAt: new Date().toISOString(),
+        };
+        this.run(
+          'UPDATE memories SET status = ?, core = 0, updated_at = ? WHERE id = ?',
+          'deleted',
+          updated.updatedAt,
+          memory.id,
         );
-      const updated: MemoryRow = {
-        ...memory,
-        status: 'deleted',
-        updatedAt: new Date().toISOString(),
-      };
-      this.run(
-        'UPDATE memories SET status = ?, updated_at = ? WHERE id = ?',
-        'deleted',
-        updated.updatedAt,
-        memory.id,
-      );
-      this.recordVersionTx(memory.id, 'delete', actor, reason, memory, updated);
-      this.markCoveringNodesStaleTx(seq);
-      this.autoMergeEmptyTx();
-      return updated;
-    });
-    this.bump();
-    this.exportFile();
+        this.recordVersionTx(
+          memory.id,
+          'delete',
+          actor,
+          reason,
+          memory,
+          updated,
+        );
+        return { memory: updated, changed: true };
+      },
+    );
+    if (result.changed) this.publish();
+    return result;
+  }
+
+  /** Select an active memory into Core; over budget rejects atomically. */
+  select(
+    seq: number,
+    actor: MemoryActor = 'user',
+    reason = 'selected into core',
+  ): { memory: MemoryRow; changed: boolean } {
+    const result = this.db.transaction(
+      (): { memory: MemoryRow; changed: boolean } => {
+        const memory = this.bySeqTx(seq);
+        if (!memory)
+          throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+        if (memory.status !== 'active')
+          throw new Error(
+            `memory #${seq} is ${memory.status}; only active memories can enter Core`,
+          );
+        if (memory.core) return { memory, changed: false };
+        this.assertCoreFitsTx(
+          [...this.selectedTx(), memory],
+          CORE_BUDGET,
+          this.activeTx().length,
+        );
+        const updated: MemoryRow = {
+          ...memory,
+          core: true,
+          updatedAt: new Date().toISOString(),
+        };
+        this.setCoreTx(seq, true);
+        this.recordVersionTx(
+          memory.id,
+          'select',
+          actor,
+          reason,
+          memory,
+          updated,
+        );
+        return { memory: updated, changed: true };
+      },
+    );
+    if (result.changed) this.publish();
+    return result;
+  }
+
+  /** Remove a memory from Core without forgetting it; still active and searchable. */
+  deselect(
+    seq: number,
+    actor: MemoryActor = 'user',
+    reason = 'removed from core',
+  ): { memory: MemoryRow; changed: boolean } {
+    const result = this.db.transaction(
+      (): { memory: MemoryRow; changed: boolean } => {
+        const memory = this.bySeqTx(seq);
+        if (!memory)
+          throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+        if (!memory.core) return { memory, changed: false };
+        const updated: MemoryRow = {
+          ...memory,
+          core: false,
+          updatedAt: new Date().toISOString(),
+        };
+        this.setCoreTx(seq, false);
+        this.recordVersionTx(
+          memory.id,
+          'deselect',
+          actor,
+          reason,
+          memory,
+          updated,
+        );
+        return { memory: updated, changed: true };
+      },
+    );
+    if (result.changed) this.publish();
     return result;
   }
 
   /**
-   * Promote a candidate into Core Memory: status becomes active, trust stays
-   * at agent_inferred. If the candidate contradicts an active memory
-   * (`supersedes`), that memory is superseded in the same transaction, so the
-   * contradiction never coexists in Core Memory. Covering summary nodes go
-   * stale so the promoted line renders immediately.
+   * Promote a candidate: status becomes active, trust stays agent_inferred,
+   * and it does not enter Core automatically. If the candidate contradicts an
+   * active memory (`supersedes`), that memory is superseded in the same
+   * transaction. A target the user changed while the candidate was pending is
+   * not silently overwritten: promotion fails and the user must re-evaluate.
    */
   promote(
     seq: number,
     actor: MemoryActor = 'user',
     reason = 'promoted from candidates',
   ): { memory: MemoryRow; superseded: MemoryRow | null } {
-    const result = this.db.transaction(() => {
-      const memory = this.bySeqTx(seq);
-      if (!memory)
-        throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
-      if (memory.status !== 'candidate')
-        throw new Error(
-          `memory #${seq} is ${memory.status}; only candidates can be promoted`,
-        );
-      const now = new Date().toISOString();
-      let superseded: MemoryRow | null = null;
-      if (memory.supersedes !== null) {
-        const target = this.bySeqTx(memory.supersedes);
-        if (target && target.status === 'active') {
+    const result = this.db.transaction(
+      (): {
+        memory: MemoryRow;
+        superseded: MemoryRow | null;
+      } => {
+        const memory = this.bySeqTx(seq);
+        if (!memory)
+          throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+        if (memory.status !== 'candidate')
+          throw new Error(
+            `memory #${seq} is ${memory.status}; only candidates can be promoted`,
+          );
+        const duplicate = this.activeByTextTx(dedupeKey(memory.content));
+        if (duplicate)
+          throw new Error(
+            `active memory #${duplicate.seq} already says that; dismiss this candidate instead`,
+          );
+        const now = new Date().toISOString();
+        let superseded: MemoryRow | null = null;
+        if (memory.supersedes !== null) {
+          const target = this.bySeqTx(memory.supersedes);
+          if (!target || target.status !== 'active')
+            throw new Error(
+              `memory #${memory.supersedes} is ${target?.status ?? 'missing'} since this candidate was extracted; dismiss it and revise the current memory instead`,
+            );
           superseded = {
             ...target,
             status: 'superseded',
+            core: false,
             supersededBy: memory.id,
             updatedAt: now,
           };
           this.run(
-            'UPDATE memories SET status = ?, superseded_by = ?, updated_at = ? WHERE id = ?',
+            'UPDATE memories SET status = ?, core = 0, superseded_by = ?, updated_at = ? WHERE id = ?',
             'superseded',
             memory.id,
             now,
@@ -661,232 +1035,176 @@ export class MemoryStore {
             target,
             superseded,
           );
-          this.markCoveringNodesStaleTx(target.seq);
         }
-      }
-      const updated: MemoryRow = {
-        ...memory,
-        status: 'active',
-        updatedAt: now,
-      };
-      this.run(
-        'UPDATE memories SET status = ?, updated_at = ? WHERE id = ?',
-        'active',
-        now,
-        memory.id,
-      );
-      this.recordVersionTx(
-        memory.id,
-        'promote',
-        actor,
-        reason,
-        memory,
-        updated,
-      );
-      this.markCoveringNodesStaleTx(seq);
-      this.autoMergeEmptyTx();
-      return { memory: updated, superseded };
-    });
-    this.bump();
-    this.exportFile();
+        const updated: MemoryRow = {
+          ...memory,
+          status: 'active',
+          core: false,
+          updatedAt: now,
+        };
+        this.run(
+          'UPDATE memories SET status = ?, core = 0, updated_at = ? WHERE id = ?',
+          'active',
+          now,
+          memory.id,
+        );
+        this.recordVersionTx(
+          memory.id,
+          'promote',
+          actor,
+          reason,
+          memory,
+          updated,
+        );
+        return { memory: updated, superseded };
+      },
+    );
+    this.publish();
     return result;
-  }
-
-  /** Store a summary for node lo-hi; the agent writes `summary`, we own storage. */
-  nap(lo: number, hi: number, summary: string): MergeDue | null {
-    if (!Number.isInteger(lo) || !Number.isInteger(hi) || hi - lo < 1 || lo < 0)
-      throw new Error(`bad node ${lo}-${hi}`);
-    const size = hi - lo + 1;
-    if ((size & (size - 1)) !== 0 || lo % size !== 0)
-      throw new Error(`unaligned node ${lo}-${hi}`);
-    const body = normalizeLine(summary, 'summary');
-    const merge = this.db.transaction(() => {
-      if (hi >= this.seqCountTx())
-        throw new Error(`node ${lo}-${hi} covers missing memories`);
-      if (
-        size > 2 &&
-        (!this.hasNodeTx(lo, lo + size / 2 - 1) ||
-          !this.hasNodeTx(lo + size / 2, hi))
-      ) {
-        throw new Error(`node ${lo}-${hi} needs both child summaries`);
-      }
-      // Another chief conversation may already have compressed this immutable range.
-      if (!this.hasNodeTx(lo, hi)) this.writeNodeTx(lo, hi, body);
-      this.autoMergeEmptyTx();
-      return this.nextMergeTx();
-    });
-    this.bump();
-    this.exportFile();
-    return merge;
   }
 
   // ---- reads
 
   /**
-   * What wake prints: coarse summary nodes covering old history, then active
-   * raw lines, oldest to newest, capped at `budget` tokens
-   * (estimated as ceil(UTF-8 bytes / 3)).
+   * What wake prints: the explicitly selected Core memories, ordered by seq,
+   * with a usage footer. Selection is validated on write, so this never drops
+   * an entry silently; if a smaller budget is requested than the selection
+   * needs, the footer says so instead of truncating.
    */
-  wake(budget = 1500): string {
-    const items = this.db.transaction(() => {
-      const n = this.seqCountTx();
-      const lines: string[] = [];
-      let pos = 0;
-      while (pos < n) {
-        const node = this.largestNodeAtTx(pos, n);
-        if (node) {
-          if (node.summary !== EMPTY_NODE)
-            lines.push(`#${node.lo}-${node.hi} ${node.summary}`);
-          pos = node.hi + 1;
-        } else {
-          const memory = this.bySeqTx(pos);
-          if (memory && memory.status === 'active')
-            lines.push(`#${pos} ${memory.content}`);
-          pos += 1;
-        }
-      }
-      return lines;
+  wake(budget = CORE_BUDGET): string {
+    return this.db.transaction(() => {
+      const selected = this.selectedTx();
+      return renderCore(selected, budget, this.activeTx().length).text;
     });
-    if (items.length === 0) return '(no memories yet)';
-    const costs = items.map(tokenCost);
-    const total = costs.reduce((sum, cost) => sum + cost, 0);
-    if (total <= budget) return items.join('\n');
-    const headBudget = Math.ceil(budget / 4);
-    let headCost = 0;
-    let head = 0;
-    while (head < items.length && headCost + costs[head] <= headBudget) {
-      headCost += costs[head];
-      head++;
-    }
-    const omission = `… (older memories omitted; use recall/zoom)`;
-    let tailCost = tokenCost(omission);
-    let tailStart = items.length;
-    while (
-      tailStart > head &&
-      tailCost + costs[tailStart - 1] <= budget - headCost
-    ) {
-      tailStart--;
-      tailCost += costs[tailStart];
-    }
-    return [...items.slice(0, head), omission, ...items.slice(tailStart)].join(
-      '\n',
-    );
-  }
-
-  /** Largest existing non-stale summary node starting exactly at `pos`, or null. */
-  private largestNodeAtTx(pos: number, n: number): NodeRow | undefined {
-    const maxByAlign = pos === 0 ? 1 << 30 : pos & -pos; // largest pow2 dividing pos
-    for (
-      let size = Math.min(maxByAlign, highestPow2(n - pos));
-      size >= 2;
-      size /= 2
-    ) {
-      if (pos % size !== 0) continue;
-      if (pos + size > n) continue;
-      if (this.hasNodeTx(pos, pos + size - 1))
-        return this.nodeTx(pos, pos + size - 1);
-    }
-    return undefined;
   }
 
   /**
-   * Full-text search (FTS5 trigram, works for Chinese); queries shorter than
-   * three characters fall back to substring LIKE. Active memories by default;
-   * `includeHistory` adds superseded and deleted ones, marked with [status].
+   * Keyword search shared with History: every whitespace-separated term must
+   * appear (AND), terms of three or more code points use the trigram FTS index,
+   * shorter terms fall back to LIKE (so Chinese words of two characters work).
+   * Results are ordered by relevance — FTS rank when the index is used, then
+   * exact-phrase hits, then newer memories — and bounded by `limit` and a
+   * token budget. Each line carries #seq, kind, trust, date and source ref.
    */
   recall(
     query: string,
-    options?: { includeHistory?: boolean; limit?: number },
+    options?: {
+      includeHistory?: boolean;
+      limit?: number;
+      budget?: number;
+    },
   ): string {
-    const q = query.trim();
-    if (!q) return '(no matches)';
-    const limit = options?.limit ?? 100;
+    // The budget is validated before any early return: the contract covers the
+    // COMPLETE returned string, including `(no matches)`.
+    const budget = options?.budget ?? 1200;
+    const checkBudget = (minimum: number): void => {
+      if (!Number.isInteger(budget) || budget < minimum)
+        throw new Error(
+          `recall budget ${budget} is too small for this result; use at least ${minimum} tokens`,
+        );
+    };
+    const plan = planSearch(query);
+    if (plan.terms.length === 0) {
+      checkBudget(tokenCost(NO_MATCHES));
+      return NO_MATCHES;
+    }
+    const limit = Math.min(Math.max(options?.limit ?? 20, 1), 100);
     const statusFilter = options?.includeHistory
       ? ''
       : ` AND status = 'active'`;
     const rows = this.db.transaction(() => {
-      const where = `WHERE scope_id = ?${statusFilter}`;
-      if ([...q].length < 3) {
-        const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
-        return this.all<Record<string, unknown>>(
-          `SELECT * FROM memories ${where} AND content LIKE ? ESCAPE '\\' ORDER BY seq LIMIT ?`,
-          this.scopeId,
-          `%${escaped}%`,
-          limit,
-        ).map(toMemory);
+      const clauses = [`m.scope_id = ?${statusFilter}`];
+      const args: (string | number)[] = [this.scopeId];
+      if (plan.match) clauses.push('memory_fts MATCH ?');
+      for (let index = 0; index < plan.short.length; index++) {
+        clauses.push("m.content LIKE ? ESCAPE '\\'");
       }
-      const match = `"${q.replace(/"/g, '""')}"`;
-      return this.all<Record<string, unknown>>(
-        `SELECT * FROM memories ${where} AND id IN (SELECT mem_id FROM memory_fts WHERE memory_fts MATCH ?) ORDER BY seq LIMIT ?`,
-        this.scopeId,
-        match,
-        limit,
-      ).map(toMemory);
+      const selectRank = plan.match ? ', bm25(memory_fts) AS rank' : '';
+      const join = plan.match
+        ? 'JOIN memory_fts ON memory_fts.mem_id = m.id'
+        : '';
+      const order = plan.match
+        ? 'rank, m.seq DESC'
+        : `CASE WHEN m.content LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, m.seq DESC`;
+      const sql = `SELECT m.*${selectRank} FROM memories m ${join}
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY ${order}
+        LIMIT ?`;
+      // Placeholder order follows the SQL text: WHERE (scope, match, LIKE...),
+      // then ORDER BY for the non-FTS fallback, then LIMIT.
+      if (plan.match) args.push(plan.match);
+      for (const term of plan.short) args.push(`%${escapeLike(term)}%`);
+      if (!plan.match) args.push(`%${escapeLike(plan.terms[0])}%`);
+      args.push(limit);
+      return this.all<Record<string, unknown>>(sql, ...args).map(toMemory);
     });
-    if (rows.length === 0) return '(no matches)';
-    return rows
-      .map((m) =>
-        m.status === 'active' || !options?.includeHistory
-          ? `#${m.seq} ${m.content}`
-          : `#${m.seq} [${m.status}] ${m.content}`,
-      )
-      .join('\n');
+    if (rows.length === 0) {
+      checkBudget(tokenCost(NO_MATCHES));
+      return NO_MATCHES;
+    }
+    // The budget covers the ENTIRE returned string: hit lines, their newlines,
+    // the truncation marker and the omission footer. Assemble candidates and
+    // measure the final rendering rather than summing line estimates. A budget
+    // that cannot even hold the omission footer is an argument error: the
+    // contract is never "claim a budget the output exceeds".
+    const footer = (omitted: number) =>
+      `… ${omitted} more match(es) within this scope; refine the query or raise the budget`;
+    const assemble = (hits: string[], omitted: number) =>
+      omitted > 0 ? [...hits, footer(omitted)].join('\n') : hits.join('\n');
+    const minimum = tokenCost(footer(rows.length));
+    checkBudget(minimum);
+    const hits: string[] = [];
+    for (let index = 0; index < rows.length; index++) {
+      const line = recallLine(rows[index]);
+      const remaining = rows.length - index;
+      const candidate =
+        remaining > 1
+          ? assemble([...hits, line], remaining - 1)
+          : assemble([...hits, line], 0);
+      if (tokenCost(candidate) <= budget) {
+        hits.push(line);
+        continue;
+      }
+      // It does not fit whole. If nothing was emitted yet, try a truncated
+      // line that still leaves room for the footer; otherwise stop here.
+      if (hits.length === 0) {
+        const chars = [...line];
+        for (let end = chars.length; end > 0; end--) {
+          // One row is shown (truncated); the rest are the omitted count.
+          const shortened = assemble(
+            [`${chars.slice(0, end).join('')}…`],
+            remaining - 1,
+          );
+          if (tokenCost(shortened) <= budget) return shortened;
+        }
+      }
+      // Nothing fits: neither a full line nor a truncated one, with the
+      // omission footer. Report the budget instead of returning more than it.
+      const rendered = assemble(hits, rows.length - hits.length);
+      if (tokenCost(rendered) <= budget) return rendered;
+      throw new Error(
+        `recall budget ${budget} is too small for this result; use at least ${minimum} tokens`,
+      );
+    }
+    return assemble(hits, 0);
   }
 
-  /** Open node lo-hi into its two halves: summaries where built, active raw lines otherwise. */
-  zoom(lo: number, hi: number): string {
-    if (!Number.isInteger(lo) || !Number.isInteger(hi) || lo < 0 || hi - lo < 1)
-      throw new Error(`bad range ${lo}-${hi}`);
-    return this.db.transaction(() => {
-      if (hi >= this.seqCountTx())
-        throw new Error(`range ${lo}-${hi} covers missing memories`);
-      const mid = lo + (hi - lo + 1) / 2 - 1;
-      const half = (a: number, b: number): string => {
-        const text = this.nodeTextTx(a, b);
-        if (text !== undefined && text !== EMPTY_NODE)
-          return `#${a}-${b} ${text}`;
-        return this.activeBetweenTx(a, b)
-          .map((m) => `#${m.seq} ${m.content}`)
-          .join('\n');
-      };
-      const rendered = [half(lo, mid), half(mid + 1, hi)]
-        .filter((part) => part !== '')
-        .join('\n');
-      return rendered === '' ? '(no active memories in range)' : rendered;
-    });
-  }
-
-  /** Dump for the UI: every memory with provenance, every node, pending merges. */
-  dump(): MemoryDump {
+  /** Dump for the UI: every memory with provenance plus Core usage. */
+  dump(budget = CORE_BUDGET): MemoryDump {
     return this.db.transaction(() => {
       const items: MemoryItem[] = this.all(
         'SELECT * FROM memories WHERE scope_id = ? ORDER BY seq',
         this.scopeId,
       ).map(toMemory);
-      const nodes: MemoryNodeInfo[] = this.all<{
-        lo: number;
-        hi: number;
-        summary: string;
-        stale: number;
-      }>(
-        'SELECT lo, hi, summary, stale FROM memory_nodes WHERE scope_id = ? ORDER BY lo, hi',
-        this.scopeId,
-      ).map((node) => ({
-        lo: Number(node.lo),
-        hi: Number(node.hi),
-        summary: node.summary,
-        stale: node.stale === 1,
-      }));
       return {
         scopeId: this.scopeId,
         items,
-        nodes,
-        pendingMerges: this.pendingMergeCountTx(),
+        core: this.coreUsageTx(budget),
       };
     });
   }
 
-  /** Monotonic change counter for a scope, for per-conversation Core Memory snapshots. */
+  /** Monotonic change counter for a scope, for per-conversation Core snapshots. */
   version(): number {
     return this.versionCounter;
   }
@@ -897,16 +1215,25 @@ export class MemoryStore {
     );
     return Number(value?.n ?? 0);
   }
-  private bump(): void {
-    this.versionCounter += 1;
+  /**
+   * Publish a write: the version bump and the file export run only once the
+   * outermost transaction commits, so a rolled-back operation (operation-id
+   * replay, schedule fire, batch) never leaves a stale export or version.
+   */
+  private publish(): void {
+    this.db.afterCommit(() => {
+      this.versionCounter += 1;
+      this.exportFile();
+    });
   }
 
-  // ---- legacy import and one-way export
+  // ---- legacy import, core migration, and one-way export
 
   /**
    * One-time import of the pre-SQLite files: every LOG.txt line (seq = line
-   * index, provenance legacy/agent_inferred) and every TREE node. Idempotent
-   * and transactional; afterwards the files move into memory/legacy/.
+   * index, provenance legacy/agent_inferred). The old summary tree is derived
+   * data and is retired unread into memory/legacy/TREE. Idempotent and
+   * transactional; afterwards the files move into memory/legacy/.
    */
   private migrateLegacy(): void {
     const logPath = join(this.dir, 'LOG.txt');
@@ -939,6 +1266,7 @@ export class MemoryStore {
           trustLevel: 'agent_inferred',
           confidence: null,
           status: 'active',
+          core: false,
           supersededBy: null,
           supersedes: null,
           createdAt,
@@ -954,50 +1282,91 @@ export class MemoryStore {
           memory,
         );
       });
-      if (existsSync(treeDir)) {
-        for (const file of readdirSync(treeDir)) {
-          const match = /^(\d+)-(\d+)\.txt$/.exec(file);
-          if (!match) continue;
-          const summary = readFileSync(join(treeDir, file), 'utf8').trim();
-          if (!summary) continue;
-          this.writeNodeTx(Number(match[1]), Number(match[2]), summary);
-        }
-      }
     });
-    const legacyDir = join(this.dir, 'legacy');
-    mkdirSync(legacyDir, { recursive: true });
-    renameSync(logPath, join(legacyDir, 'LOG.txt'));
-    if (existsSync(treeDir)) renameSync(treeDir, join(legacyDir, 'TREE'));
-    this.bump();
-    this.exportFile();
+    // Archive only once the import is committed. If an enclosing transaction
+    // rolls back, the source files must still be there for the next attempt;
+    // moving them eagerly would consume the only copy of the data.
+    this.db.afterCommit(() => {
+      const legacyDir = join(this.dir, 'legacy');
+      mkdirSync(legacyDir, { recursive: true });
+      if (existsSync(logPath)) renameSync(logPath, join(legacyDir, 'LOG.txt'));
+      if (existsSync(treeDir)) renameSync(treeDir, join(legacyDir, 'TREE'));
+    });
+    this.publish();
+  }
+
+  /**
+   * One-time deterministic Core selection for data that predates explicit
+   * selection (or a legacy LOG.txt import): user-confirmed first, then
+   * preference/decision, then the rest, oldest first, while the rendered
+   * selection fits the budget. Everything else stays active and searchable.
+   */
+  private migrateCoreSelection(): void {
+    const marker = `core-migrated:${this.scopeId}`;
+    if (this.get('SELECT 1 FROM memory_meta WHERE key = ?', marker)) return;
+    this.db.transaction(() => {
+      if (this.get('SELECT 1 FROM memory_meta WHERE key = ?', marker)) return;
+      const active = this.all(
+        `SELECT * FROM memories WHERE scope_id = ? AND status = 'active' ORDER BY seq`,
+        this.scopeId,
+      ).map(toMemory);
+      const priority = (memory: MemoryRow): number =>
+        memory.trustLevel === 'user_confirmed'
+          ? 0
+          : memory.kind === 'preference' || memory.kind === 'decision'
+            ? 1
+            : 2;
+      const ordered = [...active].sort(
+        (a, b) => priority(a) - priority(b) || a.seq - b.seq,
+      );
+      const selected: MemoryRow[] = [];
+      for (const memory of ordered) {
+        const projected = [...selected, memory];
+        if (renderCore(projected, CORE_BUDGET, active.length).overflow)
+          continue;
+        selected.push(memory);
+        this.setCoreTx(memory.seq, true);
+        const after = { ...memory, core: true };
+        this.recordVersionTx(
+          memory.id,
+          'select',
+          'migration',
+          'initial core selection during upgrade',
+          memory,
+          after,
+        );
+      }
+      this.run(
+        'INSERT INTO memory_meta (key, value) VALUES (?, ?)',
+        marker,
+        JSON.stringify({
+          selected: selected.map((memory) => memory.seq),
+          active: active.length,
+          budget: CORE_BUDGET,
+        }),
+      );
+    });
+    this.publish();
   }
 
   /** Regenerate the read-only MEMORY.md export; the DB is never read back from it. */
   exportFile(): void {
-    const { items, nodes } = this.dump();
+    const { items, core } = this.dump();
     const active = items.filter((item) => item.status === 'active');
-    const summaries = nodes.filter(
-      (node) => !node.stale && node.summary !== EMPTY_NODE,
-    );
     const lines = [
       `# Memory（${this.scopeId}）`,
       '',
       '> 只读导出：由 Tian Agent 服务在每次写入后生成。数据库是唯一写入来源，请勿手改本文件。',
+      `> Core Memory：${core.selected} 条已选入，约 ${core.tokens}/${core.budget} tokens；其余有效记忆可检索。`,
       '',
-      '## 记忆',
+      '## 有效记忆',
       '',
       ...(active.length === 0
         ? ['（暂无有效记忆）']
         : active.map(
             (item) =>
-              `- #${item.seq} [${item.kind}] ${item.trustLevel} ${item.createdAt.slice(0, 10)} — ${item.content}`,
+              `- ${item.core ? '[core] ' : ''}#${item.seq} [${item.kind}] ${item.trustLevel}${item.sourceRef ? ` ${item.sourceRef}` : ''} ${item.createdAt.slice(0, 10)} — ${item.content}`,
           )),
-      '',
-      '## 摘要',
-      '',
-      ...(summaries.length === 0
-        ? ['（暂无摘要）']
-        : summaries.map((node) => `- #${node.lo}-${node.hi} ${node.summary}`)),
       '',
     ];
     atomicWrite(join(this.dir, 'MEMORY.md'), lines.join('\n'));

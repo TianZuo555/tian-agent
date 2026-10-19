@@ -256,6 +256,8 @@ export interface MemoryItem {
   sourceType: string;
   sourceRef: string | null;
   confidence: number | null;
+  /** Explicitly selected into the Core Memory view. */
+  core: boolean;
   supersededBy: string | null;
   /** For a candidate: the active seq it will replace when promoted. */
   supersedes: number | null;
@@ -263,18 +265,28 @@ export interface MemoryItem {
   updatedAt: string;
 }
 
-export interface MemoryNodeInfo {
-  lo: number;
-  hi: number;
-  summary: string;
-  stale: boolean;
+/** Result of a user revision, so the UI can report Core effects. */
+export interface MemoryRevisionResult {
+  seq: number;
+  supersededSeq: number;
+  changed: boolean;
+  evidenceAdded: boolean;
+  /** True when the correction could not stay in Core and was saved outside. */
+  coreDropped: boolean;
+}
+
+/** Rendered Core Memory usage, including metadata and the usage footer. */
+export interface MemoryCoreUsage {
+  budget: number;
+  tokens: number;
+  selected: number;
+  active: number;
 }
 
 export interface MemoryDump {
   scopeId: string;
   items: MemoryItem[];
-  nodes: MemoryNodeInfo[];
-  pendingMerges: number;
+  core: MemoryCoreUsage;
 }
 
 export interface SettingsInfo {

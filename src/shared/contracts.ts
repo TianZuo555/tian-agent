@@ -12,6 +12,7 @@ import type {
   ImprovementSummary,
   InboxItem,
   MemoryDump,
+  MemoryRevisionResult,
   ProjectPatch,
   RunInfo,
   ScopeInfo,
@@ -95,11 +96,13 @@ export interface Commands {
   memoryDump: Command<[scopeId: string], MemoryDump>;
   memoryRevise: Command<
     [scopeId: string, seq: number, text: string, reason: string],
-    void
+    MemoryRevisionResult
   >;
   memoryForget: Command<[scopeId: string, seq: number, reason: string], void>;
   memoryPromote: Command<[scopeId: string, seq: number], void>;
   memoryDismiss: Command<[scopeId: string, seq: number], void>;
+  memorySelect: Command<[scopeId: string, seq: number], void>;
+  memoryDeselect: Command<[scopeId: string, seq: number], void>;
   inboxList: Command<[scopeId: string], InboxItem[]>;
   runList: Command<[scopeId: string | null], RunInfo[]>;
   runReport: Command<[id: string], string>;
@@ -250,7 +253,9 @@ export const commandArgs = {
   memoryRevise: Type.Tuple([
     id,
     Type.Integer({ minimum: 0 }),
-    Type.String({ minLength: 1, maxLength: 280 }),
+    // 1000 Unicode code points can be up to 4000 UTF-16 units; the store
+    // enforces the code-point rule itself.
+    Type.String({ minLength: 1, maxLength: 4000 }),
     Type.String({ minLength: 1, maxLength: 2_000 }),
   ]),
   memoryForget: Type.Tuple([
@@ -260,6 +265,8 @@ export const commandArgs = {
   ]),
   memoryPromote: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   memoryDismiss: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
+  memorySelect: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
+  memoryDeselect: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   inboxList: Type.Tuple([id]),
   runList: Type.Tuple([nullableId]),
   runReport: Type.Tuple([id]),

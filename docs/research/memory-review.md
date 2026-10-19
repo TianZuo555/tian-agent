@@ -1,6 +1,6 @@
 # 记忆系统调研：OpenClaw、Hermes 与 Tian Agent
 
-调研日期：2026-10-18。本文是研究与改进建议，不替代 [D4](../decisions.md)，也不表示已经决定或完成架构迁移。
+调研日期：2026-10-18。本文是研究与改进建议，保留调研时点的事实与结论，不替代 [D4](../decisions.md)。其中"移除摘要树、改为显式选择的 Core Memory""多词/短词检索""来源校验""长历史分页""精确去重"等建议已实施，实施后的现状以 [memory.md](../memory.md)、[D4](../decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择) 与 [D6](../decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event) 为准；下文的"当前实现"指调研时点。
 
 ## 结论
 
@@ -231,5 +231,5 @@ Notes（Markdown 长文）──────────────────
 - [Hermes Persistent Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory)
 - [Hermes MemoryStore 源码](https://github.com/NousResearch/hermes-agent/blob/9e01b44dd23978f9ff40b7837467f3a9f1582130/tools/memory_tool_store.py)
 - [Hermes Session Search 源码](https://github.com/NousResearch/hermes-agent/blob/9e01b44dd23978f9ff40b7837467f3a9f1582130/tools/session_search_tool.py)
-- [本项目 D4](../decisions.md#d4--memory-以-sqlite-为唯一写入来源保留对齐二叉摘要树)
+- [本项目 D4](../decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)
 - [本项目 D6](../decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)

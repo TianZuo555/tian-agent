@@ -128,7 +128,8 @@ async function harness(t: TestContext): Promise<Harness> {
     scopes,
     db,
     data,
-    latestUserEntry: async () => null,
+    latestInputEntry: async () => null,
+    currentInput: async () => null,
     history: { db, events, history },
     goals: new GoalStore(db),
     improvements: new ImprovementStore(db),
@@ -891,6 +892,430 @@ test('run lifecycle produces events exactly once, including across a restart', a
   }
 });
 
+test('a tool call ref resolves its own args even when the message also has text', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const entry = await f.append(conversation, {
+    kind: 'pi.assistant',
+    model: [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will inspect the file' },
+          {
+            type: 'toolCall',
+            id: 'call-read',
+            name: 'bash',
+            arguments: { command: 'cat ACTUAL_TOOL_ARGUMENT.txt' },
+          },
+        ],
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        model: 'test-model',
+        usage: ZERO_USAGE,
+        stopReason: 'toolUse',
+        timestamp: T0,
+      } satisfies AssistantMessage,
+    ],
+  });
+  await f.history.syncAll();
+  const read = f.tool('read_history');
+  const callRef = `conv:${conversation.id}#${entry.id}:call:0`;
+  const callText = plain(
+    toolText(await call(read, String(conversation.id), { ref: callRef })),
+  );
+  assert.match(callText, /ACTUAL_TOOL_ARGUMENT/);
+  assert.doesNotMatch(callText, /I will inspect the file/);
+  // The plain entry ref still reads the assistant text.
+  const textRef = `conv:${conversation.id}#${entry.id}`;
+  assert.match(
+    plain(
+      toolText(await call(read, String(conversation.id), { ref: textRef })),
+    ),
+    /I will inspect the file/,
+  );
+});
+
+test('tool calls are numbered across all messages of a multi-message entry', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const entry = await f.append(conversation, {
+    kind: 'pi.assistant',
+    model: [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            id: 'call-a',
+            name: 'first_tool',
+            arguments: { marker: 'FIRST_CALL_ARG' },
+          },
+        ],
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        model: 'test-model',
+        usage: ZERO_USAGE,
+        stopReason: 'toolUse',
+        timestamp: T0,
+      } satisfies AssistantMessage,
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'second message body' },
+          {
+            type: 'toolCall',
+            id: 'call-b',
+            name: 'second_tool',
+            arguments: { marker: 'SECOND_CALL_ARG' },
+          },
+        ],
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        model: 'test-model',
+        usage: ZERO_USAGE,
+        stopReason: 'toolUse',
+        timestamp: T0 + 60_000,
+      } satisfies AssistantMessage,
+    ],
+  });
+  await f.history.syncAll();
+  const read = f.tool('read_history');
+  const second = plain(
+    toolText(
+      await call(read, String(conversation.id), {
+        ref: `conv:${conversation.id}#${entry.id}:call:1`,
+      }),
+    ),
+  );
+  assert.match(second, /SECOND_CALL_ARG/);
+  assert.doesNotMatch(second, /FIRST_CALL_ARG/);
+  // The second message's body is addressable too.
+  assert.match(
+    plain(
+      toolText(
+        await call(read, String(conversation.id), {
+          ref: `conv:${conversation.id}#${entry.id}:msg:1`,
+        }),
+      ),
+    ),
+    /second message body/,
+  );
+});
+
+test('read_history pages the full indexed unit when the transcript is unavailable', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const long = `${'A'.repeat(8_000)}TAIL_SENTINEL`;
+  await f.append(conversation, toolResultTurn('bash', long, 0));
+  await f.history.syncAll();
+  // Lose the transcript source: the rebuilt index must still be complete.
+  const offline = new HistoryIndex(
+    f.db,
+    { conversation: () => Promise.reject(new Error('storage gone')) },
+    f.events,
+  );
+  t.after(() => offline.stop());
+  const ref = `conv:${conversation.id}#${
+    (
+      f.db.sqlite
+        .prepare(
+          "SELECT entry_id AS id FROM history_entries WHERE conversation_id = ? AND kind = 'tool_result'",
+        )
+        .get(String(conversation.id)) as { id: string }
+    ).id
+  }`;
+  const first = plain(await offline.read(ref, { around: 0, limit: 200 }));
+  assert.match(first, /chars 1-200 of \d+/);
+  assert.match(first, /continued at read_history/);
+  let offset = Number(/offset=(\d+)/.exec(first)![1]);
+  let all = first;
+  for (let page = 0; page < 10; page++) {
+    const chunk = plain(
+      await offline.read(ref, { around: 0, offset, limit: 8_000 }),
+    );
+    all += chunk;
+    if (chunk.includes('end of entry')) break;
+    offset = Number(/offset=(\d+)/.exec(chunk)![1]);
+  }
+  assert.match(all, /TAIL_SENTINEL/);
+  assert.match(all, /end of entry/);
+  // Offsets past the end are rejected instead of producing inverted ranges.
+  assert.match(
+    await offline.read(ref, { around: 0, offset: 99_999 }),
+    /beyond the end/,
+  );
+});
+
+test('default read output stays bounded and neighbours are previews', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const long = 'L'.repeat(30_000);
+  await f.append(conversation, userTurn('run the long job', 0));
+  const target = await f.append(conversation, toolResultTurn('bash', long, 1));
+  await f.append(conversation, assistantTurn('done', 2));
+  await f.history.syncAll();
+  const read = f.tool('read_history');
+  const out = plain(
+    toolText(
+      await call(read, String(conversation.id), {
+        ref: `conv:${conversation.id}#${target.id}`,
+      }),
+    ),
+  );
+  // Default limit is 2000 code points for the target plus bounded previews.
+  assert.ok(out.length < 5_000, `default read returned ${out.length} chars`);
+  assert.match(out, /chars 1-2000 of \d+/);
+  assert.match(out, /run the long job/);
+  assert.match(out, /done/);
+  // Continuation does not repeat the neighbours.
+  const next = Number(/offset=(\d+)/.exec(out)![1]);
+  const continuation = plain(
+    toolText(
+      await call(read, String(conversation.id), {
+        ref: `conv:${conversation.id}#${target.id}`,
+        offset: next,
+      }),
+    ),
+  );
+  assert.doesNotMatch(continuation, /run the long job/);
+  assert.ok(continuation.length < 3_000);
+});
+
+test('long events page with offsets and never invert the character range', async (t) => {
+  const f = await harness(t);
+  f.events.record({
+    id: 'ev-long',
+    type: 'run.finished',
+    actor: 'system',
+    scopeId: 'p1',
+    summary: 'finished',
+    payload: { detail: 'E'.repeat(6_000) + 'EVENT_TAIL' },
+  });
+  await f.history.syncAll();
+  const read = f.tool('read_history');
+  const first = plain(
+    toolText(await call(read, 'x', { ref: 'event:ev-long' })),
+  );
+  assert.match(first, /chars 1-2000 of \d+/);
+  let offset = Number(/offset=(\d+)/.exec(first)![1]);
+  let all = first;
+  for (let page = 0; page < 6; page++) {
+    const chunk = plain(
+      toolText(await call(read, 'x', { ref: 'event:ev-long', offset })),
+    );
+    all += chunk;
+    if (chunk.includes('end of event')) break;
+    offset = Number(/offset=(\d+)/.exec(chunk)![1]);
+  }
+  assert.match(all, /EVENT_TAIL/);
+  assert.match(all, /end of event/);
+  // Beyond the end is an explicit message, never an inverted range.
+  const beyond = plain(
+    toolText(await call(read, 'x', { ref: 'event:ev-long', offset: 99_999 })),
+  );
+  assert.match(beyond, /beyond the end of event ev-long/);
+  assert.doesNotMatch(beyond, /chars \d+-\d+ of/);
+});
+
+test('tool payloads beyond 60k code points stay searchable and pageable', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const tail = ' IMPORTANT_TAIL_SENTINEL after a very long log';
+  await f.append(
+    conversation,
+    toolResultTurn('bash', `${'x'.repeat(65_000)}${tail}`, 0),
+  );
+  await f.append(
+    conversation,
+    toolCallTurn(
+      'bash',
+      { command: `cat ${'y'.repeat(64_000)}/TAIL_ARG.txt` },
+      1,
+    ),
+  );
+  await f.history.syncAll();
+  const search = f.tool('search_history');
+  // The tail of a 65k result is indexed in full, not truncated at 60k.
+  const found = plain(
+    toolText(
+      await call(search, String(conversation.id), {
+        query: 'IMPORTANT_TAIL_SENTINEL',
+        scope: 'p1',
+      }),
+    ),
+  );
+  assert.match(found, /IMPORTANT_TAIL_SENTINEL/);
+  // Multi-word query across the tail works too.
+  assert.match(
+    plain(
+      toolText(
+        await call(search, String(conversation.id), {
+          query: 'TAIL_SENTINEL long log',
+          scope: 'p1',
+        }),
+      ),
+    ),
+    /IMPORTANT_TAIL_SENTINEL/,
+  );
+  // The long tool arguments are indexed whole as well.
+  assert.match(
+    plain(
+      toolText(
+        await call(search, String(conversation.id), {
+          query: 'TAIL_ARG',
+          scope: 'p1',
+        }),
+      ),
+    ),
+    /TAIL_ARG/,
+  );
+  // Reads page the tail from the complete index even without the transcript.
+  const offline = new HistoryIndex(
+    f.db,
+    { conversation: () => Promise.reject(new Error('storage gone')) },
+    f.events,
+  );
+  t.after(() => offline.stop());
+  const ref = /conv:\d+#[\w:]+/.exec(found)?.[0];
+  assert.ok(ref);
+  const entryRef = ref.replace(/:call:\d+$/, '');
+  const total = Number(
+    /of (\d+)/.exec(
+      plain(await offline.read(entryRef, { around: 0, limit: 50 })),
+    )![1],
+  );
+  assert.ok(total > 65_000, `indexed text truncated at ${total}`);
+  const tailPage = plain(
+    await offline.read(entryRef, { around: 0, offset: total - 60, limit: 60 }),
+  );
+  assert.match(tailPage, /IMPORTANT_TAIL_SENTINEL/);
+});
+
+test('an entry with only tool calls is reported clearly and previews stay bounded', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const entry = await f.append(conversation, {
+    kind: 'pi.assistant',
+    model: [
+      {
+        role: 'assistant',
+        content: Array.from({ length: 80 }, (_, i) => ({
+          type: 'toolCall' as const,
+          id: `call-${i}`,
+          name: 'inspect',
+          arguments: { text: 'example '.repeat(100) },
+        })),
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        model: 'test-model',
+        usage: ZERO_USAGE,
+        stopReason: 'toolUse',
+        timestamp: T0,
+      } satisfies AssistantMessage,
+    ],
+  });
+  await f.history.syncAll();
+  const read = f.tool('read_history');
+  const bare = plain(
+    toolText(
+      await call(read, String(conversation.id), {
+        ref: `conv:${conversation.id}#${entry.id}`,
+        limit: 20,
+      }),
+    ),
+  );
+  // No text for the bare entry: an explicit explanation plus bounded previews.
+  assert.match(bare, /no text for conv:\d+#\d+; showing \d+ indexed unit/);
+  assert.ok(
+    bare.length < 3_000,
+    `bare entry read returned ${bare.length} chars`,
+  );
+  assert.match(bare, /omitted \(context budget\)|bounded previews/);
+  // An unknown sub-ref is explicit, not a silent dump.
+  const unknown = plain(
+    toolText(
+      await call(read, String(conversation.id), {
+        ref: `conv:${conversation.id}#${entry.id}:call:999`,
+        around: 0,
+      }),
+    ),
+  );
+  // An unknown sub-ref of an existing entry is explicit too (previews are of
+  // the entry's real units, never a fabricated payload for the ref).
+  assert.match(unknown, /no text for conv:\d+#\d+:call:999/);
+  assert.ok(
+    unknown.length < 3_000,
+    `unknown ref read returned ${unknown.length} chars`,
+  );
+});
+
+test('a keyword split across the old chunk boundary is still searchable', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  // Put the marker exactly across the former 1,500-char chunk boundary.
+  const long = `${'x'.repeat(1_495)}CROSSBOUNDARYMARKER${'y'.repeat(100)}`;
+  await f.append(conversation, toolResultTurn('bash', long, 0));
+  await f.history.syncAll();
+  const search = f.tool('search_history');
+  assert.match(
+    plain(
+      toolText(
+        await call(search, String(conversation.id), {
+          query: 'CROSSBOUNDARYMARKER',
+          scope: 'p1',
+        }),
+      ),
+    ),
+    /CROSSBOUNDARYMARKER/,
+  );
+  // A two-word query spanning the boundary also works on the whole unit.
+  assert.match(
+    plain(
+      toolText(
+        await call(search, String(conversation.id), {
+          query: 'CROSSBOUNDARYMARKER yyy',
+          scope: 'p1',
+        }),
+      ),
+    ),
+    /CROSSBOUNDARYMARKER/,
+  );
+});
+
+test('notes search shares the query planner and reports bounded snippets', async (t) => {
+  const f = await harness(t);
+  f.scopes.writeNote(
+    'p1',
+    'plan.md',
+    [
+      '# Plan',
+      'deploy the worker',
+      'unrelated line',
+      'deploy and rollback notes',
+    ].join('\n'),
+  );
+  const hits = f.scopes.searchNotes('p1', 'deploy rollback');
+  assert.match(hits, /plan\.md:4: deploy and rollback notes/);
+  assert.doesNotMatch(hits, /plan\.md:2/);
+  assert.match(f.scopes.searchNotes('p1', 'PLAN'), /plan\.md:1: # Plan/);
+  const window = f.scopes.readNoteWindow('p1', 'plan.md:4');
+  assert.match(window, /plan\.md:1-4/);
+  assert.match(window, /4: deploy and rollback notes/);
+  for (let i = 0; i < 12; i++)
+    f.scopes.writeNote('p1', `bulk-${i}.md`, 'needle line');
+  const bounded = f.scopes.searchNotes('p1', 'needle', 5);
+  assert.equal(bounded.split('\n').length, 6);
+  assert.match(bounded, /more matches; narrow the query/);
+  // A very long line is snippet-bounded, not returned whole.
+  f.scopes.writeNote('p1', 'huge.md', `needle ${'z'.repeat(5_000)}`);
+  const snippet = f.scopes.searchNotes('p1', 'needle zzz', 100);
+  assert.ok(
+    snippet.length < 3_000,
+    `notes snippet too long: ${snippet.length}`,
+  );
+});
+
 test('searching 5000 indexed entries stays well under 300ms', async (t) => {
   const directory = temporary(t, 'tian-history-perf-');
   const db = new Db(directory);
@@ -932,6 +1357,91 @@ test('searching 5000 indexed entries stays well under 300ms', async (t) => {
   // The default result limit and token budget cap the output.
   const many = await history.search('常规', { scopeId: 'p-perf', limit: 5 });
   assert.equal(many.length, 5);
+});
+
+test('an index format upgrade resets every derived cursor and rebuilds without loss', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  await f.append(conversation, userTurn('The old index format row', 0));
+  await f.history.syncAll();
+  const count = () =>
+    (
+      f.db.sqlite
+        .prepare('SELECT COUNT(*) AS n FROM history_entries')
+        .get() as { n: number }
+    ).n;
+  assert.equal(count(), 1);
+  // Simulate a database written by the previous index format, with a worker
+  // cursor pointing at the old rowid space.
+  f.db.sqlite
+    .prepare(
+      "UPDATE memory_meta SET value = '1' WHERE key = 'history-index-format'",
+    )
+    .run();
+  f.db.sqlite
+    .prepare(
+      "INSERT OR REPLACE INTO history_cursors (conversation_id,last_entry,updated_at) VALUES ('memory-worker:p1','1',?)",
+    )
+    .run(new Date().toISOString());
+
+  const upgraded = new HistoryIndex(f.db, f.agents, f.events);
+  t.after(() => upgraded.stop());
+  assert.equal(count(), 0);
+  // The stale worker cursor is gone: rowids are meaningless after a rebuild.
+  assert.equal(
+    f.db.sqlite
+      .prepare(
+        "SELECT COUNT(*) AS n FROM history_cursors WHERE conversation_id LIKE 'memory-worker:%'",
+      )
+      .get()?.n,
+    0,
+  );
+  // The next sync rebuilds from Pi; nothing is lost.
+  await upgraded.syncAll();
+  assert.equal(count(), 1);
+  assert.match(
+    plain(
+      (await upgraded.search('old index format', { scopeId: 'p1' })).join('\n'),
+    ),
+    /The old index format row/,
+  );
+});
+
+test('system notifications are indexed and shown as system, never as the user', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  await f.append(conversation, {
+    kind: 'system.notification',
+    model: [
+      {
+        role: 'user',
+        content: '[inbox message from run] nightly job failed',
+        timestamp: T0,
+      },
+    ],
+  });
+  await f.append(conversation, userTurn('what happened last night?', 1));
+  await f.history.syncAll();
+  const rows = f.db.sqlite
+    .prepare(
+      'SELECT role, kind FROM history_entries WHERE conversation_id = ? ORDER BY CAST(entry_id AS INTEGER)',
+    )
+    .all(String(conversation.id)) as { role: string; kind: string }[];
+  assert.deepEqual(
+    rows.map((row) => [row.kind, row.role]),
+    [
+      ['message', 'system.notification'],
+      ['message', 'user'],
+    ],
+  );
+  // The notification text is still searchable, but attributed to the system.
+  const hits = await f.history.search('nightly job', {
+    scopeId: 'p1',
+  });
+  assert.match(
+    plain(hits.join('\n')),
+    /system\.notification: .*nightly job failed/,
+  );
 });
 
 test('the resident service records inbox and delivery events, and backfills transcripts', async (t) => {

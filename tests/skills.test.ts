@@ -14,6 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Db, type RunRow } from '../src/worker/db';
 import { EventLog } from '../src/worker/events';
 import { Scopes } from '../src/worker/scopes';
+import { DATABASE_VERSION } from '../src/shared/version';
 import {
   RuleBasedExtractor,
   SkillRegistry,
@@ -572,7 +573,7 @@ test('a v3 database upgrades in one transaction and leaves a backup', (t) => {
   const version = (
     db.sqlite.prepare('PRAGMA user_version').get() as { user_version: number }
   ).user_version;
-  assert.equal(version, 4);
+  assert.equal(version, DATABASE_VERSION);
   const columns = (
     db.sqlite.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
   ).map((column) => column.name);

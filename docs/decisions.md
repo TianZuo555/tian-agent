@@ -2,7 +2,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D11，按领域排序。当前 `DATABASE_VERSION = 4`、`SERVICE_PROTOCOL = 3`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D11，按领域排序。当前 `DATABASE_VERSION = 6`、`SERVICE_PROTOCOL = 4`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -71,22 +71,25 @@ PRD v0.1 的技术方向写的是 Rust Host + GPUI Desktop。项目继续使用�
 
 ---
 
-## D4 · Memory 以 SQLite 为唯一写入来源，保留对齐二叉摘要树
+## D4 · Memory 以 SQLite 为唯一写入来源，Core Memory 改为显式选择
 
-Memory 从 `<scope>/memory/LOG.txt` + `TREE/` 文件迁到 `tian.db`，增加来源、可信度、状态与版本；OptMem 式的对齐区间摘要树保留，作为 Core Memory 的压缩机制，同样存进 SQLite。文件改为单向只读导出。
+Memory 从 `<scope>/memory/LOG.txt` + `TREE/` 文件迁到 `tian.db`，增加来源、可信度、状态与版本。Core Memory 不再是"按 `seq` 递归压缩全部记忆的摘要树"，而是由用户或 Chief **明确选入**的少量条目；其余有效 Memory 仍可检索。文件改为单向只读导出。
 
-**背景**：PRD 要求每条记忆有来源和可信度、用户可纠正且保留历史、写入可审计与恢复。追加式文本文件做不到取代与版本；在文件旁边加元数据又会出现两个写入来源。摘要树已能在固定预算内压缩长期记忆并已有压缩流程与 UI，没必要换另一套选择算法。
+**背景**：PRD 要求每条记忆有来源和可信度、用户可纠正且保留历史、写入可审计与恢复。追加式文本文件做不到取代与版本；在文件旁边加元数据又会出现两个写入来源。摘要树能在固定预算内压缩长期记忆，但它解决的是"长度"而不是"哪些事实值得常驻"：8 条短事实完成所有 pending 合并后，Core 只剩一条根摘要，模型看不到原始细节；它还需要 Chief 立即处理 COMPRESSION DUE、维护对齐区间与并发失效，并曾在"旧摘要覆盖新纠正"时把已纠正的事实带回来（[调研](research/memory-review.md#p0旧摘要可以把已纠正的事实带回来)）。选择比压缩更直接地决定常驻内容。
 
 **决定**：
 
-- 每条 Memory 有按 Scope 递增、不可变的 `seq`，作为摘要树叶子位置；Summary Node 以 `(scope, lo, hi)` 存储。
-- 取代（Supersede）= 写入新 Memory（新 `seq`）+ 旧 Memory 标记 `superseded` 并指向新 Memory。覆盖旧 `seq` 的 Summary Node 标记失效，Core Memory 跳过失效节点、下探到子节点或有效原始行，并重新排入压缩队列。
-- 删除也是状态变更，不物理删除；写入、取代、删除都追加一条版本记录（操作者、原因、前后内容）。
-- Core Memory 预算按 Token 计算（`ceil(UTF-8 字节 / 3)`，默认每 scope 1500），按行数限制的旧规则已废弃。
-- 一次性导入旧 `LOG.txt`（`seq` = 行号，来源 legacy、可信度 agent_inferred）与 `TREE/` 节点，之后旧文件移入 `memory/legacy/`。
-- 自动提取只产生 `candidate`：候选不进入 `wake()` 渲染与只读导出，由用户晋升或驳回。
+- 每条 Memory 有按 Scope 递增、不可变的 `seq`，只表示插入顺序与引用，不再承担树叶子位置。
+- Core Memory 由 `memories.core` 标记：新写入默认 `core = false`（可检索但非常驻）；`core: true` 或 `select #seq` 显式选入；`deselect #seq` 只移出 Core，不改变 active 状态，也不等于 `forget`。
+- 预算按 Token 计算（`ceil(UTF-8 字节 / 3)`，默认每 scope 1500），覆盖**最终渲染文本**：序号、类型、可信度、换行和用量页脚都计入。选入超额原子拒绝并返回当前用量；运行时不静默裁剪、不静默驱逐、不维护永远超额的 selected 列表。
+- 取代（Supersede）= 写入新 Memory（新 `seq`）+ 旧 Memory 标记 `superseded` 并指向新 Memory。旧 Memory 立即离开 Core，且不会被自动重新选入。修订优先保证纠正生效：替换放不下时新事实仍保存、`coreDropped` 明确返回，旧事实不保留在 Core。
+- 删除也是状态变更，不物理删除；写入、取代、删除、选入、移出、补证据都追加一条版本记录（操作者、原因、前后内容）。
+- 来源贯穿写入与读取：操作者与来源分开；`source: "user"` 只在存储语句与当前用户输入整体在空白规范化后**完全相等**时确认（大小写/否定/路径均保留），系统唤醒、Worker 输入、通知正文、截取/翻译/改写/概括都不确认（降为 `agent_inferred` 并说明）；无论是否确认，`sourceRef` 都绑定**最新**输入 entry（`conv:<id>#<entry>`，图片/空文本输入也绑定但不确认），修订引用本次纠正而非旧来源。
+- 同 Scope 规范化空白后完全相同的正文精确去重（大小写保留），重复写返回原 `#seq`；新的用户确认/来源追加 `evidence` 版本、重建导出并推进版本号而不丢失；历史行不会被不加区分地复活。写入、修订、删除、选入、移出都以 durable `taskId:callId` 幂等；`revise` 到相同正文仍走补证据路径。
+- 一次性导入旧 `LOG.txt`（`seq` = 行号，来源 legacy、可信度 agent_inferred），旧文件移入 `memory/legacy/`；旧 `TREE/` 只移入 legacy，不再导入。升级时对既有 active 记忆做一次确定性 Core 选择（用户确认优先，其次 preference/decision，按 `seq` 逐条校验预算），其余保留可检索；结果记录在 `memory_meta`，同版本重开不重做。
+- 自动提取只产生 `candidate`：候选不进入 `wake()` 渲染与只读导出，promote 只把候选转为 active，仍需用户或 Chief 显式 `select` 才常驻；候选的 supersede 目标在等待期间被用户修订时，晋升失败而不是覆盖新事实。
 
-**后果**：服务把有效 Memory 与未失效摘要单向导出到 `<scope>/memory/MEMORY.md` 供工兵和人阅读，手改导出文件不会写回；Summary Node 是 Agent 写的派生内容，可信度不高于它覆盖的 Memory，不得作为高优先级指令；数据库版本变化由升级事务备份与回滚覆盖（见 [service.md](service.md)）。
+**后果**：服务把有效 Memory（标注是否 `[core]`）与 Core 用量单向导出到 `<scope>/memory/MEMORY.md` 供工兵和人阅读，手改导出文件不会写回；旧 `memory_nodes` 在升级事务中改名为 `memory_nodes_retired`，仅保留现场、不再读取，新库不创建；Core 的取舍从"压缩算法"变成显式选择，需要模型或用户主动管理，但不会再因递归摘要丢掉原始事实，也不会让过期摘要复活；数据库版本变化由升级事务备份与回滚覆盖（见 [service.md](service.md)）。
 
 ---
 
@@ -121,7 +124,9 @@ History 与审计落在 `tian.db` 的两个区域：`events` 保存已发生的�
 - **派生索引**：`history_entries` 以 `(conversation_id, entry_id)` 为主键；FTS5 用 `trigram` 分词（中文可检索）。事件索引进同一张 FTS 表，以 `conversation_id = ''` 区分，引用为 `event:<id>`。
 - **增量同步**：`history_cursors` 记录每个会话已索引的最大 entry id（事件用单独游标），按 entry id 升序分页，只处理游标之后的部分；删表后一次全量同步即可恢复。
 - **同步时机**：启动后后台补齐（不阻塞启动）、会话有新输入或 watch 推送变化后延迟补同步、每次检索前对目标 scope 惰性补齐；维护模式下暂停。
-- **检索**：trigram 无法匹配少于 3 个字符的词，这些词改用 `LIKE`；多词按 AND 组合。结果按 FTS rank、再按时间倒序，去重后按约 1500 token（`ceil(utf8Bytes/3)` 估算）截断，无命中明确返回 `(no matches)`。
+- **检索**：trigram 无法匹配少于 3 个字符的词，这些词改用 `LIKE`；多词按 AND 组合。Memory、History、Notes 共用同一套查询计划（`worker/search.ts`），避免三份重复算法。结果按 FTS rank、再按时间倒序，去重后按约 1500 token（`ceil(utf8Bytes/3)` 估算）截断，无命中明确返回 `(no matches)`。
+- **长内容**：tool args / results 以**完整源单元**入索引（每条 call / result 一行，不设持久截断阈值），不在任意 chunk 边界切词或截断尾部，跨词多词查询不会漏检；搜索结果引用始终指向整个 entry，`read_history` 按 ref 从原始 transcript（或完整可重建索引）分页展开，返回 `chars a-b of n` 与 continuation offset，Unicode 按 code point 分页。多消息 entry 以 `:msg:<n>` 区分，tool call 以 `:call:<n>` 区分（编号跨整个 entry），`read_history` 默认输出有界，邻居只显示单行预览。
+- **索引格式升级**：格式版本记录在 `memory_meta`；不匹配时清空全部派生表与**所有**游标（会话、事件、Memory Worker），由下一次同步从 Pi 与 Event 表自动重建。rowid 在重建后没有意义，保留任何旧游标都会漏掉来源；Memory Worker 依赖既有精确/相似去重避免候选重复，已驳回的候选不会复活。
 - **引用**：`conv:<conversation>#<entry>` 与 `event:<id>`；`read_history` 用 entry id 窗口展开上下文，事件显示 actor、summary 与 payload。
 
 **后果**：History 可随时删除重建，索引格式变化不需要迁移数据（Pi storage 损坏才是不可恢复的）；索引写入不进 Pi 事务，崩溃后最多丢一段未同步的尾部，下次同步补齐；事件成为审计来源，审批与 Task 只需 `record`，不必各自设计日志；检索质量受 trigram 限制，两字中文词走 `LIKE` 全表扫描，数据量继续增长后需评估 bigram 或额外 n-gram 索引。

@@ -162,10 +162,17 @@ export function toRows(view: ConversationView | undefined): {
           text: '— context compacted —',
         });
         break;
-      default:
-        if (!e.kind.startsWith('pi.')) {
-          rows.push({ id: `e${e.id}`, role: 'system', text: `[${e.kind}]` });
-        }
+      default: {
+        if (e.kind.startsWith('pi.')) break;
+        // System wakes (goal, run, inbox notifications) and worker input keep
+        // their own entry kinds; show their text as a system row.
+        const text = textOf(msg?.content);
+        rows.push({
+          id: `e${e.id}`,
+          role: 'system',
+          text: text || `[${e.kind}]`,
+        });
+      }
     }
   }
 

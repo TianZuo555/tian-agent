@@ -3,6 +3,8 @@ import type { Db } from './db.js';
 import type { EventLog } from './events.js';
 import type { MemoryKind } from './memory.js';
 import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
+import { MAX_MEMORY_CHARS } from './memory.js';
+import { codePointLength } from './search.js';
 
 /**
  * Memory Worker (PRD §4.4 F03): background candidate extraction inside the
@@ -96,7 +98,6 @@ export interface RunResult {
 
 const DEFAULT_MIN_INTERVAL_MS = 30_000;
 const MAX_SOURCES = 200;
-const MAX_BYTES = 280;
 const CURSOR_PREFIX = 'memory-worker:';
 /** Similarity at or above this means "same memory", not a new one. */
 const DUPLICATE_SIMILARITY = 0.8;
@@ -112,7 +113,8 @@ const emptyResult = (scopeId: string): RunResult => ({
 });
 
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
-const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
+/** Candidate length follows the same rule as direct writes. */
+const tooLong = (text: string) => codePointLength(text) > MAX_MEMORY_CHARS;
 const sha = (value: string) =>
   createHash('sha256').update(value).digest('hex').slice(0, 16);
 
@@ -441,6 +443,10 @@ export function isNoise(source: MemorySource): boolean {
   // Tool output repeats across runs; only prose and business events count.
   if (source.kind === 'tool_call' || source.kind === 'tool_result') return true;
   if (source.kind === 'event') return true; // handled by the goal engine's own stores
+  // System wakes (goal/schedule/run/inbox) and worker prompts are task
+  // guidance, never durable facts about the user or project.
+  if (source.role === 'system.notification' || source.role === 'worker.input')
+    return true;
   if (matches(CHITCHAT_PATTERNS, text)) return true;
   if (matches(INSTRUCTION_PATTERNS, text)) return true;
   if (matches(TRANSIENT_PATTERNS, text)) return true;
@@ -475,7 +481,7 @@ export class HeuristicExtractor implements MemoryExtractor {
       const text = focusSentence(source.text, patterns)
         .replace(/^[-*•]\s*/, '')
         .trim();
-      if (!text || bytes(text) > MAX_BYTES) continue;
+      if (!text || tooLong(text)) continue;
       results.push({ text, kind, confidence, sourceRef: source.ref });
     }
     return results;
@@ -712,12 +718,12 @@ export class MemoryWorker {
       let duplicates = 0;
       for (const item of extracted) {
         const text = normalize(item.text);
-        if (!text || bytes(text) > MAX_BYTES) continue;
+        if (!text || tooLong(text)) continue;
         if (this.isDuplicate(scopeId, text, known)) {
           duplicates++;
           continue;
         }
-        memory.candidate({
+        const stored = memory.candidate({
           text,
           kind: item.kind,
           confidence: item.confidence,
@@ -725,6 +731,11 @@ export class MemoryWorker {
           supersedes: resolveConflict(text, item.kind, active),
           reason: `memory worker: ${trigger}`,
         });
+        if (!stored) {
+          // Another row already carries this normalized text (exact dedupe).
+          duplicates++;
+          continue;
+        }
         known.push(text);
         candidates++;
       }

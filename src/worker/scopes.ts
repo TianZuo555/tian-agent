@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { MemoryStore } from './memory.js';
+import { planSearch, tokenCost } from './search.js';
 import type { Db, ProjectRow } from './db.js';
 import type { InboxItem } from '../shared/types.js';
 import { atomicWrite } from './files.js';
@@ -72,7 +73,13 @@ export class Scopes {
         scopeId,
         join(this.ensureDirs(scopeId), 'memory'),
       );
-      this.memories.set(scopeId, m);
+      // Never cache a store whose initialization (legacy import, initial Core
+      // selection, export) ran inside a transaction that may still roll back:
+      // a cached object would outlive the rolled-back marker and later be
+      // treated as pre-existing data. Callers that need a write inside
+      // `Db.once` resolve the store first, so this path only serves defensive
+      // use and the next call re-initializes from committed state.
+      if (!this.db.inTransaction) this.memories.set(scopeId, m);
     }
     return m;
   }
@@ -113,23 +120,73 @@ export class Scopes {
     return join(this.notesDir(scopeId), safe);
   }
 
-  searchNotes(scopeId: string, pattern: string): string {
-    let re: RegExp;
-    try {
-      re = new RegExp(pattern, 'i');
-    } catch {
-      throw new Error(`bad regex: ${pattern}`);
-    }
+  /**
+   * Keyword search over notes, with the same AND semantics as memory and
+   * history: every whitespace-separated term must appear on the line
+   * (case-insensitive substring). Results are bounded and addressable as
+   * `file.md:<line>`, which read_note can open directly.
+   */
+  searchNotes(scopeId: string, query: string, limit = 40): string {
+    // Same query planning as memory and history: whitespace terms, all of them
+    // required (AND), matched case-insensitively per line.
+    const plan = planSearch(query);
+    if (plan.terms.length === 0)
+      throw new Error('search query cannot be empty');
+    const terms = plan.terms.map((term) => term.toLowerCase());
+    const bounded = Math.min(Math.max(limit, 1), 100);
+    const SNIPPET_BUDGET = 160;
     const hits: string[] = [];
-    for (const f of this.listNotes(scopeId)) {
-      const lines = readFileSync(join(this.notesDir(scopeId), f), 'utf8').split(
-        '\n',
-      );
-      lines.forEach((l, i) => {
-        if (re.test(l)) hits.push(`${f}:${i + 1}: ${l}`);
+    let more = 0;
+    for (const file of this.listNotes(scopeId)) {
+      if (more > 0) break;
+      const lines = readFileSync(
+        join(this.notesDir(scopeId), file),
+        'utf8',
+      ).split('\n');
+      lines.forEach((line, index) => {
+        const lower = line.toLowerCase();
+        if (!terms.every((term) => lower.includes(term))) return;
+        if (hits.length >= bounded) {
+          more++;
+          return;
+        }
+        const text = line.trim();
+        let snippet = [...text].slice(0, 400).join('');
+        if (tokenCost(snippet) > SNIPPET_BUDGET) {
+          const chars = [...snippet];
+          let end = chars.length;
+          while (
+            end > 1 &&
+            tokenCost(chars.slice(0, end).join('')) > SNIPPET_BUDGET
+          )
+            end--;
+          snippet = `${chars.slice(0, end).join('')}…`;
+        }
+        hits.push(`${file}:${index + 1}: ${snippet}`);
       });
     }
-    return hits.length === 0 ? '(no matches)' : hits.slice(0, 100).join('\n');
+    if (hits.length === 0) return '(no matches)';
+    return more > 0
+      ? `${hits.join('\n')}\n… more matches; narrow the query`
+      : hits.join('\n');
+  }
+
+  /** Read one note, or a bounded window around a `file.md:<line>` hit. */
+  readNoteWindow(scopeId: string, ref: string): string {
+    const match = /^(.*?):(\d+)$/.exec(ref.trim());
+    if (!match) return this.readNote(scopeId, ref);
+    const [, name, rawLine] = match;
+    const line = Number.parseInt(rawLine, 10);
+    const lines = this.readNote(scopeId, name).split('\n');
+    const at = Math.min(Math.max(line - 1, 0), lines.length - 1);
+    const from = Math.max(0, at - 20);
+    const to = Math.min(lines.length, at + 21);
+    return [
+      `${name}:${from + 1}-${to}`,
+      ...lines
+        .slice(from, to)
+        .map((text, index) => `${from + index + 1}: ${text}`),
+    ].join('\n');
   }
 
   // ---- inbox (file-based: .tian/inbox/<ts>-<rand>.md, read marker .tian/inbox/.read)

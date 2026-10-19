@@ -197,15 +197,24 @@ test('promote renders in Core Memory (applying conflicts); dismiss never comes b
     .promote(candidate.seq, 'user');
   assert.equal(promoted.status, 'active');
   assert.equal(promoted.trustLevel, 'agent_inferred');
+  // Promotion is user approval, not Core selection: the fact is active and
+  // searchable, and becomes resident only when explicitly selected.
+  assert.equal(promoted.core, false);
   assert.equal(superseded?.status, 'superseded');
-  assert.equal(superseded.supersededBy, promoted.id);
-  const wake = f.scopes.memory('p1').wake();
-  assert.match(wake, /deploy on Mondays/);
-  // The superseded #0 no longer renders; the promoted line mentions the old
-  // day only inside its own sentence.
-  assert.doesNotMatch(wake, /#0/);
+  assert.equal(superseded?.core, false);
+  assert.equal(superseded?.supersededBy, promoted.id);
+  assert.doesNotMatch(f.scopes.memory('p1').wake(), /Mondays/);
+  assert.match(
+    f.scopes.memory('p1').recall('deploy on Mondays'),
+    /deploy on Mondays/,
+  );
+  // The superseded #0 no longer appears in default recall.
   const recalled = f.scopes.memory('p1').recall('deploy on Fridays');
   assert.doesNotMatch(recalled, /#0/);
+  f.scopes.memory('p1').select(promoted.seq, 'user');
+  const wake = f.scopes.memory('p1').wake();
+  assert.match(wake, /deploy on Mondays/);
+  assert.doesNotMatch(wake, /#0/);
 
   // A plain candidate with no conflict: dismiss hides it for good.
   f.scopes.memory('global').remember({ text: 'Global fact', actor: 'chief' });
@@ -236,6 +245,109 @@ test('promote renders in Core Memory (applying conflicts); dismiss never comes b
   });
   assert.equal(again.candidates, 0);
   assert.equal(again.duplicates, 1);
+});
+
+test('system wakes and worker prompts never become candidates; long user facts survive', async (t) => {
+  const f = fixture(t, { minIntervalMs: 0 });
+  f.seed(
+    'p1',
+    row('1', '10', '[run finished] deploy report is ready', {
+      role: 'system.notification',
+    }),
+  );
+  f.seed(
+    'p1',
+    row('1', '11', 'Fix the flaky migration test', { role: 'worker.input' }),
+  );
+  f.seed(
+    'p1',
+    row(
+      '1',
+      '12',
+      `The import pipeline requires a clean cache directory ${'x'.repeat(900)} to run`,
+    ),
+  );
+  f.seed(
+    'p1',
+    row('1', '13', `A fact longer than the limit ${'y'.repeat(1100)}`),
+  );
+
+  const done = await f.worker.trigger('p1', 'task-completed');
+  assert.equal(done.candidates, 1);
+  const candidates = f.scopes
+    .memory('p1')
+    .dump()
+    .items.filter((item) => item.status === 'candidate');
+  assert.equal(candidates.length, 1);
+  // The 900-extra-characters fact (~908 code points) survives the 1000 limit.
+  assert.match(candidates[0].content, /import pipeline requires/);
+  assert.ok([...candidates[0].content].length <= 1000);
+  assert.doesNotMatch(
+    candidates.map((item) => item.content).join('\n'),
+    /run finished|Fix the flaky|y{20}/,
+  );
+});
+
+test('after an index rebuild the worker reprocesses history without reviving dismissed candidates', async (t) => {
+  const f = fixture(t, { minIntervalMs: 0 });
+  f.seed('p1', row('1', '10', 'I always prefer pnpm over npm for installs'));
+  const first = await f.worker.trigger('p1', 'task-completed');
+  assert.equal(first.candidates, 1);
+  const items = f.scopes.memory('p1').dump().items;
+  const candidate = items.find((item) => item.status === 'candidate')!;
+  // The user dismisses it; dedupe must remember that across a rebuild.
+  f.scopes.memory('p1').forget(candidate.seq, 'not useful', 'user');
+
+  // Index format upgrade: derived rows and ALL cursors are reset.
+  f.db.sqlite
+    .prepare(
+      "UPDATE memory_meta SET value = '0' WHERE key = 'history-index-format'",
+    )
+    .run();
+  const rebuilt = new HistoryIndex(
+    f.db,
+    {
+      conversation: () => Promise.reject(new Error('no conversations')),
+    },
+    f.events,
+  );
+  t.after(() => rebuilt.stop());
+  assert.equal(
+    (
+      f.db.sqlite
+        .prepare('SELECT COUNT(*) AS n FROM history_entries')
+        .get() as { n: number }
+    ).n,
+    0,
+  );
+  assert.equal(
+    (
+      f.db.sqlite
+        .prepare(
+          "SELECT COUNT(*) AS n FROM history_cursors WHERE conversation_id LIKE 'memory-worker:%'",
+        )
+        .get() as { n: number }
+    ).n,
+    0,
+  );
+
+  // Re-seed the same source (a rebuild repopulates the index from Pi) plus a
+  // NEW source; the worker re-collects from scratch without duplicates.
+  f.seed('p1', row('1', '10', 'I always prefer pnpm over npm for installs'));
+  f.seed('p1', row('1', '11', 'We decided to standardize on pnpm catalogs'));
+  const again = await f.worker.trigger('p1', 'task-completed', { force: true });
+  assert.equal(again.candidates, 1);
+  assert.equal(again.duplicates, 1);
+  const after = f.scopes.memory('p1').dump().items;
+  assert.equal(
+    after.filter((item) => item.status === 'candidate').length,
+    1,
+    'the dismissed preference must stay dismissed',
+  );
+  assert.match(
+    after.map((item) => item.content).join('\n'),
+    /standardize on pnpm catalogs/,
+  );
 });
 
 test('a throwing extractor leaves existing memory untouched and retries later', async (t) => {
@@ -274,6 +386,146 @@ test('a throwing extractor leaves existing memory untouched and retries later', 
   assert.equal(f.scopes.memory('p1').wake(), wakeBefore);
 });
 
+test('the service pages past long tool chains and distinguishes wakes from user input', async (t) => {
+  const { ResidentServer } = await import('../src/service/server');
+  const { servicePaths } = await import('../src/shared/service-paths');
+  const { ServiceClient } = await import('../src/service/client');
+  const root = temporary(t);
+  const paths = {
+    ...servicePaths(join(root, 'data')),
+    socketPath: join(root, 'agent.sock'),
+  };
+  const server = new ResidentServer(paths);
+  await server.start();
+  const client = new ServiceClient(paths.socketPath);
+  await client.start();
+  t.after(async () => {
+    client.close();
+    await server.close();
+  });
+  const service = server.service;
+  const conversation = await client.invoke('createConversation', ['global']);
+  const conversationId = conversation.conversationId;
+  const agents = (
+    service as unknown as {
+      agents: {
+        conversation(id: string): Promise<{
+          id: unknown;
+          commit: (
+            change: (tx: {
+              appendEntry: (
+                id: string,
+                entry: unknown,
+              ) => Promise<{ id: number }>;
+            }) => Promise<unknown>,
+            context: unknown,
+          ) => Promise<unknown>;
+        }>;
+      };
+    }
+  ).agents;
+  const { BACKGROUND_CONTEXT } = await import('@earendil-works/chord/context');
+  const chief = await agents.conversation(conversationId);
+  const append = (entry: unknown) =>
+    chief.commit(
+      (tx: {
+        appendEntry: (id: string, entry: unknown) => Promise<{ id: number }>;
+      }) => tx.appendEntry(chief.id as unknown as string, entry),
+      BACKGROUND_CONTEXT,
+    ) as Promise<{ id: number }>;
+  const userEntry = await append({
+    kind: 'pi.user',
+    model: [
+      {
+        role: 'user',
+        content: '记住项目用 pnpm',
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  // 45 assistant entries push the user turn far beyond a 30-entry window.
+  for (let i = 0; i < 45; i++)
+    await append({
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: `filler ${i}` }],
+          api: 'anthropic-messages',
+          provider: 'anthropic',
+          model: 'test-model',
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: 'stop',
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+  const svc = service as unknown as {
+    latestInputEntry(id: string): Promise<string | null>;
+    currentInput(id: string): Promise<{
+      entryId: string;
+      kind: string;
+      text: string;
+    } | null>;
+  };
+  const marker = await svc.latestInputEntry(conversationId);
+  // No input after the chain: the newest input is still the user turn.
+  assert.equal(marker, String(userEntry.id));
+  const input = await svc.currentInput(conversationId);
+  assert.equal(input?.kind, 'user');
+  assert.equal(input?.text, '记住项目用 pnpm');
+
+  // A user submission with no text (image-only) is still the newest input: the
+  // resolver must not walk back to the older textual turn.
+  await append({
+    kind: 'pi.user',
+    model: [
+      {
+        role: 'user',
+        content: [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }],
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  const imageInput = await svc.currentInput(conversationId);
+  assert.equal(imageInput?.kind, 'user');
+  assert.equal(imageInput?.text, '');
+
+  // A system wake becomes the newest input: it is the turn marker and is
+  // traceable, but it can never confirm user provenance.
+  const wakeEntry = await append({
+    kind: 'system.notification',
+    model: [
+      {
+        role: 'user',
+        content: '[goal wake] nightly check',
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  assert.equal(
+    await svc.latestInputEntry(conversationId),
+    String(wakeEntry.id),
+  );
+  const wake = await svc.currentInput(conversationId);
+  assert.equal(wake?.kind, 'system.notification');
+  assert.match(wake?.text ?? '', /goal wake/);
+});
+
 test('user revise/forget triggers an extraction pass through the service', async (t) => {
   const { ResidentServer } = await import('../src/service/server');
   const { servicePaths } = await import('../src/shared/service-paths');
@@ -293,7 +545,8 @@ test('user revise/forget triggers an extraction pass through the service', async
   });
   const service = server.service;
   service.data.remember('global', 'The chief wrote this', {
-    source: 'user',
+    sourceType: 'user',
+    trustLevel: 'user_confirmed',
   });
   // A preference in the history index that no conversation turn has seen yet.
   service.history.indexRows([

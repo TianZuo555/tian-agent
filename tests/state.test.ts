@@ -65,8 +65,7 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     memoryDump: async () => ({
       scopeId: 'global',
       items: [],
-      nodes: [],
-      pendingMerges: 0,
+      core: { budget: 1500, tokens: 20, selected: 0, active: 0 },
     }),
     listGoals: async () => [],
     listNotices: async () => [],
@@ -131,10 +130,18 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     abort: async () => {},
     addTask: async () => 1,
     doneTask: async () => {},
-    memoryRevise: async () => {},
+    memoryRevise: async () => ({
+      seq: 0,
+      supersededSeq: 0,
+      changed: true,
+      evidenceAdded: false,
+      coreDropped: false,
+    }),
     memoryForget: async () => {},
     memoryPromote: async () => {},
     memoryDismiss: async () => {},
+    memorySelect: async () => {},
+    memoryDeselect: async () => {},
     runReport: async () => '',
     runDiff: async () => '',
     skillList: async () => [],
@@ -233,8 +240,7 @@ test('memory writes refresh the active memory panel', async () => {
     memoryDump: async () => ({
       scopeId: 'global',
       items,
-      nodes: [],
-      pendingMerges: 0,
+      core: { budget: 1500, tokens: 20, selected: 0, active: items.length },
     }),
   });
   const store = createAppStore(mock.api);
@@ -250,6 +256,7 @@ test('memory writes refresh the active memory panel', async () => {
       sourceType: 'agent',
       sourceRef: null,
       confidence: null,
+      core: false,
       supersededBy: null,
       supersedes: null,
       createdAt: new Date().toISOString(),
@@ -259,6 +266,26 @@ test('memory writes refresh the active memory panel', async () => {
   mock.emit('memory', 'global');
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(store.getState().memory?.items, items);
+  cleanup();
+});
+
+test('a revision that drops out of Core surfaces a notice', async () => {
+  const mock = mockApi({
+    memoryRevise: async () => ({
+      seq: 3,
+      supersededSeq: 1,
+      changed: true,
+      evidenceAdded: false,
+      coreDropped: true,
+    }),
+  });
+  const store = createAppStore(mock.api);
+  const cleanup = store.actions.init();
+  await store.actions.refresh();
+  await store.actions.memoryRevise(1, 'longer corrected fact', 'corrected');
+  const notice = store.getState().memoryNotice;
+  assert.match(notice ?? '', /no longer fits Core Memory/);
+  assert.match(notice ?? '', /#3/);
   cleanup();
 });
 

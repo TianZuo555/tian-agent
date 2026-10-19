@@ -7,6 +7,7 @@ import type {
 import type { Db } from './db.js';
 import type { EventLog } from './events.js';
 import type { IssueReporter } from './improvements.js';
+import { escapeLike, pageText, planSearch, tokenCost } from './search.js';
 
 /** One searchable unit: a transcript excerpt, a tool call/result, or an event. */
 export interface HistoryRow {
@@ -35,30 +36,34 @@ export interface HistorySource {
 }
 
 const PAGE = 500;
-const TOOL_RESULT_CHARS = 2_000;
-const TOOL_ARGS_CHARS = 400;
-const READ_CHARS = 1_200;
-const TOKEN_BUDGET = 1_500; // estimated as ceil(utf8Bytes / 3)
+/**
+ * Tool payloads and messages are indexed as whole source units (one row per
+ * tool call, tool result, or message), so nothing at a chunk boundary or a
+ * truncation threshold becomes unfindable. The stored text is complete;
+ * output stays bounded only at the edges: FTS snippets in search results and
+ * paged reads in read_history.
+ */
+const TOKEN_BUDGET = 1_500;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const EVENTS_CURSOR = 'events';
 const EVENT_TEXT_CHARS = 400;
 const SYNC_DEBOUNCE_MS = 2_000;
+const INDEX_FORMAT = '4';
 
+/**
+ * Search results point at the whole entry, not the chunk that matched, so
+ * read_history can page the original text from its start.
+ */
 const refOf = (row: Pick<HistoryRow, 'conversationId' | 'entryId' | 'kind'>) =>
   row.kind === 'event'
     ? `event:${row.entryId}`
-    : `conv:${row.conversationId}#${row.entryId}`;
+    : `conv:${row.conversationId}#${row.entryId.replace(/:chunk:\d+$/, '')}`;
 
 const clock = (at: string) => `${at.slice(0, 16).replace('T', ' ')}`;
 
 const formatLine = (row: HistoryRow, text: string) =>
   `[${clock(row.at)}] ${refOf(row)} ${row.role ?? row.kind}: ${text}`;
-
-const codePoints = (value: string) => [...value].length;
-
-const escapeLike = (value: string) =>
-  value.replaceAll(/[\\%_]/g, (char) => `\\${char}`);
 
 /**
  * Derived, rebuildable full-text index over Pi transcripts (`pi-session.sqlite`
@@ -100,6 +105,41 @@ export class HistoryIndex {
         conversation_id TEXT PRIMARY KEY, last_entry TEXT NOT NULL, updated_at TEXT NOT NULL
       );
     `);
+    this.ensureIndexFormat();
+  }
+
+  private ensureIndexFormat(): void {
+    const row = this.db.sqlite
+      .prepare(
+        "SELECT value FROM memory_meta WHERE key = 'history-index-format'",
+      )
+      .get() as { value: string } | undefined;
+    if (row?.value === INDEX_FORMAT) return;
+    this.resetIndex();
+  }
+
+  /**
+   * Drop every derived row and cursor. After a rebuild the entry rowids are
+   * new, so ALL cursors are meaningless — conversation, events, and the memory
+   * worker's per-scope rowid cursors alike. The next sync rebuilds the index
+   * from Pi and the event log; the memory worker re-collects from the start and
+   * its exact-plus-similarity dedupe keeps dismissed candidates dismissed
+   * instead of duplicating them.
+   */
+  private resetIndex(): void {
+    this.db.transaction(() => {
+      this.db.sqlite.exec('DELETE FROM history_entries;');
+      this.db.sqlite.exec('DELETE FROM history_cursors;');
+      this.db.sqlite.exec(
+        "INSERT INTO history_fts(history_fts) VALUES('rebuild')",
+      );
+      this.db.sqlite
+        .prepare(
+          `INSERT INTO memory_meta (key, value) VALUES ('history-index-format', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        )
+        .run(INDEX_FORMAT);
+    });
   }
 
   // ---- sync ----------------------------------------------------------------
@@ -273,12 +313,7 @@ export class HistoryIndex {
 
   /** Drop everything and rebuild from the sources. */
   async resync(): Promise<void> {
-    this.db.sqlite.exec(
-      'DELETE FROM history_entries; DELETE FROM history_cursors;',
-    );
-    this.db.sqlite.exec(
-      "INSERT INTO history_fts(history_fts) VALUES('rebuild')",
-    );
+    this.resetIndex();
     await this.syncAll();
   }
 
@@ -318,23 +353,19 @@ export class HistoryIndex {
     limit: number,
     forceLike = false,
   ): (HistoryRow & { snippetText?: string })[] {
-    const terms = phrase.split(/\s+/).filter(Boolean);
-    const long = terms.filter((term) => codePoints(term) >= 3);
-    const short = terms.filter((term) => codePoints(term) < 3);
-    const useFts = !forceLike && long.length > 0;
+    const plan = planSearch(phrase);
+    const useFts = !forceLike && plan.match !== null;
     const clauses: string[] = [];
     const args: (string | number)[] = [];
     if (useFts) {
       clauses.push('history_fts MATCH ?');
-      args.push(
-        long.map((term) => `"${term.replaceAll('"', '""')}"`).join(' AND '),
-      );
-      for (const term of short) {
+      args.push(plan.match!);
+      for (const term of plan.short) {
         clauses.push("e.text LIKE ? ESCAPE '\\'");
         args.push(`%${escapeLike(term)}%`);
       }
     } else {
-      for (const term of terms) {
+      for (const term of plan.terms) {
         clauses.push("e.text LIKE ? ESCAPE '\\'");
         args.push(`%${escapeLike(term)}%`);
       }
@@ -373,7 +404,7 @@ export class HistoryIndex {
 
   private likeSnippet(text: string, phrase: string): string {
     const needle = phrase.split(/\s+/).find((term) => text.includes(term));
-    if (!needle) return text.slice(0, READ_CHARS);
+    if (!needle) return [...text].slice(0, 400).join('');
     const at = text.indexOf(needle);
     const start = Math.max(0, at - 80);
     const end = Math.min(text.length, at + needle.length + 120);
@@ -400,7 +431,7 @@ export class HistoryIndex {
       seen.add(ref);
       const text = row.snippetText ?? this.likeSnippet(row.text, phrase);
       const line = formatLine(row, text);
-      const cost = Math.ceil(Buffer.byteLength(line, 'utf8') / 3);
+      const cost = tokenCost(line);
       if (lines.length > 0 && cost > budget) break;
       lines.push(line);
       budget -= cost;
@@ -410,6 +441,7 @@ export class HistoryIndex {
 
   // ---- read ----------------------------------------------------------------
 
+  /** Indexed rows around an entry, using numeric entry ids for ordering. */
   private entryWindow(
     conversationId: string,
     base: number,
@@ -439,50 +471,231 @@ export class HistoryIndex {
       .all(conversationId, from, to) as unknown as HistoryRow[];
   }
 
-  private readEvent(id: string): string {
+  private readEvent(id: string, offset: number, limit: number): string {
     const event = this.events.get(id);
-    if (event)
-      return `[${clock(event.at)}] event:${event.id} ${event.actor} (${event.type}, scope ${event.scopeId})\n${event.summary}\npayload: ${event.payload}`;
-    const row = this.db.sqlite
-      .prepare(
-        `SELECT conversation_id AS conversationId, entry_id AS entryId, scope_id AS scopeId,
-          kind AS kind, role AS role, at AS at, text AS text
-        FROM history_entries WHERE conversation_id = '' AND entry_id = ?`,
-      )
-      .get(id) as HistoryRow | undefined;
-    return row ? formatLine(row, row.text) : `(no event ${id})`;
+    if (!event) {
+      const row = this.db.sqlite
+        .prepare(
+          `SELECT conversation_id AS conversationId, entry_id AS entryId, scope_id AS scopeId,
+            kind AS kind, role AS role, at AS at, text AS text
+          FROM history_entries WHERE conversation_id = '' AND entry_id = ?`,
+        )
+        .get(id) as HistoryRow | undefined;
+      return row ? formatLine(row, row.text) : `(no event ${id})`;
+    }
+    const full = `${event.summary}\npayload: ${event.payload}`;
+    if (offset >= [...full].length)
+      return `(offset ${offset} is beyond the end of event ${id} (${[...full].length} code points); use offset 0)`;
+    const page = pageText(full, offset, limit);
+    const range = `chars ${page.offset + 1}-${page.offset + [...page.page].length} of ${page.total}`;
+    const continuation =
+      page.next === null
+        ? 'end of event'
+        : `continued at read_history(ref="event:${id}", offset=${page.next})`;
+    return `[${clock(event.at)}] event:${event.id} ${event.actor} (${event.type}, scope ${event.scopeId}) (${range})\n${page.page}\n… ${continuation}`;
   }
 
-  /** Expand a `conv:<id>#<entry>` ref with neighbours, or show an `event:<id>`. */
-  async read(ref: string, around = 2): Promise<string> {
+  /** The indexed text of one ref, exactly as stored. */
+  private indexedText(conversationId: string, entryId: string): string | null {
+    const direct = this.db.sqlite
+      .prepare(
+        `SELECT text FROM history_entries WHERE conversation_id = ? AND entry_id = ?`,
+      )
+      .get(conversationId, entryId) as { text: string } | undefined;
+    return direct ? direct.text : null;
+  }
+
+  /**
+   * Resolve a ref against the original Pi transcript, using the same ref rules
+   * as the indexer: `<entry>` is the first message, `<entry>:msg:<n>` the n-th
+   * message, and `<entry>:call:<n>` the n-th tool call counted across ALL
+   * messages of the entry (the indexer numbers calls entry-wide). Returns null
+   * when the transcript is unavailable or lacks the ref.
+   */
+  private async originalText(
+    conversationId: string,
+    entryId: string,
+  ): Promise<string | null> {
+    const base = Number.parseInt(entryId, 10);
+    if (!Number.isFinite(base)) return null;
+    const msgMatch = /^\d+:msg:(\d+)$/.exec(entryId);
+    const callMatch = /^\d+:call:(\d+)$/.exec(entryId);
+    try {
+      const conversation = await this.source.conversation(conversationId);
+      const page = await conversation.entries(
+        {
+          order: 'ascending',
+          minEntryId: base as EntryId,
+          maxEntryId: base as EntryId,
+        },
+        1,
+        undefined,
+        BACKGROUND_CONTEXT,
+      );
+      const entry = page.items.find((item) => Number(item.id) === base);
+      if (!entry) return null;
+      const messages = entry.model ?? [];
+      if (callMatch) {
+        // Calls are numbered across the whole entry, not per message.
+        let remaining = Number(callMatch[1]);
+        for (const message of messages) {
+          if (message.role !== 'assistant') continue;
+          for (const block of message.content) {
+            if (block.type !== 'toolCall') continue;
+            if (remaining === 0)
+              return `${block.name}(${JSON.stringify(block.arguments)})`;
+            remaining--;
+          }
+        }
+        return null;
+      }
+      const messageIndex = msgMatch ? Number(msgMatch[1]) : 0;
+      const message = messages[messageIndex];
+      if (!message) return null;
+      if (message.role === 'user') return messageText(message.content) || null;
+      if (message.role === 'assistant') {
+        const text = message.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('')
+          .trim();
+        if (text && !callMatch) return text;
+        return null;
+      }
+      if (message.role === 'toolResult') {
+        const text = messageText(message.content);
+        return text ? `${message.toolName}: ${text}` : null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Expand a `conv:<id>#<entry>` ref, or show an `event:<id>`.
+   *
+   * Output is always bounded: the target entry is paged (default 2,000 code
+   * points) from the original transcript or its index, and neighbours render
+   * as one-line previews. `offset > 0` continues the target entry alone.
+   */
+  async read(
+    ref: string,
+    options: {
+      around?: number;
+      offset?: number;
+      limit?: number;
+    } = {},
+  ): Promise<string> {
     const trimmed = ref.trim();
     if (trimmed.startsWith('event:'))
-      return this.readEvent(trimmed.slice('event:'.length));
+      return this.readEvent(
+        trimmed.slice('event:'.length),
+        options.offset ?? 0,
+        options.limit ?? 2_000,
+      );
     const match = /^conv:([^#\s]+)#(.+)$/.exec(trimmed);
     if (!match)
       return `bad ref: ${trimmed} (expected conv:<id>#<entry> or event:<id>)`;
     const conversationId = match[1];
-    const base = Number.parseInt(match[2], 10);
+    const entryId = match[2];
+    const base = Number.parseInt(entryId, 10);
     if (!Number.isFinite(base)) return `bad ref: ${trimmed}`;
-    let window = this.entryWindow(conversationId, base, around);
-    if (window.length === 0) {
-      const known = this.knownConversations().find(
-        (row) => row.id === conversationId,
-      );
-      if (known) await this.syncConversation(known.id, known.scopeId);
-      window = this.entryWindow(conversationId, base, around);
+    const around = Math.min(Math.max(options.around ?? 2, 0), 20);
+    const offset = Math.max(options.offset ?? 0, 0);
+    const limit = Math.min(Math.max(options.limit ?? 2_000, 1), 8_000);
+    if (offset === 0 && around > 0) {
+      let window = this.entryWindow(conversationId, base, around);
+      if (window.length === 0) {
+        const known = this.knownConversations().find(
+          (row) => row.id === conversationId,
+        );
+        if (known) await this.syncConversation(known.id, known.scopeId);
+        window = this.entryWindow(conversationId, base, around);
+      }
+      if (window.length === 0)
+        return `(nothing indexed under ${conversationId})`;
     }
-    if (window.length === 0) return `(nothing indexed under ${conversationId})`;
-    return window
-      .map((row) =>
-        formatLine(
-          row,
-          row.text.length > READ_CHARS
-            ? `${row.text.slice(0, READ_CHARS)}…`
-            : row.text,
-        ),
+    const full =
+      (await this.originalText(conversationId, entryId)) ??
+      this.indexedText(conversationId, entryId);
+    if (full === null) {
+      // No text for this exact ref (a bare entry with only tool calls, or an
+      // unknown sub-ref). Say so and show bounded previews of the entry's
+      // indexed units instead of dumping the whole window.
+      const window = this.entryWindow(conversationId, base, around);
+      if (window.length === 0)
+        return `(no content indexed for ${trimmed}; check the ref — bare entries with only tool calls need :call:<n>, and unknown sub-refs have no content)`;
+      const heading = `(no text for ${trimmed}; showing ${window.length} indexed unit${window.length === 1 ? '' : 's'} of this entry as bounded previews)`;
+      return [heading, ...this.boundedPreviews(window)].join('\n');
+    }
+    if (offset >= [...full].length)
+      return `(offset ${offset} is beyond the end (${[...full].length} code points); use offset 0)`;
+    const page = pageText(full, offset, limit);
+    const row = this.db.sqlite
+      .prepare(
+        `SELECT conversation_id AS conversationId, entry_id AS entryId, scope_id AS scopeId,
+          kind AS kind, role AS role, at AS at, text AS text
+        FROM history_entries WHERE conversation_id = ? AND entry_id = ?`,
       )
-      .join('\n');
+      .get(conversationId, entryId) as HistoryRow | undefined;
+    const header = row
+      ? `[${clock(row.at)}] ${refOf(row)} ${row.role ?? row.kind}`
+      : trimmed;
+    const range = `chars ${page.offset + 1}-${page.offset + [...page.page].length} of ${page.total}`;
+    const continuation =
+      page.next === null
+        ? 'end of entry'
+        : `continued at read_history(ref="${trimmed}", offset=${page.next})`;
+    const expanded = `${header} (${range})\n${page.page}\n… ${continuation}`;
+    if (offset > 0 || around === 0) return expanded;
+    // Context view: the target entry expanded, neighbours as bounded one-line
+    // previews (deduplicated by ref), never their full payloads.
+    const lines = [expanded];
+    // Neighbours are other entries: sibling units of the same entry are not
+    // context for the exact ref (a tool call must not be padded with its
+    // message's prose), so they are skipped. Context itself has a total
+    // character budget so a long window cannot dominate the output.
+    lines.push(
+      ...this.boundedPreviews(
+        this.entryWindow(conversationId, base, around).filter(
+          (neighbor) => String(neighbor.entryId).split(':')[0] !== String(base),
+        ),
+      ),
+    );
+    return lines.join('\n');
+  }
+
+  /** Total character budget for context/preview output. */
+  private static readonly CONTEXT_BUDGET = 1_200;
+
+  /** Bounded preview lines with a single omission note when over budget. */
+  private boundedPreviews(rows: HistoryRow[]): string[] {
+    const lines: string[] = [];
+    let used = 0;
+    let omitted = 0;
+    for (const row of rows) {
+      const line = this.previewLine(row);
+      if (used + line.length > HistoryIndex.CONTEXT_BUDGET) {
+        omitted++;
+        continue;
+      }
+      used += line.length;
+      lines.push(line);
+    }
+    if (omitted > 0)
+      lines.push(
+        `… ${omitted} more unit${omitted === 1 ? '' : 's'} omitted (context budget)`,
+      );
+    return lines;
+  }
+
+  /** One bounded preview line for a context neighbour. */
+  private previewLine(row: HistoryRow): string {
+    const chars = [...row.text];
+    const preview =
+      chars.length <= 200 ? row.text : `${chars.slice(0, 200).join('')}…`;
+    return formatLine(row, preview);
   }
 }
 
@@ -522,9 +735,17 @@ function extractRows(
       scopeId,
       at,
     };
-    if (entry.kind === 'pi.user' && message.role === 'user') {
+    if (message.role === 'user') {
+      // Real user turns keep `user`; system notifications and worker input are
+      // indexed with their own kind so provenance and search stay honest.
       const text = messageText(message.content);
-      if (text) rows.push({ ...base, kind: 'message', role: 'user', text });
+      if (text)
+        rows.push({
+          ...base,
+          kind: 'message',
+          role: entry.kind === 'pi.user' ? 'user' : entry.kind,
+          text,
+        });
       return;
     }
     if (entry.kind === 'pi.assistant' && message.role === 'assistant') {
@@ -537,15 +758,15 @@ function extractRows(
         rows.push({ ...base, kind: 'message', role: 'assistant', text });
       for (const block of message.content) {
         if (block.type !== 'toolCall') continue;
-        let args = JSON.stringify(block.arguments);
-        if (args.length > TOOL_ARGS_CHARS)
-          args = `${args.slice(0, TOOL_ARGS_CHARS)}…`;
+        const callId = `${entry.id}:call:${callIndex++}`;
         rows.push({
           ...base,
-          entryId: `${entry.id}:call:${callIndex++}`,
+          entryId: callId,
           kind: 'tool_call',
           role: 'assistant',
-          text: `${block.name}(${args})`,
+          // One row per call, stored in full: a term anywhere in the args is
+          // searchable, and reads page the transcript.
+          text: `${block.name}(${JSON.stringify(block.arguments)})`,
         });
       }
       return;
@@ -553,15 +774,11 @@ function extractRows(
     if (entry.kind === 'pi.toolResult' && message.role === 'toolResult') {
       const text = messageText(message.content);
       if (!text) return;
-      const body =
-        text.length > TOOL_RESULT_CHARS
-          ? `${text.slice(0, TOOL_RESULT_CHARS)}…`
-          : text;
       rows.push({
         ...base,
         kind: 'tool_result',
         role: 'tool',
-        text: `${message.toolName}: ${body}`,
+        text: `${message.toolName}: ${text}`,
       });
     }
   });

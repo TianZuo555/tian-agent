@@ -76,22 +76,43 @@ export function historyTools(deps: HistoryDeps) {
   const readHistory = defineTool({
     name: 'read_history',
     description:
-      'Expand a search_history ref: "conv:<id>#<entry>" shows that entry with its neighbouring turns for context; "event:<id>" shows the recorded event (actor, summary, payload).',
+      'Read the full content behind a search_history ref, from the original transcript. "conv:<id>#<entry>" returns a page of that entry (long tool results and arguments included) with a continuation ref when more remains; "event:<id>" shows the recorded event. Pass offset from a previous continuation to keep reading.',
     parameters: Type.Object({
       ref: Type.String({
         description: 'A ref returned by search_history.',
       }),
+      offset: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description:
+            'Code-point offset to continue from (see the continuation line). Default 0.',
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 8000,
+          description: 'Maximum code points per page. Default 2000.',
+        }),
+      ),
       around: Type.Optional(
         Type.Integer({
           minimum: 0,
           maximum: 20,
-          description: 'Neighbouring entries on each side. Default 2.',
+          description:
+            'Neighbouring entries on each side when a ref has no content. Default 2.',
         }),
       ),
     }),
     execute: async (args) => {
       try {
-        return text(await deps.history.read(args.ref, args.around ?? 2));
+        return text(
+          await deps.history.read(args.ref, {
+            offset: args.offset ?? 0,
+            limit: args.limit,
+            around: args.around,
+          }),
+        );
       } catch (e) {
         return err(String(e));
       }
