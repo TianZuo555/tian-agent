@@ -1,6 +1,6 @@
 # Tian Agent
 
-一个长期在线的个人 Agent：一位总管（Chief）负责记忆、规划与汇报，按项目划分 scope；代码类任务交给在 Git worktree 中无人值守执行的工兵（Worker）。总管与工兵之间有双向消息通道：工兵可以边执行边提问并等待答复，总管也能中途下达指令。
+一个长期在线的个人 Agent：一位总管（Chief）负责记忆、规划与汇报，按项目划分 scope；每个项目还有一条持久的管理者（Manager）会话承接总管的委派，代码类任务最终交给在 Git worktree 中无人值守执行的工兵（Worker）。各层之间都有双向消息通道：工兵可以边执行边提问并等待答复，上级也能中途下达指令。
 
 总管运行在本机常驻 Node 服务中（launchd 管理，崩溃自动重启）；Electron App 是它的桌面客户端，Telegram Bot 是另一个聊天入口。会话可以结束，记忆、目标和责任不会消失。
 
@@ -15,6 +15,7 @@
 - **目标与任务**：用户管理目标，Agent 管理任务；cron 调度唤醒 Goal，每日预算与用户提醒。
 - **Run 与验收**：工兵在 worktree 中执行，支持多轮 follow-up；Land / Ship / Discard 验收。
 - **双向消息**：工兵 `ask_chief` 提问等待答复，总管 `send_run_msg` 回复或下达指令，线程持久化。
+- **项目管理者**：每个项目一条持久会话，总管以 Task 为单位委派项目管理，管理者执行、收口并回报；用户也可从侧栏直接打开管理者会话派活，直接派的活静默收口、不通知总管（见 [docs/agent-work.md](docs/agent-work.md#项目管理者)）。
 - **多入口**：App、Telegram 与 Inbox 文件邮箱各自独立会话，共享同一份 scope 记忆。
 - **常驻服务**：独立于 App 安装与升级，服务升级带回滚，App 支持导入新版并配套升级（见 [docs/service.md](docs/service.md)）。
 - **改进日志**：产品问题、摩擦、想法与成功经验；运行时异常自动去重记录，可提升为 Task。
@@ -35,7 +36,7 @@ mise run verify   # typecheck + lint + react-doctor + test
 | 文档                                               | 内容                                          |
 | -------------------------------------------------- | --------------------------------------------- |
 | [docs/development.md](docs/development.md)         | 工具链、任务、环境变量、测试与 React 代码质量 |
-| [docs/decisions.md](docs/decisions.md)             | 设计决策 D1–D11：为什么这样搭                 |
+| [docs/decisions.md](docs/decisions.md)             | 设计决策 D1–D12：为什么这样搭                 |
 | [docs/architecture.md](docs/architecture.md)       | 进程模型、桌面客户端、模块地图、权限与 scope  |
 | [docs/service.md](docs/service.md)                 | 常驻服务：安装、操作、升级与回滚              |
 | [docs/channels.md](docs/channels.md)               | 渠道与会话绑定，Telegram 接入，Inbox          |

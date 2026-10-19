@@ -115,19 +115,23 @@ Chief、Manager 或 Worker 的一次持久 Pi 会话；PRD 中的 "Session" 指�
 _Avoid_: session, chat, thread
 
 **Channel Binding**:
-（渠道、外部会话 ID、Scope）到一个 Conversation 的稳定映射，例如 Desktop、Telegram 或某个 Goal。
+（渠道、外部会话 ID、Scope）到一个 Conversation 的稳定映射，例如 Desktop、Telegram、某个 Goal 或某项目的 Manager。
 _Avoid_: session, connection
 
 **Inbox**:
 Scope 中供外部参与者投递消息的文件邮箱。
 _Avoid_: mailbox, task inbox
 
+**Archive（归档）**:
+把会话从侧栏收起并让出 Scope 级唤醒目标，不删除 transcript、不结束 Task；归档会话仍可被打开与检索。
+_Avoid_: delete, close
+
 **Task Board（任务看板）**:
 集中展示待处理、运行中、待审批、失败与最近完成 Task 的界面。
 _Avoid_: task inbox, schedule view, dashboard
 
 **Notification**:
-唤醒某个 Chief Conversation 的持久投递记录，按 ID 去重。
+唤醒某条 Chief 或 Manager Conversation 的持久投递记录，按 ID 去重。
 _Avoid_: alert, event, push
 
 **Approval（审批）**:

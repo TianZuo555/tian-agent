@@ -1,6 +1,6 @@
 # Tian Agent — 产品需求文档（PRD）
 
-版本：v0.3（v0.2 + 会话归档、跨 Scope 统一看板与可折叠 shell）
+版本：v0.4（v0.3 + 项目管理者（Manager）与 Tian 直连派活）
 状态：Draft
 产品类型：Always-on Personal Agent
 平台：macOS 优先；Linux / Windows 后续
@@ -49,14 +49,14 @@
 
 ## 2. 核心对象
 
-| 对象                    | 定义                                        | 生命周期   | 代码现状                                                                                                                             |
-| ----------------------- | ------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Goal                    | 用户希望长期达成或维持的结果                | 数天至数年 | 【已有】`goals` + Goal 专属会话 + 调度                                                                                               |
-| Task                    | 为 Goal（或独立）完成的一件具体工作         | 分钟至数天 | 【已有】状态机、`owner`、`trigger`、`dedupe_key`（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)）               |
-| Run                     | Worker 对代码类 Task 的一次隔离执行         | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                                                                      |
-| Conversation（Session） | 一次 Chief 或 Worker 的持久 Pi 会话，可归档 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`；归档标记在 `conversations.archived_at`                                                 |
-| Memory                  | 跨会话保留的事实与经验                      | 长期       | 【已有】SQLite、来源与版本、显式选择的 Core Memory（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)） |
-| Skill                   | 可复用、可验证的工作流程                    | 长期       | 【部分】`skills` 表、版本与人工审批；语义匹配与模型提取待做                                                                          |
+| 对象                    | 定义                                                 | 生命周期   | 代码现状                                                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Goal                    | 用户希望长期达成或维持的结果                         | 数天至数年 | 【已有】`goals` + Goal 专属会话 + 调度                                                                                                                                                                                      |
+| Task                    | 为 Goal（或独立）完成的一件具体工作                  | 分钟至数天 | 【已有】状态机、`owner`、`trigger`、`dedupe_key`、`assignee`/`report_to`（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)、[D12](decisions.md#d12--项目管理者每项目一条持久会话委派即-task-的三级链路)） |
+| Run                     | Worker 对代码类 Task 的一次隔离执行                  | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                                                                                                                                                             |
+| Conversation（Session） | 一次 Chief / Manager / Worker 的持久 Pi 会话，可归档 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`；归档标记在 `conversations.archived_at`；角色经 `ConversationInfo.role` 透出                                                                                                   |
+| Memory                  | 跨会话保留的事实与经验                               | 长期       | 【已有】SQLite、来源与版本、显式选择的 Core Memory（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)）                                                                                        |
+| Skill                   | 可复用、可验证的工作流程                             | 长期       | 【部分】`skills` 表、版本与人工审批；语义匹配与模型提取待做                                                                                                                                                                 |
 
 约束：
 
@@ -215,7 +215,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 ### 5.2 F07 — Task Orchestration　P0　【部分】
 
-现状：Task 已有状态机、`owner`、`trigger` / `trigger_ref`、唯一 `dedupe_key`、`attempts` / `max_attempts` 与 `outcome`；Run 具备队列、Attempt、follow-up、超时、恢复、执行与验收分离、幂等派发。尚未实现：失败退避与有限次自动重试（`attempts` 有记录但没有重试调度）、用户的 Pause / Resume / Steer 入口（状态与 `paused` 转换已存在，看板只提供勾选完成）。
+现状：Task 已有状态机、`owner`、`trigger` / `trigger_ref`、唯一 `dedupe_key`、`attempts` / `max_attempts` 与 `outcome`；`assignee='manager'` + `report_to` 把有边界的项目工作委派给项目管理者（见 [D12](decisions.md#d12--项目管理者每项目一条持久会话委派即-task-的三级链路)）。Run 具备队列、Attempt、follow-up、超时、恢复、执行与验收分离、幂等派发。尚未实现：失败退避与有限次自动重试（`attempts` 有记录但没有重试调度）、用户的 Pause / Resume / Steer 入口（状态与 `paused` 转换已存在，看板只提供勾选完成）。
 
 需求（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)）：
 
@@ -410,6 +410,7 @@ MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复
 | F    | Agent 想推送代码             | 审批前不执行；审批持久化；拒绝后无法绕过                | 部分（仅 UI 手动 Ship；approvals 在 `m3-approvals` 分支）           |
 | G    | 用户归档一个已结束的会话     | 侧栏收起但 History 仍可检索；Scope 级唤醒不再落在它上面 | 已有（`service.test.ts` 归档与恢复、`latestConversation` 排除归档） |
 | H    | 用户折叠侧栏后重启 App       | 折叠状态保留，标题栏给红绿灯留位                        | 部分（`state.test.ts` 覆盖存储初始化；折叠布局靠人工验证）          |
+| I    | 总管委派或直接给管理者派活   | 委派 Task 收口后回报发起总管；直连派的 Task 静默收口    | 已有（`manager.test.ts` 委派链路、Tian 轮次守卫与静默收口）         |
 
 ---
 

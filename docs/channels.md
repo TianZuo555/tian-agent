@@ -4,6 +4,8 @@
 
 例如 App 与 Telegram 都绑定 `global`：两条独立的聊天上下文，但每次请求加载同一份全局 Memory。只留在聊天记录里、没有沉淀为 Memory 的内容不会自动进入其他 Session。外部输入可向 `submit` 提供稳定 `requestId`，由 Durable 去重。
 
+`channel = 'manager'` 是保留的内部绑定：每个项目至多一条项目管理者会话（`external_id = scope_id = project_id`），公开 `openSession` 拒绝绑定它，面向用户的入口是 `openManager(projectId)`（见 [agent-work.md](agent-work.md#项目管理者)）。
+
 ## Telegram
 
 服务内置 Telegram Bot 适配器：Bot API long polling，无需公网入口。未配置 token 时适配器不启动，服务其余部分不受影响；网络故障按指数退避重试，不阻塞服务。

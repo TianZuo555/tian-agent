@@ -2,7 +2,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D11，按领域排序。当前 `DATABASE_VERSION = 6`、`SERVICE_PROTOCOL = 4`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D12，按领域排序。当前 `DATABASE_VERSION = 6`、`SERVICE_PROTOCOL = 5`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -20,7 +20,7 @@
 | 0009   | D10 Skill 以人工审批为唯一注入闸门（原文件重号）      |
 | 0010   | D11 改进日志                                          |
 
-> 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时按顺序追加为 D12。
+> 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时追加为下一个编号（当前应为 D13——D12 已由项目管理者占用）。
 
 ---
 
@@ -228,7 +228,7 @@ Improvement Log 是 `tian.db` 中一张独立的 `improvements` 表，记录值�
 - **自动捕获**：服务内有一个 `reportIssue(area, error, context)` 汇点，替换原先只写 `console.error` 的关键错误路径（启动/监听、Inbox、History 同步、通知投递、调度器、Run、Land/Discard/Ship、Telegram、渲染层未捕获异常）。条目按 `area + error name + code + message` 生成指纹；同一 Scope 内已有 `open` 或 `promoted` 的同指纹条目时只累加 `occurrences`、更新 `last_seen_at` 与更高的 severity。错误正文脱敏 bot token、`Bearer`、`sk-*`、`api_key` / `token` / `secret` / `password` 赋值。
 - **不阻塞主流程**：自动捕获与渲染层上报都是 best-effort，写入失败只回到 `console.error`；进程级 `uncaughtExceptionMonitor` 在 Node 默认崩溃路径之前尝试写入，数据库不可达时仍保留原有崩溃行为。
 - **提升为 Task**：`promote` 在同一事务里创建（或复用）一条带 `dedupe_key = improvement:<id>` 的待办 Task，并写回 `task_id` 与 `status = promoted`；重复点击不会创建第二条 Task。提升动作写入 `improvement.promoted` Event。
-- **UI**：左侧一级导航增加 Log，默认显示 `active`（open + promoted），可按状态、kind、Scope 过滤；行内展开详情并执行 Promote / Resolve / Dismiss / Reopen。侧栏 badge 只显示 `open` 数量，新条目默认写入当前 Scope。
+- **UI**：Log 面板位于 Settings 内（左侧锚点导航的 Log 段），默认显示 `active`（open + promoted），可按状态、kind、Scope 过滤；行内展开详情并执行 Promote / Resolve / Dismiss / Reopen。侧栏 Settings 齿轮上的 badge 只显示 `open` 数量，新条目默认写入当前 Scope。
 - **边界**：不替代 `service.log` 的原始调试输出，不自动生成 Memory，不进入每次 Prompt，也不承诺审计级的 append-only（状态可变）。Event 表保持业务事实与审计职责。
 
 **后果**：自动错误形成可浏览、可计数的待办，持续故障显示为一条 `×N` 记录；指纹只含错误语义、不含堆栈位置，同一版本内稳定，但不同原因可能共用一条记录；Log 视图默认跨 Scope，避免在项目会话中看不到 Global 的服务异常；新增协议命令与 `improvements` 事件使 `SERVICE_PROTOCOL` 升到 3，表由 `ImprovementStore` 自己创建、不改变 `DATABASE_VERSION`，旧服务忽略该表，新客户端不会连接旧协议服务。

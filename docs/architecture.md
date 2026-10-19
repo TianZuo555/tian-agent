@@ -9,7 +9,7 @@
 | Main     | 管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库                                    |
 | 常驻服务 | 唯一持有应用数据库与 Pi storage；执行模型调用、工具、Inbox、通知和 Run。客户端重连后重新获取快照与订阅        |
 
-总管、项目管理者和工兵共用服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵与项目管理者都是 Durable 会话，生命周期与桌面客户端独立。
+总管、项目管理者和工兵共用服务内的 Harness 与 Pi storage，各自显式选择 extension。三者都是 Durable 会话，生命周期与桌面客户端独立。
 
 ## 桌面客户端
 
@@ -33,19 +33,21 @@
 | `desktop/app-update.ts`        | App 校验、独立替换、启动检查与失败恢复                                             |
 | `shared/contracts.ts`          | IPC / socket 参数 schema、返回类型和消息合约                                       |
 | `shared/messages.ts`           | Pi transcript 转换为聊天快照                                                       |
-| `worker/service.ts`            | 应用组装、项目、总管会话、渠道绑定、Inbox 与通知                                   |
+| `worker/service.ts`            | 应用组装、项目、总管/管理者会话、渠道绑定、委派、Inbox 与通知                      |
 | `worker/commands.ts`           | 各 transport 共用的业务命令                                                        |
-| `worker/agents.ts`             | Pi API 适配和总管／工兵能力配置                                                    |
+| `worker/agents.ts`             | Pi API 适配和总管／管理者／工兵能力配置                                            |
 | `worker/magpie.ts`             | Magpie 网关 provider：模型发现与描述映射                                           |
 | `worker/settings.ts`           | 模型选择与缓存的模型目录                                                           |
 | `worker/tools.ts`              | 总管 extension：task、memory、notes、Inbox、dispatch、delegate 等                  |
 | `worker/manager-tools.ts`      | 项目管理者 extension：项目锁定的 task、memory、notes、runs、report_chief 等        |
 | `worker/tools-memory.ts`       | 总管／项目管理者共用的记忆工具与 scope 解析                                        |
-| `worker/tools-goals.ts`        | 总管目标工具：create_goal、update_goal、list_goals                                 |
+| `worker/tools-goals.ts`        | 目标工具与总管／管理者共用的任务执行工具（taskExecutionTools）                     |
 | `worker/tools-improvements.ts` | 总管改进工具：log_improvement、list_improvements                                   |
 | `worker/tools-history.ts`      | 总管检索工具：search_history、read_history                                         |
 | `worker/worker-tools.ts`       | 工兵消息工具：ask_chief、tell_chief、check_msgs                                    |
 | `worker/goals.ts`              | Goal 存储、用户提醒（`user_notices`）与每日预算                                    |
+| `worker/skills.ts`             | Skill 多版本注册表、审批状态机、注入匹配与经验提取                                 |
+| `worker/files.ts`              | 原子文件发布（临时文件 + rename）                                                  |
 | `worker/scheduler.ts`          | cron 解析与触发事务                                                                |
 | `worker/runs.ts`               | Run 状态、attempt、收集、恢复及验收                                                |
 | `worker/data.ts`               | task、memory、Inbox 操作和更新事件                                                 |

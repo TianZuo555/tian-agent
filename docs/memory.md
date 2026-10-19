@@ -40,7 +40,7 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 
 ## 来源（Provenance）
 
-操作者（谁执行写入：user / chief / worker）与来源（事实由谁陈述）分开记录：
+操作者（谁执行写入：user / chief / manager / worker）与来源（事实由谁陈述）分开记录。项目管理者的写入被锁定到其项目 scope——它可以读取 Global 记忆，但 `remember` / `revise` / `select` 等写操作只落在自己的项目里：
 
 - 服务在真实用户 `submit` 时记录普通 `pi.user` 条目；Goal / Schedule / Run / Inbox 的唤醒用 `system.notification` 条目，Worker 输入用 `worker.input`。所有输入都可分页定位，不受最近 30 条限制。
 - `remember` / `revise` 的 `source: "user"` 只在存储语句与**当前用户输入整体**在规范化空白后**完全相等**时确认（大小写、否定、标点、路径都保留）。系统唤醒、Worker 输入、以及历史上以通知正文写入的 `pi.user` 条目都不算；截取、改写、翻译、概括一律降为 `agent_inferred`，工具结果说明原因并提示记录用户原话。确认与否和 `sourceRef` 绑定是两件事：即使不确认，也会绑定当前输入 entry 便于追溯。
