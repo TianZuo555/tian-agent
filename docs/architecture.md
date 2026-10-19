@@ -36,8 +36,9 @@
 | `worker/agents.ts`             | Pi API 适配和总管／工兵能力配置                                                    |
 | `worker/magpie.ts`             | Magpie 网关 provider：模型发现与描述映射                                           |
 | `worker/settings.ts`           | 模型选择与缓存的模型目录                                                           |
-| `worker/tools.ts`              | 总管 extension：task、memory、notes、Inbox、dispatch 等                            |
-| `worker/tools-memory.ts`       | 总管记忆工具与 scope 解析                                                          |
+| `worker/tools.ts`              | 总管 extension：task、memory、notes、Inbox、dispatch、delegate 等                  |
+| `worker/manager-tools.ts`      | 项目管理者 extension：项目锁定的 task、memory、notes、runs、report_chief 等        |
+| `worker/tools-memory.ts`       | 总管／项目管理者共用的记忆工具与 scope 解析                                        |
 | `worker/tools-goals.ts`        | 总管目标工具：create_goal、update_goal、list_goals                                 |
 | `worker/tools-improvements.ts` | 总管改进工具：log_improvement、list_improvements                                   |
 | `worker/tools-history.ts`      | 总管检索工具：search_history、read_history                                         |
@@ -61,7 +62,9 @@
 
 ## 权限与 scope
 
-总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch、Run 查询与 Run 消息（`send_run_msg` / `list_run_msgs`），没有 `bash/read/write/edit`；读取 Run 结果用 `read_run_report` / `read_run_diff`。启动时会重新限制已有总管会话的 extension。
+总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch、delegate（`delegate` / `send_manager_msg` / `list_manager_msgs`）、Run 查询与 Run 消息（`send_run_msg` / `list_run_msgs`），没有 `bash/read/write/edit`；读取 Run 结果用 `read_run_report` / `read_run_diff`。启动时会重新限制已有总管会话的 extension。
+
+项目管理者启用 manager extension，由 `channel_sessions` 中 `channel = 'manager'`、`external_id = project_id` 的绑定决定，每项目一条持久会话，首次 `delegate` 时惰性创建；`channel = 'manager'` 是保留 channel，公开 `openSession` 不能绑定它。它的工具全部锁定本项目 scope：任务执行（`delegate` 产生的 `assignee='manager'` Task 归它收口，总管不再能 start/complete/fail）、Run 管理（`dispatch` 只许本项目的 Task，把 `chief_conversation_id` 指到自己，工兵的提问与结果回到管理者）、记忆写入只许本项目（可读 Global），notes 与 history 同理；没有 shell / 编码工具。上行用 `report_chief` / `ask_chief` 走 `manager_messages` 持久线程（kind/task_id/reply_to/closed_at），通知按委派 Task 的 `report_to` 路由到对应总管会话。
 
 工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可执行中用 `ask_chief` 提问并阻塞等待答复，用 `tell_chief` 发进度通知，用 `check_msgs` 接收总管指令。工兵被要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，不提供操作系统文件访问沙箱。
 

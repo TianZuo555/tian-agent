@@ -74,6 +74,10 @@ export interface TaskItem {
   triggerRef: string | null;
   /** Unique creation key (e.g. `sched:<id>:<fireAt>`); restarts never duplicate a task. */
   dedupeKey: string | null;
+  /** 'manager' when the task was delegated to the project's manager; NULL = whoever. */
+  assignee: 'manager' | null;
+  /** Chief conversation the manager reports to for this task; delegated tasks only. */
+  reportTo: string | null;
   attempts: number;
   maxAttempts: number;
   startedAt: string | null;

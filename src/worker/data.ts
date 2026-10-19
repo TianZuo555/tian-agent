@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentMessageRow, Db } from './db.js';
+import type {
+  AgentMessageRow,
+  Db,
+  ManagerMessageKind,
+  ManagerMessageRow,
+} from './db.js';
 import type {
   MemoryActor,
   MemoryKind,
@@ -213,5 +218,59 @@ export class DataService {
   runMessages(runId: string): AgentMessageRow[] {
     if (!this.db.getRun(runId)) throw new Error(`Unknown run: ${runId}`);
     return this.db.listAgentMessages(runId);
+  }
+
+  /**
+   * Append to a project's chief↔manager thread (durable record). `sender` is
+   * 'chief' for delegations/guidance/answers, 'manager' for reports and
+   * questions; delivery to the other side is the caller's job (notifications).
+   */
+  postManagerMessage(input: {
+    projectId: string;
+    sender: 'chief' | 'manager';
+    body: string;
+    kind?: ManagerMessageKind;
+    taskId?: number | null;
+    replyTo?: string | null;
+    operationId?: string;
+  }): ManagerMessageRow {
+    if (!this.db.getProject(input.projectId))
+      throw new Error(`Unknown project: ${input.projectId}`);
+    if (!input.body.trim()) throw new Error('Message body cannot be empty');
+    return this.db.once(input.operationId, () =>
+      this.db.addManagerMessage({
+        id: `mm:${input.projectId}:${input.operationId ?? randomUUID()}`,
+        projectId: input.projectId,
+        sender: input.sender,
+        kind: input.kind,
+        taskId: input.taskId,
+        replyTo: input.replyTo,
+        body: input.body.trim(),
+      }),
+    );
+  }
+
+  managerMessages(projectId: string): ManagerMessageRow[] {
+    if (!this.db.getProject(projectId))
+      throw new Error(`Unknown project: ${projectId}`);
+    return this.db.listManagerMessages(projectId);
+  }
+
+  /**
+   * The chief conversation a manager's report/question should reach: the
+   * given task's reportTo first (only when that task lives in this
+   * project — a foreign task must not leak the report into another
+   * project's chief), then the latest delegated task's reportTo, else
+   * null (scope-level notification fallback).
+   */
+  managerReportTarget(
+    projectId: string,
+    taskId?: number | null,
+  ): string | null {
+    if (taskId != null) {
+      const task = this.db.getTask(taskId);
+      if (task?.scopeId === projectId && task.reportTo) return task.reportTo;
+    }
+    return this.db.latestDelegatedTask(projectId)?.reportTo ?? null;
   }
 }

@@ -50,6 +50,30 @@ export interface AgentMessageRow {
   deliveredAt: string | null;
 }
 
+export type ManagerMessageKind =
+  | 'delegation'
+  | 'message'
+  | 'question'
+  | 'answer'
+  | 'report';
+
+export interface ManagerMessageRow {
+  id: string;
+  /** Insertion order within the project's chief↔manager thread. */
+  seq: number;
+  projectId: string;
+  sender: 'chief' | 'manager';
+  kind: ManagerMessageKind;
+  /** Related task (delegation, report, question context); null when none. */
+  taskId: number | null;
+  /** Id of the 'question' row an 'answer' replies to. */
+  replyTo: string | null;
+  /** For kind='question': when ask_chief stopped waiting (answered or timed out). */
+  closedAt: string | null;
+  body: string;
+  createdAt: string;
+}
+
 const snake = (key: string) =>
   key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const row = <T>(value: unknown): T =>
@@ -128,6 +152,11 @@ export class Db {
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL, sender TEXT NOT NULL,
         body TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS manager_messages (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, sender TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'message', task_id INTEGER, reply_to TEXT,
+        closed_at TEXT, body TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
+      );
       CREATE TABLE IF NOT EXISTS notifications (
         id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, conversation_id TEXT, content TEXT NOT NULL, delivered_at TEXT
       );
@@ -136,6 +165,7 @@ export class Db {
       CREATE INDEX IF NOT EXISTS conversations_scope ON conversations(scope_id, created_at);
       CREATE INDEX IF NOT EXISTS runs_project_status ON runs(project_id, status);
       CREATE INDEX IF NOT EXISTS agent_messages_run ON agent_messages(run_id);
+      CREATE INDEX IF NOT EXISTS manager_messages_project ON manager_messages(project_id);
     `);
       this.ensureColumns('projects', {
         allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
@@ -153,6 +183,14 @@ export class Db {
         max_attempts: 'INTEGER NOT NULL DEFAULT 3',
         started_at: 'TEXT',
         updated_at: 'TEXT',
+        assignee: 'TEXT',
+        report_to: 'TEXT',
+      });
+      this.ensureColumns('manager_messages', {
+        kind: "TEXT NOT NULL DEFAULT 'message'",
+        task_id: 'INTEGER',
+        reply_to: 'TEXT',
+        closed_at: 'TEXT',
       });
       this.ensureColumns('runs', {
         chief_conversation_id: 'TEXT',
@@ -455,13 +493,48 @@ export class Db {
         .all(),
     );
   }
+  /**
+   * Latest conversation in a scope that scope-level wakes may target.
+   * Manager conversations are excluded: untargeted notifications
+   * (inbox scans, goal wakes) belong to the chief, not the project manager.
+   */
   latestConversation(scopeId: string): ConversationRow | undefined {
     const value = this.db
       .prepare(
-        'SELECT * FROM conversations WHERE scope_id = ? ORDER BY created_at DESC LIMIT 1',
+        `SELECT * FROM conversations WHERE scope_id = ?
+        AND conversation_id NOT IN (SELECT conversation_id FROM channel_sessions WHERE channel = 'manager')
+        ORDER BY created_at DESC LIMIT 1`,
       )
       .get(scopeId);
     return value ? row(value) : undefined;
+  }
+
+  /** The project manager conversation bound via channel 'manager', if any. */
+  managerConversation(projectId: string): ConversationRow | undefined {
+    return this.channelSession({
+      channel: 'manager',
+      externalId: projectId,
+      scopeId: projectId,
+    });
+  }
+  isManagerConversation(conversationId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 FROM channel_sessions WHERE channel = 'manager' AND conversation_id = ?",
+        )
+        .get(conversationId),
+    );
+  }
+  /** Every conversation id currently bound as a project manager. */
+  managerConversationIds(): string[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT conversation_id FROM channel_sessions WHERE channel = 'manager'",
+        )
+        .all() as { conversation_id: string }[]
+    ).map((value) => value.conversation_id);
   }
 
   addTask(scopeId: string, title: string, due: string | null): number {
@@ -578,6 +651,8 @@ export class Db {
       trigger: 'manual' as const,
       triggerRef: null,
       dedupeKey: null,
+      assignee: null,
+      reportTo: null,
       attempts: 0,
       maxAttempts: 3,
       due: null,
@@ -588,8 +663,8 @@ export class Db {
       updatedAt: now,
     };
     const statement = this.db.prepare(
-      `INSERT INTO tasks (scope_id,title,status,goal_id,owner,outcome,summary,trigger,trigger_ref,dedupe_key,attempts,max_attempts,due,started_at,created_at,done_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+      `INSERT INTO tasks (scope_id,title,status,goal_id,owner,outcome,summary,trigger,trigger_ref,dedupe_key,assignee,report_to,attempts,max_attempts,due,started_at,created_at,done_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
     );
     const info = statement.run(
       value.scopeId,
@@ -602,6 +677,8 @@ export class Db {
       value.trigger,
       value.triggerRef,
       value.dedupeKey,
+      value.assignee,
+      value.reportTo,
       value.attempts,
       value.maxAttempts,
       value.due,
@@ -828,6 +905,105 @@ export class Db {
           )
           .run(new Date().toISOString(), id);
     });
+  }
+
+  addManagerMessage(
+    value: Omit<
+      ManagerMessageRow,
+      'createdAt' | 'closedAt' | 'seq' | 'kind' | 'taskId' | 'replyTo'
+    > & {
+      kind?: ManagerMessageKind;
+      taskId?: number | null;
+      replyTo?: string | null;
+    },
+  ): ManagerMessageRow {
+    this.db
+      .prepare(
+        `INSERT INTO manager_messages (id,project_id,sender,kind,task_id,reply_to,body,created_at)
+        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      )
+      .run(
+        value.id,
+        value.projectId,
+        value.sender,
+        value.kind ?? 'message',
+        value.taskId ?? null,
+        value.replyTo ?? null,
+        value.body,
+        new Date().toISOString(),
+      );
+    const record = this.db
+      .prepare('SELECT rowid AS seq, * FROM manager_messages WHERE id = ?')
+      .get(value.id) as Record<string, unknown>;
+    if (!record) throw new Error(`Unknown manager message: ${value.id}`);
+    return row<ManagerMessageRow>(record);
+  }
+  managerMessage(id: string): ManagerMessageRow | undefined {
+    const value = this.db
+      .prepare('SELECT rowid AS seq, * FROM manager_messages WHERE id = ?')
+      .get(id);
+    return value ? row<ManagerMessageRow>(value) : undefined;
+  }
+  /** Look up a thread row by its display seq (what tools and prompts cite). */
+  managerMessageBySeq(
+    projectId: string,
+    seq: number,
+  ): ManagerMessageRow | undefined {
+    const value = this.db
+      .prepare(
+        'SELECT rowid AS seq, * FROM manager_messages WHERE project_id = ? AND rowid = ?',
+      )
+      .get(projectId, seq);
+    return value ? row<ManagerMessageRow>(value) : undefined;
+  }
+  listManagerMessages(projectId: string): ManagerMessageRow[] {
+    return rows(
+      this.db
+        .prepare(
+          'SELECT rowid AS seq, * FROM manager_messages WHERE project_id = ? ORDER BY rowid',
+        )
+        .all(projectId),
+    );
+  }
+  /** The chief's answer to a question row — what a waiting manager polls for. */
+  managerAnswerTo(
+    projectId: string,
+    questionId: string,
+  ): ManagerMessageRow | undefined {
+    const value = this.db
+      .prepare(
+        "SELECT rowid AS seq, * FROM manager_messages WHERE project_id = ? AND sender = 'chief' AND kind = 'answer' AND reply_to = ? ORDER BY rowid LIMIT 1",
+      )
+      .get(projectId, questionId);
+    return value ? row<ManagerMessageRow>(value) : undefined;
+  }
+  /**
+   * Close a question and re-check for an answer in one transaction, so a
+   * reply landing between timeout and close is never lost. Returns the
+   * answer if one exists.
+   */
+  closeManagerQuestion(
+    projectId: string,
+    questionId: string,
+  ): ManagerMessageRow | undefined {
+    return this.transaction(() => {
+      this.db
+        .prepare(
+          'UPDATE manager_messages SET closed_at = ? WHERE id = ? AND closed_at IS NULL',
+        )
+        .run(new Date().toISOString(), questionId);
+      return this.managerAnswerTo(projectId, questionId);
+    });
+  }
+
+  /** The most recently created task delegated to the project's manager. */
+  latestDelegatedTask(projectId: string): TaskRow | undefined {
+    const value = this.db
+      .prepare(
+        "SELECT * FROM tasks WHERE scope_id = ? AND assignee = 'manager' AND report_to IS NOT NULL ORDER BY id DESC LIMIT 1",
+      )
+      .get(projectId);
+    return value ? row<TaskRow>(value) : undefined;
   }
 
   importMessage(scopeId: string, message: InboxItem): void {

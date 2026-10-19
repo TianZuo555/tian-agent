@@ -1,7 +1,7 @@
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import { GLOBAL_SCOPE } from './scopes.js';
-import type { Db } from './db.js';
+import type { Db, TaskRow } from './db.js';
 import type { GoalStore, GoalUpdate } from './goals.js';
 import { parseCron } from './scheduler.js';
 
@@ -17,6 +17,31 @@ export interface GoalsToolDeps {
   emitNotice: (scopeId: string) => void;
   /** An extraction trigger fires when the chief completes a task (PRD §4.4). */
   onTaskCompleted?: (scopeId: string) => void;
+}
+
+export interface TaskToolDeps {
+  db: Db;
+  /** Push task updates to clients after a tool write. */
+  emitUpdates: () => void;
+  /** An extraction trigger fires when a task completes (PRD §4.4). */
+  onTaskCompleted?: (scopeId: string) => void;
+  /**
+   * When set (the project manager), task tools refuse tasks outside this
+   * scope, resolved from the calling conversation.
+   */
+  taskScope?: (conversationId: string) => string;
+  /**
+   * Refuse start/complete/fail on tasks carrying this assignee. The chief
+   * passes 'manager' so delegated work stays the manager's to run.
+   */
+  refuseAssignee?: 'manager';
+  /**
+   * Append the update_goal reminder to complete_task results. Default true;
+   * the manager passes false — goals stay with the chief.
+   */
+  goalReminder?: boolean;
+  /** Called after complete_task / fail_task writes the new status. */
+  onTaskClosed?: (task: TaskRow, operationId: string) => void | Promise<void>;
 }
 
 const text = (t: string) => ({ output: [{ type: 'text' as const, text: t }] });
@@ -66,11 +91,6 @@ export function goalsTools(deps: GoalsToolDeps): ToolRegistration[] {
     const goal = goals.getGoal(id);
     if (!goal) throw new Error(`Unknown goal: ${id}`);
     return goal;
-  };
-  const requireTask = (id: number) => {
-    const task = db.getTask(id);
-    if (!task) throw new Error(`Unknown task: ${id}`);
-    return task;
   };
   const scheduleSummary = (id: string): string => {
     const schedules = goals.listSchedules(id);
@@ -280,87 +300,11 @@ export function goalsTools(deps: GoalsToolDeps): ToolRegistration[] {
     },
   });
 
-  const startTask = defineTool({
-    name: 'start_task',
-    replay: 'safe',
-    description:
-      'Mark a pending task as running (counts one attempt). Finish it with complete_task or fail_task.',
-    parameters: Type.Object({ task: TaskParam }),
-    execute: async (args, api) => {
-      try {
-        const task = requireTask(args.task);
-        if (task.attempts >= task.maxAttempts)
-          return err(
-            `task #${task.id} used all ${task.maxAttempts} attempts — try a different approach or create a new task.`,
-          );
-        const updated = db.once(`start-task:${api.taskId}:${api.callId}`, () =>
-          db.updateTaskStatus(task.id, 'running', { countAttempt: true }),
-        );
-        changed();
-        return text(`task #${updated.id} is running.`);
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
-  const completeTask = defineTool({
-    name: 'complete_task',
-    replay: 'safe',
-    description:
-      'Complete a task with its outcome: achieved, not_achieved, or no_change (nothing worth reporting; do not notify Tian in that case). A one-line summary records what happened.',
-    parameters: Type.Object({
-      task: TaskParam,
-      outcome: OutcomeParam,
-      summary: Type.Optional(
-        Type.String({
-          description: 'One line: what was done and what it changed.',
-        }),
-      ),
-    }),
-    execute: async (args, api) => {
-      try {
-        const task = requireTask(args.task);
-        const updated = db.once(
-          `complete-task:${api.taskId}:${api.callId}`,
-          () =>
-            db.updateTaskStatus(task.id, 'completed', {
-              outcome: args.outcome,
-              summary: args.summary ?? null,
-            }),
-        );
-        changed();
-        deps.onTaskCompleted?.(updated.scopeId);
-        return text(
-          `task #${updated.id} completed (${updated.outcome}). Remember update_goal to record the new state and next action.`,
-        );
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
-  const failTask = defineTool({
-    name: 'fail_task',
-    replay: 'safe',
-    description:
-      'Fail a task with the reason (blocked, missing access, repeated failure). The reason is visible to Tian.',
-    parameters: Type.Object({
-      task: TaskParam,
-      reason: Type.String(),
-    }),
-    execute: async (args, api) => {
-      try {
-        const task = requireTask(args.task);
-        const updated = db.once(`fail-task:${api.taskId}:${api.callId}`, () =>
-          db.updateTaskStatus(task.id, 'failed', { summary: args.reason }),
-        );
-        changed();
-        return text(`task #${updated.id} failed: ${args.reason}`);
-      } catch (e) {
-        return err(String(e));
-      }
-    },
+  // Delegated tasks belong to the manager: the chief steers them with
+  // send_manager_msg, never start/complete/fail.
+  const [startTask, completeTask, failTask] = taskExecutionTools({
+    ...deps,
+    refuseAssignee: 'manager',
   });
 
   const notifyUser = defineTool({
@@ -405,4 +349,117 @@ export function goalsTools(deps: GoalsToolDeps): ToolRegistration[] {
     failTask,
     notifyUser,
   ];
+}
+
+/**
+ * The task lifecycle tools shared by chief and project manager: claim a
+ * pending task, then close it with an outcome or a failure. `taskScope`
+ * confines a manager to its own project's tasks.
+ */
+export function taskExecutionTools(deps: TaskToolDeps): ToolRegistration[] {
+  const { db } = deps;
+  const changed = () => deps.emitUpdates();
+
+  const requireTask = (id: number, conversationId: string) => {
+    const task = db.getTask(id);
+    if (!task) throw new Error(`Unknown task: ${id}`);
+    if (deps.taskScope && task.scopeId !== deps.taskScope(conversationId))
+      throw new Error(`task #${id} belongs to another scope`);
+    if (deps.refuseAssignee && task.assignee === deps.refuseAssignee)
+      throw new Error(
+        `task #${id} is delegated to the ${db.getProject(task.scopeId)?.name ?? task.scopeId} manager — use send_manager_msg`,
+      );
+    return task;
+  };
+
+  const startTask = defineTool({
+    name: 'start_task',
+    replay: 'safe',
+    description:
+      'Mark a pending task as running (counts one attempt). Finish it with complete_task or fail_task.',
+    parameters: Type.Object({ task: TaskParam }),
+    execute: async (args, api) => {
+      try {
+        const task = requireTask(args.task, String(api.conversationId));
+        if (task.attempts >= task.maxAttempts)
+          return err(
+            `task #${task.id} used all ${task.maxAttempts} attempts — try a different approach or create a new task.`,
+          );
+        const updated = db.once(`start-task:${api.taskId}:${api.callId}`, () =>
+          db.updateTaskStatus(task.id, 'running', { countAttempt: true }),
+        );
+        changed();
+        return text(`task #${updated.id} is running.`);
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const completeTask = defineTool({
+    name: 'complete_task',
+    replay: 'safe',
+    description:
+      'Complete a task with its outcome: achieved, not_achieved, or no_change (nothing worth reporting; do not notify Tian in that case). A one-line summary records what happened.',
+    parameters: Type.Object({
+      task: TaskParam,
+      outcome: OutcomeParam,
+      summary: Type.Optional(
+        Type.String({
+          description: 'One line: what was done and what it changed.',
+        }),
+      ),
+    }),
+    execute: async (args, api) => {
+      try {
+        const task = requireTask(args.task, String(api.conversationId));
+        const operationId = `complete-task:${api.taskId}:${api.callId}`;
+        const updated = db.once(operationId, () =>
+          db.updateTaskStatus(task.id, 'completed', {
+            outcome: args.outcome,
+            summary: args.summary ?? null,
+          }),
+        );
+        changed();
+        deps.onTaskCompleted?.(updated.scopeId);
+        await deps.onTaskClosed?.(updated, operationId);
+        const reminder =
+          deps.goalReminder !== false && updated.goalId
+            ? ' Remember update_goal to record the new state and next action.'
+            : '';
+        return text(
+          `task #${updated.id} completed (${updated.outcome}).${reminder}`,
+        );
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const failTask = defineTool({
+    name: 'fail_task',
+    replay: 'safe',
+    description:
+      'Fail a task with the reason (blocked, missing access, repeated failure). The reason is visible to Tian.',
+    parameters: Type.Object({
+      task: TaskParam,
+      reason: Type.String(),
+    }),
+    execute: async (args, api) => {
+      try {
+        const task = requireTask(args.task, String(api.conversationId));
+        const operationId = `fail-task:${api.taskId}:${api.callId}`;
+        const updated = db.once(operationId, () =>
+          db.updateTaskStatus(task.id, 'failed', { summary: args.reason }),
+        );
+        changed();
+        await deps.onTaskClosed?.(updated, operationId);
+        return text(`task #${updated.id} failed: ${args.reason}`);
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  return [startTask, completeTask, failTask];
 }

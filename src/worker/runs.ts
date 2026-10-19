@@ -95,8 +95,14 @@ export class RunOrchestrator {
         this.db.getProject(input.projectRef) ??
         this.db.projectByName(input.projectRef);
       if (!project) throw new Error(`Unknown project: ${input.projectRef}`);
-      if (input.taskId != null && !this.db.getTask(input.taskId))
-        throw new Error(`Unknown task: ${input.taskId}`);
+      if (input.taskId != null) {
+        const task = this.db.getTask(input.taskId);
+        if (!task) throw new Error(`Unknown task: ${input.taskId}`);
+        if (task.scopeId !== project.id)
+          throw new Error(
+            `task #${input.taskId} belongs to ${task.scopeId}, not ${project.id}`,
+          );
+      }
       if (project.agentKind !== 'durable-worker')
         throw new Error(`Unsupported agent kind: ${project.agentKind}`);
       const isGit = await Git.isGitRepo(project.rootPath);
@@ -153,7 +159,11 @@ export class RunOrchestrator {
       this.events?.record({
         id: `run:${id}:dispatched`,
         type: 'run.dispatched',
-        actor: input.chiefConversationId ? 'chief' : 'system',
+        actor: !input.chiefConversationId
+          ? 'system'
+          : this.db.isManagerConversation(input.chiefConversationId)
+            ? 'manager'
+            : 'chief',
         scopeId: run.projectId,
         runId: id,
         conversationId: input.chiefConversationId,
@@ -364,7 +374,10 @@ export class RunOrchestrator {
       run.error ? `error: ${run.error}` : '',
       `Report:\n${report.slice(0, 12_000)}`,
       diffstat ? `Diffstat:\n${diffstat}` : '',
-      'Record lasting outcomes with note and tell Tian briefly. Read more with read_run_report or read_run_diff.',
+      run.chiefConversationId &&
+      this.db.isManagerConversation(run.chiefConversationId)
+        ? 'Read more with read_run_report or read_run_diff. Judge the result, close its task, and report_chief what matters.'
+        : 'Record lasting outcomes with note and tell Tian briefly. Read more with read_run_report or read_run_diff.',
     ]
       .filter(Boolean)
       .join('\n\n');

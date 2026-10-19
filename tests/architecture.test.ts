@@ -312,6 +312,9 @@ test('chief and worker capabilities remain separate, including previously contam
     sendRunMessage: (runId, body, operationId) =>
       data.sendRunMessage(runId, body, operationId),
     runMessages: (runId) => data.runMessages(runId),
+    delegateToManager: () => Promise.reject(new Error('not used here')),
+    sendManagerMessage: () => Promise.reject(new Error('not used here')),
+    managerMessages: () => [],
   });
   const worker = workerExtension({ db: f.db, wake: async () => {} });
   await agents.open(extension, worker);

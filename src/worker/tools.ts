@@ -5,10 +5,17 @@ import {
 } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
-import type { AgentMessageRow, Db, RunRow } from './db.js';
+import type {
+  AgentMessageRow,
+  Db,
+  ManagerMessageRow,
+  RunRow,
+  TaskRow,
+} from './db.js';
 import type { DataService } from './data.js';
 import {
   ScopeParam,
+  coreMemorySection,
   memoryTools,
   resolveScope,
   toolErr as err,
@@ -54,6 +61,36 @@ export interface ChiefDeps {
   ) => AgentMessageRow;
   /** Read the durable message thread between the chief and a run's worker. */
   runMessages: (runId: string) => AgentMessageRow[];
+  /**
+   * Hand a management assignment to a project's manager: creates the
+   * delegated task (assignee='manager', reportTo=this conversation) and the
+   * delegation thread row, then wakes the manager.
+   */
+  delegateToManager: (input: {
+    projectId: string;
+    chiefConversationId: string;
+    title: string;
+    briefing: string;
+    goalId?: string | null;
+    operationId: string;
+  }) => Promise<{ task: TaskRow; message: ManagerMessageRow }>;
+  /**
+   * Post to a project's manager thread. With `replyTo` (a question seq) the
+   * answer goes straight to the waiting manager; otherwise the manager is
+   * woken. `delivered` reports which path was taken.
+   */
+  sendManagerMessage: (input: {
+    projectId: string;
+    body: string;
+    replyTo?: number;
+    taskId?: number;
+    operationId: string;
+  }) => Promise<{
+    message: ManagerMessageRow;
+    delivered: 'waiting' | 'woken';
+  }>;
+  /** Read the durable chief↔manager thread of a project. */
+  managerMessages: (projectId: string) => ManagerMessageRow[];
   /**
    * Newest input entry of ANY kind (user submission, system wake, worker
    * input). This is the Core-snapshot turn marker: a notification-driven
@@ -111,6 +148,8 @@ DISPATCH. You command, others execute. You have no shell and cannot edit code �
 
 WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
+MANAGERS. Each project can have a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. delegate(project, title, briefing, goal?) hands it a management task: the task is assigned to the manager and you are woken when it closes with the outcome. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Delegated tasks are the manager's — do not start_task/complete_task/fail_task or send_run_msg its runs yourself; steer with send_manager_msg. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate substantial multi-step project work; keep one-off questions and quick code changes on dispatch yourself.
+
 SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to remember.
 
 HISTORY. Everything said or done stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. The scope defaults to this conversation's scope; pass scope "all" to search everything. If nothing matches, say plainly that no record was found — never invent history.
@@ -119,48 +158,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     { tag: false },
   );
 
-  //
-  // Core Memory snapshot: the rendered text lands in the cacheable system-prompt
-  // prefix, so it is computed once per conversation and refreshed only when a
-  // new user turn starts AND the scope's memory version changed since. Writes
-  // within a turn reach the model through the tool results instead.
-  const snapshots = new Map<
-    string,
-    { text: string; version: string; turn: string | null }
-  >();
-  const renderMemory = (scope: string): string => {
-    const parts: string[] = [];
-    parts.push(`[global]\n${scopes.memory(GLOBAL_SCOPE).wake()}`);
-    if (scope !== GLOBAL_SCOPE) {
-      const project = db.getProject(scope);
-      parts.push(
-        `[project: ${project?.name ?? scope}]\n${scopes.memory(scope).wake()}`,
-      );
-    }
-    return parts.join('\n\n');
-  };
-
-  const memorySection = section('memory', async (input) => {
-    const conversationId = String(input.conversationId);
-    const scope = db.conversationScope(conversationId);
-    const version = `${scopes.memory(GLOBAL_SCOPE).version()}/${scope === GLOBAL_SCOPE ? '' : scopes.memory(scope).version()}`;
-    let turn: string | null;
-    try {
-      turn = await deps.latestInputEntry(conversationId);
-    } catch {
-      turn = `unavailable-${Date.now()}`; // degradation: recompute every request
-    }
-    const cached = snapshots.get(conversationId);
-    if (cached && cached.turn === turn) return cached.text;
-    if (cached && cached.version === version) {
-      cached.turn = turn; // new turn but unchanged memory: keep the snapshot
-      return cached.text;
-    }
-    const rendered = renderMemory(scope);
-    if (snapshots.size > 200) snapshots.clear();
-    snapshots.set(conversationId, { text: rendered, version, turn });
-    return rendered;
-  });
+  const memorySection = coreMemorySection(deps);
 
   const stateSection = section('state', (input) => {
     const scope = db.conversationScope(String(input.conversationId));
@@ -197,7 +195,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         lines.push(`tasks (${tasks.length}):`);
         for (const t of tasks.slice(0, 10))
           lines.push(
-            `  #${t.id} [${t.status}] ${t.title}${t.due ? ` (due ${t.due})` : ''}${t.goalId ? ` [goal ${t.goalId}]` : ''}`,
+            `  #${t.id} [${t.status}] ${t.assignee === 'manager' ? '(manager) ' : ''}${t.title}${t.due ? ` (due ${t.due})` : ''}${t.goalId ? ` [goal ${t.goalId}]` : ''}`,
           );
       }
       const running = db
@@ -318,7 +316,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         tasks
           .map(
             (t) =>
-              `#${t.id} [${t.status}] ${t.owner === 'agent' ? '(agent) ' : ''}${t.title}${t.due ? ` due:${t.due}` : ''}${t.goalId ? ` goal:${t.goalId}` : ''}`,
+              `#${t.id} [${t.status}] ${t.assignee === 'manager' ? '(manager) ' : t.owner === 'agent' ? '(agent) ' : ''}${t.title}${t.due ? ` due:${t.due}` : ''}${t.goalId ? ` goal:${t.goalId}` : ''}`,
           )
           .join('\n'),
       );
@@ -564,6 +562,14 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     }),
     execute: async (args, api) => {
       try {
+        const run = db.getRun(args.run);
+        if (
+          run?.chiefConversationId &&
+          db.isManagerConversation(run.chiefConversationId)
+        )
+          return err(
+            `run ${args.run} is steered by the ${db.getProject(run.projectId)?.name ?? run.projectId} manager — use send_manager_msg.`,
+          );
         deps.sendRunMessage(
           args.run,
           args.body,
@@ -599,6 +605,142 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     },
   });
 
+  const delegate = defineTool({
+    name: 'delegate',
+    replay: 'safe',
+    description:
+      "Hand a management task to a project's manager — a persistent agent that owns that project's tasks, memory, notes and coding runs. Creates a task assigned to the manager; you are woken when it closes with the outcome. For one-off code changes prefer dispatch.",
+    parameters: Type.Object({
+      project: Type.String({
+        description: 'Project name or id (must be a project, not global).',
+      }),
+      title: Type.String({
+        description: 'One line: what the manager should achieve.',
+      }),
+      briefing: Type.String({
+        description:
+          'Full management briefing — the context, constraints, and what to report back. The manager sees this project only.',
+      }),
+      goal: Type.Optional(
+        Type.String({
+          description:
+            'Goal id this task advances; must belong to the same project.',
+        }),
+      ),
+    }),
+    execute: async (args, api) => {
+      const scope = resolveScope(
+        deps,
+        String(api.conversationId),
+        args.project,
+      );
+      if (scope === GLOBAL_SCOPE)
+        return err('delegate needs a project scope — pass a project name.');
+      const goal = args.goal ? deps.goals.getGoal(args.goal) : null;
+      if (args.goal && !goal) return err(`Unknown goal: ${args.goal}`);
+      if (goal && goal.scopeId !== scope)
+        return err(
+          `goal ${goal.id} belongs to ${goal.scopeId}, not ${scope} — delegate it to that project instead.`,
+        );
+      try {
+        const { task } = await deps.delegateToManager({
+          projectId: scope,
+          chiefConversationId: String(api.conversationId),
+          title: args.title,
+          briefing: args.briefing,
+          goalId: goal?.id ?? null,
+          operationId: `delegate:${api.taskId}:${api.callId}`,
+        });
+        return text(
+          `delegated as task #${task.id} to the ${db.getProject(scope)?.name ?? scope} manager. You'll be woken when it closes.`,
+        );
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const sendManagerMsg = defineTool({
+    name: 'send_manager_msg',
+    replay: 'safe',
+    description:
+      "Send a message to a project's manager — an answer to its ask_chief, or new guidance on its thread. An answer goes straight to the waiting manager; anything else wakes it.",
+    parameters: Type.Object({
+      project: Type.String({ description: 'Project name or id.' }),
+      body: Type.String({
+        description: 'Short, concrete, self-contained answer or instruction.',
+      }),
+      reply_to: Type.Optional(
+        Type.Number({
+          description:
+            'Question seq the manager is waiting on (from its ask_chief wake).',
+        }),
+      ),
+      task: Type.Optional(
+        Type.Number({
+          description: 'Delegated task id this message refers to.',
+        }),
+      ),
+    }),
+    execute: async (args, api) => {
+      const scope = resolveScope(
+        deps,
+        String(api.conversationId),
+        args.project,
+      );
+      if (scope === GLOBAL_SCOPE)
+        return err(
+          'send_manager_msg needs a project scope — pass a project name.',
+        );
+      try {
+        const result = await deps.sendManagerMessage({
+          projectId: scope,
+          body: args.body,
+          replyTo: args.reply_to,
+          taskId: args.task,
+          operationId: `send-mgr-msg:${api.taskId}:${api.callId}`,
+        });
+        return text(
+          result.delivered === 'waiting'
+            ? 'answer handed to the waiting manager.'
+            : 'message delivered — the manager was woken.',
+        );
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const listManagerMsgs = defineTool({
+    name: 'list_manager_msgs',
+    description:
+      "Read the durable message thread between you and a project's manager — delegations, reports, questions and answers.",
+    parameters: Type.Object({
+      project: Type.String({ description: 'Project name or id.' }),
+    }),
+    execute: async (args, api) => {
+      const scope = resolveScope(
+        deps,
+        String(api.conversationId),
+        args.project,
+      );
+      try {
+        const messages = deps.managerMessages(scope);
+        if (messages.length === 0) return text('(no messages)');
+        return text(
+          messages
+            .map(
+              (m) =>
+                `#${m.seq} [${m.kind}]${m.taskId != null ? ` task:#${m.taskId}` : ''}${m.replyTo ? ` re:#${db.managerMessage(m.replyTo)?.seq ?? m.replyTo}` : ''} [${m.createdAt}] ${m.sender === 'chief' ? 'you' : 'manager'}:\n${m.body}`,
+            )
+            .join('\n---\n'),
+        );
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
   return defineExtension({
     name: 'chief',
     sections: [preamble, memorySection, stateSection],
@@ -622,6 +764,9 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       readRunDiff,
       sendRunMsg,
       listRunMsgs,
+      delegate,
+      sendManagerMsg,
+      listManagerMsgs,
       ...historyTools(deps.history),
       ...goalTools,
       ...improvementTools(deps),

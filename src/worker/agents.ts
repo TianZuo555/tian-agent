@@ -21,6 +21,7 @@ export class AgentRuntime implements WorkerRuntime {
   private models: ReturnType<Settings['models']> | undefined;
   private chief!: Extension;
   private worker!: Extension;
+  private manager?: Extension;
   constructor(
     private userDataDir: string,
     private globalDir: string,
@@ -41,12 +42,18 @@ export class AgentRuntime implements WorkerRuntime {
       this.models.setProvider(provider);
   }
 
-  async open(chief: Extension, worker: Extension): Promise<void> {
+  async open(
+    chief: Extension,
+    worker: Extension,
+    manager?: Extension,
+  ): Promise<void> {
     this.chief = chief;
     this.worker = worker;
+    this.manager = manager;
     const registry = createRegistry();
     registry.install(chief);
     registry.install(worker);
+    if (manager) registry.install(manager);
     registry.install(CodingTools);
     this.models = this.settings.models();
     this.harness = await Harness.open(
@@ -59,15 +66,18 @@ export class AgentRuntime implements WorkerRuntime {
       },
       BACKGROUND_CONTEXT,
     );
-    // Existing chief conversations must also lose implicitly inherited coding tools.
+    // Existing chief conversations must also lose implicitly inherited coding
+    // tools; manager-bound conversations get the manager extension instead.
+    const managerIds = new Set(this.db.managerConversationIds());
     await Promise.all(
       this.db.listConversations().map(async (row) => {
         const conversation = await this.harness.conversation(
           Number(row.conversationId) as ConversationId,
           BACKGROUND_CONTEXT,
         );
+        const isManager = managerIds.has(row.conversationId) && this.manager;
         await conversation?.configure(
-          { extensions: [chief] },
+          { extensions: [isManager ? this.manager! : chief] },
           BACKGROUND_CONTEXT,
         );
       }),
@@ -104,6 +114,21 @@ export class AgentRuntime implements WorkerRuntime {
           model: this.settings.get().model,
           cwd,
           extensions: [this.chief],
+        },
+      },
+      BACKGROUND_CONTEXT,
+    );
+  }
+  /** The persistent project manager conversation for one project. */
+  async createManager(cwd: string): Promise<Conversation> {
+    if (!this.manager) throw new Error('Manager extension is not installed');
+    return this.harness.createConversation(
+      {
+        ownership: { kind: 'ownerless' },
+        agent: {
+          model: this.settings.get().model,
+          cwd,
+          extensions: [this.manager],
         },
       },
       BACKGROUND_CONTEXT,

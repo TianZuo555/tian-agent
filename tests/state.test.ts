@@ -27,6 +27,8 @@ function task(scopeId: string, id: number): TaskItem {
     trigger: 'manual',
     triggerRef: null,
     dedupeKey: null,
+    assignee: null,
+    reportTo: null,
     attempts: 0,
     maxAttempts: 3,
     startedAt: null,

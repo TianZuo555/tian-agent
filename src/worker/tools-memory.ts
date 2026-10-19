@@ -1,8 +1,21 @@
-import { defineTool } from '@earendil-works/pi-durable';
+import { defineTool, section } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
-import { GLOBAL_SCOPE } from './scopes.js';
-import type { ChiefDeps } from './tools.js';
+import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
+import type { Db } from './db.js';
+import type { DataService } from './data.js';
 import { verifyUserEvidence, type InputEvidence } from './provenance.js';
+
+/** What memory tools and the Core snapshot actually need — shared by chief and manager. */
+export interface MemoryToolDeps {
+  db: Db;
+  scopes: Scopes;
+  data: DataService;
+  currentInput: (conversationId: string) => Promise<{
+    entryId: string;
+    kind: 'user' | 'system.notification' | 'worker.input';
+    text: string;
+  } | null>;
+}
 
 export const toolText = (t: string) => ({
   output: [{ type: 'text' as const, text: t }],
@@ -20,7 +33,7 @@ export const ScopeParam = Type.Optional(
 );
 
 export function resolveScope(
-  deps: ChiefDeps,
+  deps: { db: Db },
   conversationId: string,
   param?: string,
 ): string {
@@ -49,7 +62,7 @@ const usageText = (usage: {
 }) => `core ${usage.selected} selected, ${usage.tokens}/${usage.budget} tokens`;
 
 /** Append a Core-state note to a write result so the model knows the budget. */
-function coreNote(deps: ChiefDeps, scope: string): string {
+function coreNote(deps: MemoryToolDeps, scope: string): string {
   const usage = deps.scopes.memory(scope).coreUsage();
   return ` (${usageText(usage)})`;
 }
@@ -61,11 +74,36 @@ function droppedNote(coreDropped: boolean): string {
 }
 
 /**
- * The chief's memory-writing tools. Reading tools (recall, select, deselect)
- * stay in tools.ts; these own every mutation of memory content.
+ * Memory-writing tools shared by chief and manager. With `lockToOwnScope`
+ * (the project manager), writes resolve to the calling conversation's own
+ * scope only — never global, never another project. Reading tools (recall,
+ * select, deselect) live in the role's extension.
  */
-export function memoryTools(deps: ChiefDeps) {
+export function memoryTools(
+  deps: MemoryToolDeps,
+  opts: { lockToOwnScope?: boolean; actor?: 'chief' | 'manager' } = {},
+) {
   const { data } = deps;
+  const actor = opts.actor ?? 'chief';
+
+  /** Resolve a write target; managers are confined to their own scope. */
+  const writeScope = (
+    conversationId: string,
+    param: string | undefined,
+    target?: 'global' | 'project',
+  ): string => {
+    const own = deps.db.conversationScope(conversationId);
+    if (!opts.lockToOwnScope)
+      return target === 'global'
+        ? GLOBAL_SCOPE
+        : resolveScope(deps, conversationId, param);
+    if (target === 'global')
+      throw new Error("a project manager writes only this project's memory");
+    const resolved = resolveScope(deps, conversationId, param);
+    if (resolved !== own)
+      throw new Error("a project manager writes only this project's memory");
+    return own;
+  };
 
   const remember = defineTool({
     name: 'remember',
@@ -107,12 +145,9 @@ export function memoryTools(deps: ChiefDeps) {
       scope: ScopeParam,
     }),
     execute: async (args, api) => {
-      const scope =
-        args.target === 'global'
-          ? GLOBAL_SCOPE
-          : resolveScope(deps, String(api.conversationId), args.scope);
       try {
         const conversationId = String(api.conversationId);
+        const scope = writeScope(conversationId, args.scope, args.target);
         const input = await deps.currentInput(conversationId);
         const verdict =
           args.source === 'user'
@@ -124,7 +159,7 @@ export function memoryTools(deps: ChiefDeps) {
           trustLevel: verdict.confirmed ? 'user_confirmed' : 'agent_inferred',
           sourceRef: evidenceRef(conversationId, input),
           core: args.core ?? false,
-          actor: 'chief',
+          actor,
           operationId: `remember:${api.taskId}:${api.callId}`,
         });
         const parts = [
@@ -178,9 +213,9 @@ export function memoryTools(deps: ChiefDeps) {
       scope: ScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
         const conversationId = String(api.conversationId);
+        const scope = writeScope(conversationId, args.scope);
         const input = await deps.currentInput(conversationId);
         const verdict =
           args.source === 'user'
@@ -191,7 +226,7 @@ export function memoryTools(deps: ChiefDeps) {
           args.seq,
           args.text,
           args.reason,
-          'chief',
+          actor,
           {
             sourceRef: evidenceRef(conversationId, input),
             trustLevel: verdict.confirmed ? 'user_confirmed' : 'agent_inferred',
@@ -229,13 +264,13 @@ export function memoryTools(deps: ChiefDeps) {
       scope: ScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
+        const scope = writeScope(String(api.conversationId), args.scope);
         data.forget(
           scope,
           args.seq,
           args.reason,
-          'chief',
+          actor,
           `forget:${api.taskId}:${api.callId}`,
         );
         return toolText(`forgot #${args.seq} in [${scopeLabel(scope)}].`);
@@ -255,12 +290,12 @@ export function memoryTools(deps: ChiefDeps) {
       scope: ScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
+        const scope = writeScope(String(api.conversationId), args.scope);
         const { memory, changed } = data.select(
           scope,
           args.seq,
-          'chief',
+          actor,
           `select:${api.taskId}:${api.callId}`,
         );
         return toolText(
@@ -284,12 +319,12 @@ export function memoryTools(deps: ChiefDeps) {
       scope: ScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
+        const scope = writeScope(String(api.conversationId), args.scope);
         const { memory, changed } = data.deselect(
           scope,
           args.seq,
-          'chief',
+          actor,
           `deselect:${api.taskId}:${api.callId}`,
         );
         return toolText(
@@ -304,4 +339,54 @@ export function memoryTools(deps: ChiefDeps) {
   });
 
   return [remember, revise, forget, select, deselect];
+}
+
+/**
+ * The Core Memory snapshot section shared by chief and manager: global plus
+ * the conversation's own scope, rendered once per conversation and refreshed
+ * only when a new input turn starts AND the scope's memory version changed.
+ * The rendered text lands in the cacheable system-prompt prefix; writes
+ * within a turn reach the model through the tool results instead.
+ */
+export function coreMemorySection(deps: {
+  scopes: Scopes;
+  db: Db;
+  latestInputEntry: (conversationId: string) => Promise<string | null>;
+}) {
+  const snapshots = new Map<
+    string,
+    { text: string; version: string; turn: string | null }
+  >();
+  const renderMemory = (scope: string): string => {
+    const parts: string[] = [];
+    parts.push(`[global]\n${deps.scopes.memory(GLOBAL_SCOPE).wake()}`);
+    if (scope !== GLOBAL_SCOPE) {
+      const project = deps.db.getProject(scope);
+      parts.push(
+        `[project: ${project?.name ?? scope}]\n${deps.scopes.memory(scope).wake()}`,
+      );
+    }
+    return parts.join('\n\n');
+  };
+  return section('memory', async (input) => {
+    const conversationId = String(input.conversationId);
+    const scope = deps.db.conversationScope(conversationId);
+    const version = `${deps.scopes.memory(GLOBAL_SCOPE).version()}/${scope === GLOBAL_SCOPE ? '' : deps.scopes.memory(scope).version()}`;
+    let turn: string | null;
+    try {
+      turn = await deps.latestInputEntry(conversationId);
+    } catch {
+      turn = `unavailable-${Date.now()}`; // degradation: recompute every request
+    }
+    const cached = snapshots.get(conversationId);
+    if (cached && cached.turn === turn) return cached.text;
+    if (cached && cached.version === version) {
+      cached.turn = turn; // new turn but unchanged memory: keep the snapshot
+      return cached.text;
+    }
+    const rendered = renderMemory(scope);
+    if (snapshots.size > 200) snapshots.clear();
+    snapshots.set(conversationId, { text: rendered, version, turn });
+    return rendered;
+  });
 }

@@ -12,6 +12,10 @@ _Avoid_: steward, assistant, orchestrator
 在隔离 worktree 中无人值守执行一次 Run 的编码 Agent；只读共享记忆，不写记忆。
 _Avoid_: sub-agent, executor
 
+**Manager（项目管理者）**:
+每个项目一个的长期 Pi 会话；Chief 把有边界的项目工作委派给它——每次委派是一条 assignee 为 Manager 的 Task，由它执行、收口并回报。Manager 管理本项目的 Task、记忆、Notes 与 Run，可再分发编码工作给 Worker；只写本项目记忆，不写 Global 记忆，Goal 仍归 Chief，自己不改代码。
+_Avoid_: sub-agent, coordinator
+
 ## 范围
 
 **Scope**:
@@ -29,7 +33,7 @@ _Avoid_: repo, workspace
 _Avoid_: objective, mission, project
 
 **Task（任务）**:
-为某个 Goal、或独立于 Goal 而要完成的一件具体工作，归属用户或 Agent 之一，有自己的状态与结果。
+为某个 Goal、或独立于 Goal 而要完成的一件具体工作，归属用户或 Agent 之一，有自己的状态与结果；可带 assignee，把执行指派给该项目 Manager。
 _Avoid_: todo, job, ticket
 
 **Run**:
@@ -67,7 +71,7 @@ _Avoid_: hook, wakeup
 _Avoid_: note, fact, log line
 
 **Core Memory**:
-某 Scope 中由用户或 Chief 明确选入、在 Token 预算内渲染并注入每次会话的少量 Memory。
+某 Scope 中由用户、Chief 或该项目 Manager 明确选入、在 Token 预算内渲染并注入每次会话的少量 Memory。
 _Avoid_: wake, profile, system memory, 摘要树
 
 **Select（选入）/ Deselect（移出）**:
@@ -107,7 +111,7 @@ _Avoid_: log line、event、memory
 ## 交互
 
 **Conversation**:
-Chief 或 Worker 的一次持久 Pi 会话；PRD 中的 "Session" 指它。
+Chief、Manager 或 Worker 的一次持久 Pi 会话；PRD 中的 "Session" 指它。
 _Avoid_: session, chat, thread
 
 **Channel Binding**:

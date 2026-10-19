@@ -144,3 +144,9 @@ vite.config.ts.timestamp-*
 
 # Electron-Forge
 out/
+
+# Tian runtime data (self-hosted project scope artifacts)
+/.tian/
+/TIAN_REPORT.md
+/memory/
+/notes/

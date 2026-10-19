@@ -112,6 +112,9 @@ async function harness(t: TestContext): Promise<Harness> {
       throw new Error('not used here');
     },
     runMessages: () => [],
+    delegateToManager: () => Promise.reject(new Error('not used here')),
+    sendManagerMessage: () => Promise.reject(new Error('not used here')),
+    managerMessages: () => [],
   });
   await agents.open(chief, workerExtension({ db, wake: async () => {} }));
   t.after(async () => {

@@ -285,6 +285,23 @@ test('the socket transport rejects invalid arguments and native-dialog requests'
   assert.equal((await client.invoke('listScopes', []))[0].id, 'global');
 });
 
+test('the manager channel is reserved: openSession cannot bind it', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  await assert.rejects(
+    client.invoke('openSession', [
+      { channel: 'manager', externalId: 'global', scopeId: 'global' },
+    ]),
+    /reserved/,
+  );
+  await assert.rejects(
+    client.invoke('openSession', [
+      { channel: 'manager', externalId: 'p-1', scopeId: 'p-1' },
+    ]),
+    /reserved/,
+  );
+});
+
 test('service restart restores sessions and memory; existing clients reconnect', async (t) => {
   const f = await fixture(t);
   const client = f.client();

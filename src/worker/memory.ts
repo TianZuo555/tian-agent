@@ -47,7 +47,7 @@ export type MemoryTrustLevel =
   | 'user_confirmed'
   | 'agent_inferred'
   | 'third_party';
-export type MemoryActor = 'chief' | 'user' | 'worker' | 'migration';
+export type MemoryActor = 'chief' | 'manager' | 'user' | 'worker' | 'migration';
 export type MemoryAction =
   | 'create'
   | 'promote'

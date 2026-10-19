@@ -231,3 +231,22 @@ Improvement Log 是 `tian.db` 中一张独立的 `improvements` 表，记录值�
 - **边界**：不替代 `service.log` 的原始调试输出，不自动生成 Memory，不进入每次 Prompt，也不承诺审计级的 append-only（状态可变）。Event 表保持业务事实与审计职责。
 
 **后果**：自动错误形成可浏览、可计数的待办，持续故障显示为一条 `×N` 记录；指纹只含错误语义、不含堆栈位置，同一版本内稳定，但不同原因可能共用一条记录；Log 视图默认跨 Scope，避免在项目会话中看不到 Global 的服务异常；新增协议命令与 `improvements` 事件使 `SERVICE_PROTOCOL` 升到 3，表由 `ImprovementStore` 自己创建、不改变 `DATABASE_VERSION`，旧服务忽略该表，新客户端不会连接旧协议服务。
+
+---
+
+## D12 · 项目管理者：每项目一条持久会话，委派即 Task 的三级链路
+
+Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：每个项目一条持久会话，总管以 Task 为单位委派项目管理，管理者执行、收口并回报。
+
+**背景**：总管直接管理所有项目的 Task 与 Run 时，每个项目的执行细节都挤在同一条会话里；而且「委派」如果只是消息就没有 id / 状态 / 结果——总管看不到哪些事项还挂在外面，管理者的汇报也无法对应到具体委派。需要一个项目级的管理者承接「本项目日常管理」，并让委派本身成为可追踪的工作项。
+
+**决定**：
+
+- **委派即 Task**：`delegate(project, title, briefing, goal?)` 在一个事务内创建 `assignee='manager'`、`report_to=发起总管会话` 的 Task（`dedupe_key = delegate:<operationId>`）和 `kind='delegation'` 的 `manager_messages` 行，然后唤醒管理者。管理者 `complete_task` / `fail_task` 收口时由 `onTaskClosed` 回调把结果按 `report_to` 通知对应总管；带 goal 的委派提醒总管 `update_goal`——Goal 始终归总管。
+- **问答有归属**：`manager_messages` 增加 `kind`（delegation / message / question / answer / report）、`task_id`、`reply_to`、`closed_at`。管理者 `ask_chief` 写 `question` 行并阻塞轮询匹配 `reply_to = question.id` 的 `answer`；超时在单个事务内「关闭 + 复查」，答覆竞态不丢失；重启后重放直接返回已存答案或超时文案，不再等待。无关消息不会被误当答案吞掉。
+- **恰好一次唤醒**：每条总管→管理者消息对应一次唤醒通知，唯一例外是「管理者仍在阻塞等待」的 `answer`——由 `ask_chief` 直接返回不唤醒；问题已关闭后的迟到答覆补一次唤醒。`check_msgs` 因此被移除。
+- **按 Task 路由上行**：`wakeChief` 的目标是会话级 `report_to`——优先本 Task 的 `reportTo`，其次项目内最新委派 Task 的 `reportTo`，最后回落 scope 最新非 Manager 会话。不再需要 `manager_links` 表（已建库里的表保留不删）。
+- **边界在工具层**：Manager 装配 `managerExtension`，工具构造时锁定本项目——`taskExecutionTools` 带 `taskScope` 守卫、记忆写入 `lockToOwnScope`（可读 Global）、`dispatch` 强制本项目、Run 与 history ref 限本项目；总管的 `taskExecutionTools` 传 `refuseAssignee='manager'` 拒绝对委派 Task 执行 start/complete/fail，`send_run_msg` 拒绝管理者名下的 Run（只读工具放行）；`RunOrchestrator.dispatch` 校验 task 的 scope 与项目一致。Manager 没有 shell / CodingTools。
+- **会话即项目绑定、channel 保留**：Manager 是 `channel_sessions` 中 `channel = 'manager'`、`external_id = scope_id = project_id` 的持久会话，每项目至多一条，`ensureManagerConversation` 惰性创建且禁止 Global；公开 `openSession` 拒绝 `channel='manager'` 绑定，防止客户端伪造「Global 管理者」。`latestConversation`（scope 级无主通知的默认目标）排除 Manager 绑定；启动时按 `managerConversationIds` 给存量会话分别重配 chief / manager extension。
+
+**后果**：委派变成可枚举、可追踪、可归因的工作项——总管能列出未完成委派、汇报能对应到 Task；问答语义清晰，答覆不再被无关消息吞掉或重复投递；Manager 拥有项目内完整管理回路，越权写入被工具层拦截。代价是三级链路多一跳延迟——`ask_chief` 阻塞轮询（2 秒间隔、默认上限 5 分钟）；用户界面操作（doneTask）不受 assignee 限制，作为最终逃生通道保留。

@@ -4,6 +4,7 @@ import type { Db } from './db.js';
 export type EventActor =
   | 'user'
   | 'chief'
+  | 'manager'
   | 'worker'
   | 'scheduler'
   | 'channel'

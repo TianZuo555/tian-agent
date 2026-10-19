@@ -23,7 +23,16 @@ Task 状态机：`pending → running → waiting_approval → completed`，另�
 
 每个 Goal 的 `max_runs_per_day` 限制每日执行次数；超出后本次唤醒生成 `blocked` Task 并留下去重提醒，不默默丢弃。
 
-代码类任务由 `dispatch` 发起，可选 `task` 参数把 Run 关联到 Task（`runs.task_id`）。Run 完成不等于 Task 完成：总管依据结果调用 `complete_task` / `fail_task` 收口，再 `update_goal` 写回状态。
+代码类任务由 `dispatch` 发起，可选 `task` 参数把 Run 关联到 Task（`runs.task_id`）。Run 完成不等于 Task 完成：派发方（总管或项目管理者）依据结果调用 `complete_task` / `fail_task` 收口，再 `update_goal` 写回状态。
+
+## 项目管理者
+
+项目管理者是介于总管与工兵之间的项目级角色：每项目一条持久会话（`channel_sessions` 中 `channel = 'manager'`、`external_id = project_id`），首次 `delegate` 时惰性创建。
+
+- **委派即 Task**：总管 `delegate(project, title, briefing, goal?)` 在一个事务内创建 `assignee='manager'`、`report_to=发起总管会话` 的 Task 与一条 `kind='delegation'` 的消息，然后唤醒管理者。管理者 `start_task` → `dispatch` → `complete_task` / `fail_task` 收口——关闭委派 Task 自动把结果通知回 `report_to` 的总管；总管对委派 Task 的 `start_task` / `complete_task` / `fail_task` 被拒绝，Goal 始终归总管。
+- **上行与问答**：管理者 `report_chief(text, task?)` 汇报，`ask_chief(question, task?, wait_seconds?)` 写 `kind='question'` 行并阻塞等待匹配 `reply_to` 的 `kind='answer'`；无关消息不会被当成答复，超时在事务内「关闭 + 复查」竞态答案。总管用 `send_manager_msg(project, body, reply_to?, task?)` 答复或发消息：仍在等待的答覆由 `ask_chief` 直接返回不唤醒，迟到答覆补一次唤醒，普通消息每次唤醒。上行通知按 Task 路由——本 Task 的 `report_to`、其次项目最新委派 Task 的 `report_to`、再回落 scope 最新非 Manager 会话。
+- **再分发**：管理者 `dispatch(prompt, task?)` 把代码工作派给工兵，`chief_conversation_id` 指向管理者会话——工兵的 `ask_chief` 与 Run 完成通知都回到管理者，由管理者收口 Task 并 `report_chief`。
+- **边界**：管理者工具锁定本项目 scope——任务、notes、history 与 Run 只许本项目，dispatch 只许本项目的 Task；记忆可读 Global、只写本项目；没有 shell / 编码工具；总管 `send_run_msg` 拒绝管理者名下的 Run。
 
 ## Run 生命周期
 
