@@ -35,9 +35,10 @@
 - 两侧各有一条 `PaneDivider`，宽度写入 `localStorage`（`tian.navWidth`、`tian.contextWidth`），属于本地视图状态，不进数据库。
 - 右栏是 Codex 式单面板切换，一次只给一种上下文，避免四块堆叠。
 - Runs 就地展开：点进 run 详情，diff 用 `@pierre/diffs` 在面板内渲染，Land / Ship / Discard 在 diff 上方。
-- 收起后留 44px 竖条，用 transform + 固定列宽做动画，避免对话区逐帧 reflow。
+- 两侧折叠都不留竖条：开关统一放在内容区标题栏（左端侧栏、右端右栏），折叠用 transform + 固定列宽做动画，避免对话区逐帧 reflow。早先右栏收起后的 44px 竖条已移除。
+- 归档会话只从侧栏收起并让出唤醒目标，不删 transcript：`conversations.archived_at` 是单一事实，`latestConversation` 同时排除归档会话与项目管理者会话，避免无主通知写进已收起的会话。
 
-**后果**：对话区宽度随右栏变化，消息容器用 `max-w-3xl` 居中而非满宽；面板宽度换机器不同步（有意为之）；窄窗口不做适配，`minWidth: 880` 兜住。
+**后果**：对话区宽度随右栏变化，消息容器用 `max-w-3xl` 居中而非满宽；面板宽度与折叠状态换机器不同步（有意为之）；窄窗口不做适配，`minWidth: 880` 兜住；归档会话仍可被 History 检索命中，不做二次隐藏。
 
 ---
 
@@ -248,5 +249,6 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - **按 Task 路由上行**：`wakeChief` 的目标是会话级 `report_to`——优先本 Task 的 `reportTo`，其次项目内最新委派 Task 的 `reportTo`，最后回落 scope 最新非 Manager 会话。不再需要 `manager_links` 表（已建库里的表保留不删）。
 - **边界在工具层**：Manager 装配 `managerExtension`，工具构造时锁定本项目——`taskExecutionTools` 带 `taskScope` 守卫、记忆写入 `lockToOwnScope`（可读 Global）、`dispatch` 强制本项目、Run 与 history ref 限本项目；总管的 `taskExecutionTools` 传 `refuseAssignee='manager'` 拒绝对委派 Task 执行 start/complete/fail，`send_run_msg` 拒绝管理者名下的 Run（只读工具放行）；`RunOrchestrator.dispatch` 校验 task 的 scope 与项目一致。Manager 没有 shell / CodingTools。
 - **会话即项目绑定、channel 保留**：Manager 是 `channel_sessions` 中 `channel = 'manager'`、`external_id = scope_id = project_id` 的持久会话，每项目至多一条，`ensureManagerConversation` 惰性创建且禁止 Global；公开 `openSession` 拒绝 `channel='manager'` 绑定，防止客户端伪造「Global 管理者」。`latestConversation`（scope 级无主通知的默认目标）排除 Manager 绑定；启动时按 `managerConversationIds` 给存量会话分别重配 chief / manager extension。
+- **Tian 直连管理者**：除总管委派外，Tian 可经 `openManager(projectId)` 命令（侧栏项目作用域的管理者按钮）直接打开管理者会话派活；`ConversationInfo.role`（`'chief' | 'manager'`）随 `openManager` / `openSession` / `listConversations` 等全链路透出（由 `channel_sessions` 的 manager 绑定派生，不落 `conversations` 列），`SERVICE_PROTOCOL` 升至 5。Tian 轮次（本轮 `currentInput` 为 `kind='user'`）里，`ask_chief` 与 `report_chief` 被工具层守卫挡下并返回提示语——不写 `manager_messages`、不唤醒总管；例外是 `report_chief` 带 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 直接派的 Task 由 `add_task` 创建（`assignee = NULL`），静默收口不通知总管；`remember(source:'user')` 在 Tian 轮次照常记 `user_confirmed`。
 
-**后果**：委派变成可枚举、可追踪、可归因的工作项——总管能列出未完成委派、汇报能对应到 Task；问答语义清晰，答覆不再被无关消息吞掉或重复投递；Manager 拥有项目内完整管理回路，越权写入被工具层拦截。代价是三级链路多一跳延迟——`ask_chief` 阻塞轮询（2 秒间隔、默认上限 5 分钟）；用户界面操作（doneTask）不受 assignee 限制，作为最终逃生通道保留。
+**后果**：委派变成可枚举、可追踪、可归因的工作项——总管能列出未完成委派、汇报能对应到 Task；问答语义清晰，答覆不再被无关消息吞掉或重复投递；Manager 拥有项目内完整管理回路，越权写入被工具层拦截。Tian 直连让项目琐事绕过总管直达管理者且不打扰总管会话，同时不削弱上行通道——归属总管委派的 Task 在 Tian 轮次中收口、上报照常。局限：Tian 让管理者「把非委派事项转告总管」目前不实现——`report_chief` 仅放行委派 Task；`ask_chief` 阻塞轮询（2 秒间隔、默认上限 5 分钟）；用户界面操作（doneTask）不受 assignee 限制，作为最终逃生通道保留。

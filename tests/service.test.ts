@@ -343,6 +343,35 @@ test('the manager channel is reserved: openSession cannot bind it', async (t) =>
   );
 });
 
+test('openManager exposes the project manager conversation to Tian directly', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const scopes = await client.invoke('addProject', ['alpha', project]);
+  const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
+  const manager = await client.invoke('openManager', [projectId]);
+  assert.equal(manager.role, 'manager');
+  assert.equal(manager.title, 'Manager · alpha');
+  assert.equal(manager.scopeId, projectId);
+  // Repeat calls are idempotent: same bound conversation.
+  const again = await client.invoke('openManager', [projectId]);
+  assert.equal(again.conversationId, manager.conversationId);
+  // listConversations carries the role for both kinds.
+  const chief = await client.invoke('createConversation', [projectId]);
+  const listed = await client.invoke('listConversations', []);
+  assert.equal(
+    listed.find((c) => c.conversationId === manager.conversationId)?.role,
+    'manager',
+  );
+  assert.equal(
+    listed.find((c) => c.conversationId === chief.conversationId)?.role,
+    'chief',
+  );
+  // Global has no manager.
+  await assert.rejects(client.invoke('openManager', ['global']), /project/i);
+});
+
 test('service restart restores sessions and memory; existing clients reconnect', async (t) => {
   const f = await fixture(t);
   const client = f.client();

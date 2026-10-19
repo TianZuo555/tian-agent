@@ -5,7 +5,7 @@ import {
 } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import { GLOBAL_SCOPE } from './scopes.js';
-import type { AgentMessageRow, RunRow } from './db.js';
+import type { AgentMessageRow, RunRow, TaskRow } from './db.js';
 import type { GoalStore } from './goals.js';
 import {
   coreMemorySection,
@@ -83,9 +83,11 @@ export function managerExtension(deps: ManagerDeps) {
     (input) => {
       const scope = own(String(input.conversationId));
       const project = db.getProject(scope);
-      return `You are the project manager of ${project?.name ?? scope} (${project?.rootPath ?? scope}) — you run this project for Tian's chief.
+      return `You are the project manager of ${project?.name ?? scope} (${project?.rootPath ?? scope}) — you run this project for Tian's chief and for Tian.
 
-ROLE. The chief delegates project work to you as tasks; you turn them into coding runs and close them with an outcome. You have no shell and no file tools — dispatch(prompt, task?) sends code work to a worker in an isolated git worktree, and the worker's questions and finished report come back to you. You are woken by delegated tasks, chief messages and run events; work, report, and go idle.
+ROLE. The chief delegates project work to you as tasks; you turn them into coding runs and close them with an outcome. Tian can also talk to you directly in this conversation. You have no shell and no file tools — dispatch(prompt, task?) sends code work to a worker in an isolated git worktree, and the worker's questions and finished report come back to you. You are woken by delegated tasks, chief messages and run events; work, report, and go idle.
+
+TIAN. Tian may also talk to you directly in this conversation. A message that is not a '[...]' system wake is from Tian: work he gives you becomes your own tasks (add_task, then start_task / complete_task / fail_task) and closes silently — the chief is not notified. Answer him directly in your reply; ask him in your reply instead of ask_chief; do not report_chief about his requests unless he explicitly asks you to tell the chief.
 
 DELEGATED TASKS. A wake starting '[delegated task #N from chief]' assigns task #N to you — work it with start_task, dispatch runs with task: N, then close it with complete_task(outcome, summary) or fail_task(reason): closing a delegated task reports the outcome to the chief automatically. Delegated tasks appear first in <state> tagged [delegated]. Tasks you add yourself (add_task) are yours and close silently. Goals stay with the chief — a delegated task may carry a goal id, but update_goal is not yours to call.
 
@@ -595,14 +597,22 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     }),
     execute: async (args, api) => {
       const projectId = own(String(api.conversationId));
+      let task: TaskRow | null = null;
       if (args.task != null) {
-        const task = db.getTask(args.task);
+        task = db.getTask(args.task) ?? null;
         if (!task) return err(`Unknown task: ${args.task}`);
         if (task.scopeId !== projectId)
           return err(
             `task #${task.id} belongs to ${task.scopeId}, not this project`,
           );
       }
+      // In a Tian turn only chief-delegated tasks may still be reported up;
+      // his own requests answer to him directly and stay silent.
+      const input = await deps.currentInput(String(api.conversationId));
+      if (input?.kind === 'user' && task?.assignee !== 'manager')
+        return text(
+          'Tian is talking to you directly — answer him in your reply. report_chief is for work the chief delegated.',
+        );
       const message = data.postManagerMessage({
         projectId,
         sender: 'manager',
@@ -654,6 +664,12 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
             `task #${task.id} belongs to ${task.scopeId}, not this project`,
           );
       }
+      // A Tian turn answers Tian directly — no question row, no chief wake.
+      const input = await deps.currentInput(String(api.conversationId));
+      if (input?.kind === 'user')
+        return text(
+          'Tian is talking to you directly — ask him in your reply instead. ask_chief is for work the chief delegated.',
+        );
       const posted = data.postManagerMessage({
         projectId,
         sender: 'manager',

@@ -535,6 +535,15 @@ export class Service {
     return this.openBoundSession(binding);
   }
 
+  /**
+   * Tian's direct line to a project's manager: opens (or creates) the
+   * bound manager conversation. ensureManagerConversation already
+   * rejects global and unknown projects, and repeats are idempotent.
+   */
+  async openManager(projectId: string): Promise<ConversationInfo> {
+    return this.ensureManagerConversation(projectId);
+  }
+
   private async openBoundSession(
     binding: SessionBinding,
   ): Promise<ConversationInfo> {
@@ -554,7 +563,8 @@ export class Service {
         binding.channel === 'manager',
       );
       this.db.bindSession(binding, conversation.conversationId);
-      return conversation;
+      // Re-read so the returned ConversationInfo carries the bound role.
+      return this.db.channelSession(binding) ?? conversation;
     })();
     this.openingSessions.set(key, opening);
     try {
@@ -935,11 +945,13 @@ export class Service {
       externalId: projectId,
       scopeId: projectId,
     });
-    this.db.setConversationTitle(
-      conversation.conversationId,
-      `Manager · ${project.name}`,
-    );
-    return conversation;
+    const title = `Manager · ${project.name}`;
+    this.db.setConversationTitle(conversation.conversationId, title);
+    // setConversationTitle only fills a NULL title — mirror that here so a
+    // renamed conversation keeps its own title in the returned row.
+    return conversation.title == null
+      ? { ...conversation, title }
+      : conversation;
   }
 
   /** Wake the manager conversation through the notification pipeline. */

@@ -351,6 +351,21 @@ export function createAppStore(api: TianApi) {
         });
         await selectConversation(conversation.conversationId, scopeId);
       }),
+    /** Tian's direct line into a project manager: open-or-create, upsert, select. */
+    openManager: (projectId: string) =>
+      safe(async () => {
+        const conversation = await api.openManager(projectId);
+        next('conversations');
+        set({
+          conversations: [
+            conversation,
+            ...state.conversations.filter(
+              (item) => item.conversationId !== conversation.conversationId,
+            ),
+          ],
+        });
+        await selectConversation(conversation.conversationId, projectId);
+      }),
     send: (text: string) =>
       safe(async () => {
         if (state.activeConversationId && text.trim())

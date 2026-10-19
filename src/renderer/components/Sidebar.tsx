@@ -13,6 +13,7 @@ import {
   Plus,
   Target,
   Tray,
+  UserGear,
 } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
 import { motion, useReducedMotion } from 'motion/react';
@@ -110,9 +111,15 @@ function ConversationRow(props: {
     archived ? (c.archivedAt ?? c.createdAt) : c.createdAt,
   );
   const meta = archived && scopeName ? `${scopeName} · ${when}` : when;
-  const label = archived
-    ? `Archived conversation: ${title}`
-    : `Conversation: ${title}`;
+  const RowIcon = c.role === 'manager' ? UserGear : ChatCircleText;
+  const label =
+    c.role === 'manager'
+      ? archived
+        ? `Archived project manager: ${title}`
+        : `Project manager: ${title}`
+      : archived
+        ? `Archived conversation: ${title}`
+        : `Conversation: ${title}`;
   return (
     <motion.div layout={!reduce} className="group relative">
       <button
@@ -150,9 +157,10 @@ function ConversationRow(props: {
             />
           </>
         )}
-        <ChatCircleText
+        <RowIcon
           size={14}
           weight={active ? 'fill' : 'regular'}
+          aria-hidden
           className={`relative shrink-0 ${
             active ? 'text-brand' : 'text-content-disabled'
           }`}
@@ -236,17 +244,21 @@ function ScopeSection(props: {
   const { scope, conversations, activeId, collapsed } = props;
   const [expanded, setExpanded] = useState(false);
   // Fold everything past the first five, but keep the selected conversation
-  // visible so the list never hides where the reader currently is.
+  // visible so the list never hides where the reader currently is. The
+  // project's manager conversation always sorts first within its scope.
   const { visible, hiddenCount } = useMemo(() => {
-    if (expanded || conversations.length <= VISIBLE_CONVERSATIONS)
-      return { visible: conversations, hiddenCount: 0 };
-    const shown = conversations.slice(0, VISIBLE_CONVERSATIONS);
-    const active = conversations.find((c) => c.conversationId === activeId);
+    const ordered = [...conversations].sort(
+      (a, b) => Number(b.role === 'manager') - Number(a.role === 'manager'),
+    );
+    if (expanded || ordered.length <= VISIBLE_CONVERSATIONS)
+      return { visible: ordered, hiddenCount: 0 };
+    const shown = ordered.slice(0, VISIBLE_CONVERSATIONS);
+    const active = ordered.find((c) => c.conversationId === activeId);
     if (active && !shown.includes(active)) shown.push(active);
     const shownIds = new Set(shown);
     return {
-      visible: conversations.filter((c) => shownIds.has(c)),
-      hiddenCount: conversations.length - shown.length,
+      visible: ordered.filter((c) => shownIds.has(c)),
+      hiddenCount: ordered.length - shown.length,
     };
   }, [activeId, conversations, expanded]);
   const collapsible = conversations.length > VISIBLE_CONVERSATIONS;
@@ -268,7 +280,26 @@ function ScopeSection(props: {
           )}
         </button>
         <div className="flex items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
-          {scope.kind === 'project' && <ProjectSettingsDialog scope={scope} />}
+          {scope.kind === 'project' && (
+            <>
+              <ProjectSettingsDialog scope={scope} />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Open ${scope.name} manager`}
+                      onClick={() => void actions.openManager(scope.id)}
+                    />
+                  }
+                >
+                  <UserGear size={14} aria-hidden />
+                </TooltipTrigger>
+                <TooltipPopup>Project manager</TooltipPopup>
+              </Tooltip>
+            </>
+          )}
           <Tooltip>
             <TooltipTrigger
               render={

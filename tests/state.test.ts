@@ -122,6 +122,7 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
       title: null,
       createdAt: new Date().toISOString(),
       archivedAt: null,
+      role: 'chief',
     }),
     openSession: async ({ scopeId }) => ({
       conversationId: 'bound',
@@ -129,6 +130,15 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
       title: null,
       createdAt: new Date().toISOString(),
       archivedAt: null,
+      role: 'chief',
+    }),
+    openManager: async (projectId) => ({
+      conversationId: 'mgr-1',
+      scopeId: projectId,
+      title: 'Manager · project',
+      createdAt: new Date().toISOString(),
+      archivedAt: null,
+      role: 'manager',
     }),
     archiveConversation: async () => {},
     submit: async () => ({ submissionId: '1' }),
@@ -361,5 +371,40 @@ test('runtime restart restores the active conversation subscription', async () =
   await store.actions.refresh();
   assert.ok(mock.watchCount() > before);
   assert.deepEqual([...mock.watched], ['1']);
+  cleanup();
+});
+
+test('openManager upserts the returned conversation and selects it', async () => {
+  let opened: string | null = null;
+  const mock = mockApi({
+    openManager: async (projectId) => {
+      opened = projectId;
+      return {
+        conversationId: 'mgr-1',
+        scopeId: projectId,
+        title: 'Manager · alpha',
+        createdAt: new Date().toISOString(),
+        archivedAt: null,
+        role: 'manager',
+      };
+    },
+  });
+  const store = createAppStore(mock.api);
+  const cleanup = store.actions.init();
+  await store.actions.refresh();
+  await store.actions.openManager('A');
+  assert.equal(opened, 'A');
+  const state = store.getState();
+  assert.equal(state.activeConversationId, 'mgr-1');
+  assert.equal(state.activeScopeId, 'A');
+  const row = state.conversations.find((c) => c.conversationId === 'mgr-1');
+  assert.equal(row?.role, 'manager');
+  // Calling again upserts instead of duplicating.
+  await store.actions.openManager('A');
+  assert.equal(
+    store.getState().conversations.filter((c) => c.conversationId === 'mgr-1')
+      .length,
+    1,
+  );
   cleanup();
 });

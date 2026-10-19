@@ -446,7 +446,9 @@ export class Db {
   }
 
   mapConversation(conversationId: string, scopeId: string): ConversationRow {
-    const value: ConversationRow = {
+    // `role` is derived from channel_sessions, not a conversations column —
+    // a fresh row is always a chief until bindSession says otherwise.
+    const value = {
       conversationId,
       scopeId,
       title: null,
@@ -454,14 +456,18 @@ export class Db {
       archivedAt: null,
     };
     this.insert('conversations', value);
-    return value;
+    return { ...value, role: 'chief' };
   }
   channelSession(binding: SessionBinding): ConversationRow | undefined {
     const value = this.db
       .prepare(`SELECT conversations.* FROM conversations JOIN channel_sessions USING (conversation_id)
       WHERE channel = ? AND external_id = ? AND channel_sessions.scope_id = ?`)
       .get(binding.channel, binding.externalId, binding.scopeId);
-    return value ? row<ConversationRow>(value) : undefined;
+    if (!value) return undefined;
+    return {
+      ...row<ConversationRow>(value),
+      role: binding.channel === 'manager' ? 'manager' : 'chief',
+    };
   }
   bindSession(binding: SessionBinding, conversationId: string): void {
     this.db
@@ -501,7 +507,15 @@ export class Db {
   listConversations(): ConversationRow[] {
     return rows(
       this.db
-        .prepare('SELECT * FROM conversations ORDER BY created_at DESC')
+        .prepare(
+          `SELECT conversations.*,
+             CASE WHEN channel_sessions.channel = 'manager' THEN 'manager' ELSE 'chief' END AS role
+           FROM conversations
+           LEFT JOIN channel_sessions
+             ON channel_sessions.conversation_id = conversations.conversation_id
+             AND channel_sessions.channel = 'manager'
+           ORDER BY conversations.created_at DESC`,
+        )
         .all(),
     );
   }
@@ -513,7 +527,7 @@ export class Db {
   latestConversation(scopeId: string): ConversationRow | undefined {
     const value = this.db
       .prepare(
-        `SELECT * FROM conversations WHERE scope_id = ? AND archived_at IS NULL
+        `SELECT *, 'chief' AS role FROM conversations WHERE scope_id = ? AND archived_at IS NULL
         AND conversation_id NOT IN (SELECT conversation_id FROM channel_sessions WHERE channel = 'manager')
         ORDER BY created_at DESC LIMIT 1`,
       )

@@ -16,6 +16,7 @@ export const commandHandlers = (service: Service, clientId: number) =>
     archiveConversation: (id, archived) =>
       service.archiveConversation(id, archived),
     openSession: (binding) => service.openSession(binding),
+    openManager: (projectId) => service.openManager(projectId),
     submit: (id, text, requestId) => service.submit(id, text, requestId),
     abort: (id) => service.abort(id),
     watch: (id) => service.watch(id, clientId),

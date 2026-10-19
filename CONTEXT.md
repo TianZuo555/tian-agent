@@ -13,7 +13,7 @@ _Avoid_: steward, assistant, orchestrator
 _Avoid_: sub-agent, executor
 
 **Manager（项目管理者）**:
-每个项目一个的长期 Pi 会话；Chief 把有边界的项目工作委派给它——每次委派是一条 assignee 为 Manager 的 Task，由它执行、收口并回报。Manager 管理本项目的 Task、记忆、Notes 与 Run，可再分发编码工作给 Worker；只写本项目记忆，不写 Global 记忆，Goal 仍归 Chief，自己不改代码。
+每个项目一个的长期 Pi 会话；Chief 把有边界的项目工作委派给它——每次委派是一条 assignee 为 Manager 的 Task，由它执行、收口并回报。Tian 也可以直接在 Manager 会话里派活——这类 Task 属于 Manager 自己，静默收口、不通知 Chief。Manager 管理本项目的 Task、记忆、Notes 与 Run，可再分发编码工作给 Worker；只写本项目记忆，不写 Global 记忆，Goal 仍归 Chief，自己不改代码。
 _Avoid_: sub-agent, coordinator
 
 ## 范围

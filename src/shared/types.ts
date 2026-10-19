@@ -43,6 +43,8 @@ export interface ConversationInfo {
   createdAt: string;
   /** Set while the conversation is folded away into the sidebar's archive. */
   archivedAt: string | null;
+  /** 'manager' when bound to a project via channel 'manager'; else 'chief'. */
+  role: 'chief' | 'manager';
 }
 
 /** D5: execution state and result (`outcome`) are recorded separately. */

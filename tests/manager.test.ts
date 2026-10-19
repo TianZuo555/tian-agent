@@ -93,6 +93,12 @@ interface Fixture {
   wakes: Wake[];
   dispatched: { projectRef: string; chiefConversationId: string | null }[];
   searches: { scopeId: string | null }[];
+  /** The input a tool call would see — set to a user turn for a Tian turn. */
+  turn: {
+    entryId: string;
+    kind: 'user' | 'system.notification' | 'worker.input';
+    text: string;
+  } | null;
 }
 
 function fixture(t: TestContext): Fixture {
@@ -130,6 +136,7 @@ function fixture(t: TestContext): Fixture {
   const wakes: Wake[] = [];
   const dispatched: Fixture['dispatched'] = [];
   const searches: Fixture['searches'] = [];
+  const turn: { current: Fixture['turn'] } = { current: null };
 
   const deps: ManagerDeps = {
     scopes,
@@ -137,8 +144,8 @@ function fixture(t: TestContext): Fixture {
     data,
     goals: new GoalStore(db),
     emitUpdates: () => {},
-    latestInputEntry: async () => null,
-    currentInput: async () => null,
+    latestInputEntry: async () => turn.current?.entryId ?? null,
+    currentInput: async () => turn.current,
     dispatch: async (input) => {
       dispatched.push(input);
       return addRun(db, {
@@ -231,6 +238,12 @@ function fixture(t: TestContext): Fixture {
     wakes,
     dispatched,
     searches,
+    get turn() {
+      return turn.current;
+    },
+    set turn(value: Fixture['turn']) {
+      turn.current = value;
+    },
   };
 }
 
@@ -583,6 +596,100 @@ test('manager dispatch always targets its own project as the supervising convers
   assert.equal(f.dispatched.length, 1);
   assert.equal(f.dispatched[0].projectRef, 'p-1');
   assert.equal(f.dispatched[0].chiefConversationId, 'mgr-conv');
+});
+
+// ---- Tian turns -------------------------------------------------------------
+
+test('in a Tian turn ask_chief returns guidance without a message or wake', async (t) => {
+  const f = fixture(t);
+  f.turn = { entryId: '9', kind: 'user', text: 'should we switch to pnpm?' };
+  const result = await f
+    .tool('ask_chief')
+    .execute({ question: 'should we switch to pnpm?' }, api(f.managerConv));
+  assert.doesNotMatch(toolText(result), /isError/);
+  assert.match(toolText(result), /ask him in your reply/);
+  assert.equal(f.data.managerMessages('p-1').length, 0);
+  assert.equal(f.wakes.length, 0);
+});
+
+test('in a Tian turn report_chief is blocked except on a delegated task', async (t) => {
+  const f = fixture(t);
+  f.turn = { entryId: '9', kind: 'user', text: 'how is the release going?' };
+  // No task: guidance, nothing written, nobody woken.
+  const bare = await f
+    .tool('report_chief')
+    .execute({ text: 'release is on track' }, api(f.managerConv));
+  assert.doesNotMatch(toolText(bare), /isError/);
+  assert.match(toolText(bare), /answer him in your reply/);
+  // The manager's own task: still just guidance.
+  const own = f.db.insertTask({ scopeId: 'p-1', title: 'own cleanup' });
+  const ownReport = await f
+    .tool('report_chief')
+    .execute({ text: 'cleanup done', task: own.id }, api(f.managerConv));
+  assert.match(toolText(ownReport), /answer him in your reply/);
+  assert.equal(f.data.managerMessages('p-1').length, 0);
+  assert.equal(f.wakes.length, 0);
+  // A chief-delegated task keeps reporting up even during a Tian turn.
+  const delegated = delegatedTask(f);
+  const ok = await f
+    .tool('report_chief')
+    .execute(
+      { text: 'main is green again', task: delegated.id },
+      api(f.managerConv),
+    );
+  assert.match(toolText(ok), /reported to the chief/);
+  const reports = f.data.managerMessages('p-1');
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].kind, 'report');
+  assert.equal(reports[0].taskId, delegated.id);
+  assert.equal(f.wakes.length, 1);
+  assert.equal(f.wakes[0].target, 'chief-conv');
+  assert.equal(f.wakes[0].taskId, delegated.id);
+});
+
+test('a task the manager adds and closes in a Tian turn stays silent', async (t) => {
+  const f = fixture(t);
+  f.turn = { entryId: '9', kind: 'user', text: 'tidy the notes folder' };
+  const added = await f
+    .tool('add_task')
+    .execute({ title: 'tidy the notes folder' }, api(f.managerConv));
+  const id = Number(/task #(\d+) added/.exec(toolText(added))?.[1]);
+  await f.tool('start_task').execute({ task: id }, api(f.managerConv));
+  await f
+    .tool('complete_task')
+    .execute({ task: id, outcome: 'achieved' }, api(f.managerConv));
+  const done = f.db.getTask(id);
+  assert.equal(done?.status, 'completed');
+  assert.equal(done?.assignee, null);
+  assert.equal(f.wakes.length, 0);
+});
+
+test('a Tian turn still reports up when a delegated task closes', async (t) => {
+  const f = fixture(t);
+  f.turn = { entryId: '9', kind: 'user', text: 'also, wrap up that task' };
+  const task = delegatedTask(f);
+  await f.tool('start_task').execute({ task: task.id }, api(f.managerConv));
+  await f
+    .tool('complete_task')
+    .execute({ task: task.id, outcome: 'achieved' }, api(f.managerConv));
+  const wake = f.wakes.find((w) => w.id.startsWith('mtask:'));
+  assert.ok(wake);
+  assert.equal(wake.target, 'chief-conv');
+  assert.equal(wake.taskId, task.id);
+});
+
+test('remember source:user in a Tian turn stores user_confirmed', async (t) => {
+  const f = fixture(t);
+  f.turn = { entryId: '9', kind: 'user', text: '我们周五发布' };
+  const result = await f
+    .tool('remember')
+    .execute({ text: '我们周五发布', source: 'user' }, api(f.managerConv));
+  assert.match(toolText(result), /user-confirmed/);
+  const row = f.db.sqlite
+    .prepare('SELECT trust_level, source_ref FROM memories WHERE seq = 0')
+    .get() as { trust_level: string; source_ref: string };
+  assert.equal(row.trust_level, 'user_confirmed');
+  assert.equal(row.source_ref, `conv:${f.managerConv}#9`);
 });
 
 // ---- service-level tests ----------------------------------------------------

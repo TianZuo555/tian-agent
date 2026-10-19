@@ -41,6 +41,8 @@ export interface Commands {
   listConversations: Command<[], ConversationInfo[]>;
   createConversation: Command<[scopeId: string], ConversationInfo>;
   openSession: Command<[binding: SessionBinding], ConversationInfo>;
+  /** Open (or create) a project's manager conversation — user-facing entry. */
+  openManager: Command<[projectId: string], ConversationInfo>;
   archiveConversation: Command<[id: string, archived: boolean], void>;
   submit: Command<
     [id: string, text: string, requestId?: string],
@@ -187,6 +189,7 @@ export const commandArgs = {
     ),
   ]),
   archiveConversation: Type.Tuple([id, Type.Boolean()]),
+  openManager: Type.Tuple([id]),
   submit: Type.Union([Type.Tuple([id, text]), Type.Tuple([id, text, id])]),
   abort: Type.Tuple([id]),
   watch: Type.Tuple([id]),
