@@ -93,7 +93,7 @@ const SHORTCUTS: Record<string, () => void> = {
     actions.setNav('chat');
   },
   b: () => actions.setContextOpen(!getState().contextOpen),
-  ',': () => actions.setNav('settings'),
+  ',': () => actions.toggleSettings(),
   '1': () => actions.setNav('chat'),
   '2': () => actions.setNav('goals'),
   '3': () => actions.setNav('skills'),
@@ -108,7 +108,14 @@ function useGlobalShortcuts() {
         return;
       // Do not stack global navigation on top of the command palette.
       if (getState().paletteOpen) return;
-      const run = SHORTCUTS[event.key.toLowerCase()];
+      const key = event.key.toLowerCase();
+      // ⌃⌘S folds the navigation sidebar, as a Mac app's View menu does.
+      if (event.metaKey && event.ctrlKey && key === 's' && !event.shiftKey) {
+        event.preventDefault();
+        actions.setSidebarOpen(!getState().sidebarOpen);
+        return;
+      }
+      const run = SHORTCUTS[key];
       if (!run) return;
       event.preventDefault();
       run();

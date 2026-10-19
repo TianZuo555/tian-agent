@@ -41,6 +41,8 @@ export interface ConversationInfo {
   scopeId: string;
   title: string | null;
   createdAt: string;
+  /** Set while the conversation is folded away into the sidebar's archive. */
+  archivedAt: string | null;
 }
 
 /** D5: execution state and result (`outcome`) are recorded separately. */
@@ -173,6 +175,7 @@ export type GoalPatch = Partial<
 
 export interface InboxItem {
   id: string;
+  scopeId: string;
   from: string;
   to: string;
   ts: string;

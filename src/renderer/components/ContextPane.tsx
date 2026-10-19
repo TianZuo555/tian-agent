@@ -2,7 +2,6 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import {
   ArrowsClockwise,
   ArrowCounterClockwise,
-  CaretDoubleRight,
   CaretRight,
   CheckCircle,
   CircleDashed,
@@ -43,6 +42,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
 import { tian } from '../api';
 import { CountPulse, EASE } from './motion-primitives';
+import { ContextToggle } from './ContextToggle';
 import type { MemoryItem, RunInfo } from '@/shared/types';
 import { actions, useStore } from '../store';
 
@@ -411,7 +411,10 @@ function EmptyPanel({
 }
 
 function TasksPanel() {
-  const tasks = useStore((s) => s.tasks);
+  const scope = useStore((s) => s.activeScopeId);
+  // state.tasks holds every scope's tasks for the dashboards; this pane is
+  // scoped to the open conversation's scope.
+  const tasks = useStore((s) => s.tasks).filter((t) => t.scopeId === scope);
   const [draft, setDraft] = useState('');
   const reduce = useReducedMotion();
   return (
@@ -1052,7 +1055,8 @@ export function ContextPane() {
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
   const memory = useStore((s) => s.memory);
   const counts: Record<PaneTab, number> = {
-    tasks: tasks.filter((t) => t.status === 'pending').length,
+    tasks: tasks.filter((t) => t.scopeId === scope && t.status === 'pending')
+      .length,
     runs: runs.filter(isLive).length,
     memory: (memory?.items ?? []).filter((m) => m.status === 'active').length,
   };
@@ -1077,15 +1081,7 @@ export function ContextPane() {
         >
           {name}
         </Badge>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Hide context pane"
-          className="[-webkit-app-region:no-drag] text-content-secondary"
-          onClick={() => actions.setContextOpen(false)}
-        >
-          <CaretDoubleRight size={13} />
-        </Button>
+        <ContextToggle />
       </div>
 
       <div

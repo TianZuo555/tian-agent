@@ -5,6 +5,7 @@ import {
   Folder,
   Gear,
   Lightning,
+  Sidebar,
   SidebarSimple,
   Target,
   Tray,
@@ -44,6 +45,7 @@ export function CommandPalette() {
   const scopes = useStore((s) => s.scopes);
   const activeScopeId = useStore((s) => s.activeScopeId);
   const contextOpen = useStore((s) => s.contextOpen);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
 
   const items = useMemo<PaletteItem[]>(() => {
     const close = () => actions.setPaletteOpen(false);
@@ -100,6 +102,16 @@ export function CommandPalette() {
         run: go('settings'),
       },
       {
+        value: 'toggle sidebar',
+        label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar',
+        shortcut: '⌃⌘S',
+        icon: Sidebar,
+        run: () => {
+          actions.setSidebarOpen(!sidebarOpen);
+          close();
+        },
+      },
+      {
         value: 'toggle context pane',
         label: contextOpen ? 'Hide context pane' : 'Show context pane',
         shortcut: '⌘B',
@@ -149,7 +161,7 @@ export function CommandPalette() {
       }));
 
     return [...commands, ...scopeItems, ...conversationItems];
-  }, [activeScopeId, contextOpen, conversations, scopes]);
+  }, [activeScopeId, contextOpen, sidebarOpen, conversations, scopes]);
 
   return (
     <CommandDialog

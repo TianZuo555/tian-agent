@@ -8,6 +8,7 @@ import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { ResidentServer } from '../src/service/server';
 import { ServiceClient } from '../src/service/client';
 import { servicePaths } from '../src/shared/service-paths';
+import type { ConversationInfo } from '../src/shared/types';
 import { launchAgentDefinition } from '../src/service/launchd';
 
 async function until(predicate: () => boolean): Promise<void> {
@@ -95,6 +96,46 @@ test('channel sessions are independent, stable, and share scope memory', async (
   assert.equal(
     f.server.service.db.conversationScope(b.conversationId),
     'global',
+  );
+});
+
+test('conversations archive and restore through the command surface', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  const events: ConversationInfo[][] = [];
+  const watcher = f.client((channel, payload) => {
+    if (channel === 'conversations') events.push(payload as ConversationInfo[]);
+  });
+  // Clients connect lazily on first call; join before broadcasts matter.
+  await watcher.start();
+  const created = await client.invoke('createConversation', ['global']);
+  assert.equal(created.archivedAt, null);
+
+  await client.invoke('archiveConversation', [created.conversationId, true]);
+  const listed = await client.invoke('listConversations', []);
+  assert.ok(
+    listed.find((c) => c.conversationId === created.conversationId)!.archivedAt,
+  );
+  // Notification routing must not resurrect an archived conversation.
+  assert.equal(f.server.service.db.latestConversation('global'), undefined);
+  assert.ok(
+    events.some((rows) =>
+      rows.some(
+        (c) => c.conversationId === created.conversationId && c.archivedAt,
+      ),
+    ),
+  );
+
+  await client.invoke('archiveConversation', [created.conversationId, false]);
+  const restored = await client.invoke('listConversations', []);
+  assert.equal(
+    restored.find((c) => c.conversationId === created.conversationId)!
+      .archivedAt,
+    null,
+  );
+  await assert.rejects(
+    client.invoke('archiveConversation', ['missing', true]),
+    /Unknown chief conversation/,
   );
 });
 

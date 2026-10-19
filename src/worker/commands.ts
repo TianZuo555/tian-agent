@@ -13,6 +13,8 @@ export const commandHandlers = (service: Service, clientId: number) =>
     removeProject: (id) => service.removeProject(id),
     listConversations: () => service.listConversations(),
     createConversation: (scopeId) => service.createConversation(scopeId),
+    archiveConversation: (id, archived) =>
+      service.archiveConversation(id, archived),
     openSession: (binding) => service.openSession(binding),
     submit: (id, text, requestId) => service.submit(id, text, requestId),
     abort: (id) => service.abort(id),

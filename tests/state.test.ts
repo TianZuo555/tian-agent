@@ -121,13 +121,16 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
       scopeId,
       title: null,
       createdAt: new Date().toISOString(),
+      archivedAt: null,
     }),
     openSession: async ({ scopeId }) => ({
       conversationId: 'bound',
       scopeId,
       title: null,
       createdAt: new Date().toISOString(),
+      archivedAt: null,
     }),
+    archiveConversation: async () => {},
     submit: async () => ({ submissionId: '1' }),
     abort: async () => {},
     addTask: async () => 1,
@@ -197,21 +200,23 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
   };
 }
 
-test('late scope responses cannot replace the active scope panels', async () => {
-  const pending = new Map<string, ReturnType<typeof deferred<TaskItem[]>>>();
+test('late responses cannot replace fresher panel data', async () => {
+  // Panels fetch whole-app data now, so the guard is the request version:
+  // a slower earlier fetch must not clobber the one that landed second.
+  const requests: ReturnType<typeof deferred<TaskItem[]>>[] = [];
   const mock = mockApi({
-    listTasks: (scope) => {
+    listTasks: () => {
       const request = deferred<TaskItem[]>();
-      pending.set(scope!, request);
+      requests.push(request);
       return request.promise;
     },
   });
   const store = createAppStore(mock.api);
   const a = store.actions.selectScope('A');
   const b = store.actions.selectScope('B');
-  pending.get('B')!.resolve([task('B', 2)]);
+  requests[1]!.resolve([task('B', 2)]);
   await b;
-  pending.get('A')!.resolve([task('A', 1)]);
+  requests[0]!.resolve([task('A', 1)]);
   await a;
   assert.equal(store.getState().activeScopeId, 'B');
   assert.deepEqual(

@@ -156,8 +156,7 @@ export class Service {
       reportIssue: (area, error, context) =>
         this.reportIssue(area, error, context),
       emitUpdates: () => this.emitUpdates(),
-      emitNotice: (scopeId) =>
-        this.emit('notices', this.goals.listNotices(scopeId)),
+      emitNotice: () => this.emit('notices', this.goals.listNotices(null)),
     });
   }
 
@@ -177,8 +176,7 @@ export class Service {
           this.ensureGoalConversation(goalId, scopeId),
         emitUpdates: () => this.emitUpdates(),
         emitImprovements: () => this.emitImprovements(),
-        emitNotices: (scopeId) =>
-          this.emit('notices', this.goals.listNotices(scopeId)),
+        emitNotices: () => this.emit('notices', this.goals.listNotices(null)),
         onTaskCompleted: (scopeId) => {
           void this.memoryWorker
             .trigger(scopeId, 'task-completed')
@@ -564,6 +562,12 @@ export class Service {
     } finally {
       this.openingSessions.delete(key);
     }
+  }
+
+  archiveConversation(id: string, archived: boolean): void {
+    this.db.conversationScope(id);
+    this.db.setConversationArchived(id, archived);
+    this.emit('conversations', this.listConversations());
   }
 
   async submit(id: string, content: string, requestId?: string) {
@@ -1299,7 +1303,7 @@ export class Service {
     return null;
   }
 
-  inboxList(scopeId: string) {
+  inboxList(scopeId: string | null) {
     return this.scopes.listMessages(scopeId);
   }
   runList(scopeId: string | null) {

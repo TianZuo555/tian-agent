@@ -41,6 +41,7 @@ export interface Commands {
   listConversations: Command<[], ConversationInfo[]>;
   createConversation: Command<[scopeId: string], ConversationInfo>;
   openSession: Command<[binding: SessionBinding], ConversationInfo>;
+  archiveConversation: Command<[id: string, archived: boolean], void>;
   submit: Command<
     [id: string, text: string, requestId?: string],
     { submissionId: string }
@@ -103,7 +104,7 @@ export interface Commands {
   memoryDismiss: Command<[scopeId: string, seq: number], void>;
   memorySelect: Command<[scopeId: string, seq: number], void>;
   memoryDeselect: Command<[scopeId: string, seq: number], void>;
-  inboxList: Command<[scopeId: string], InboxItem[]>;
+  inboxList: Command<[scopeId: string | null], InboxItem[]>;
   runList: Command<[scopeId: string | null], RunInfo[]>;
   runReport: Command<[id: string], string>;
   runDiff: Command<[id: string], string>;
@@ -185,6 +186,7 @@ export const commandArgs = {
       { additionalProperties: false },
     ),
   ]),
+  archiveConversation: Type.Tuple([id, Type.Boolean()]),
   submit: Type.Union([Type.Tuple([id, text]), Type.Tuple([id, text, id])]),
   abort: Type.Tuple([id]),
   watch: Type.Tuple([id]),
@@ -267,7 +269,7 @@ export const commandArgs = {
   memoryDismiss: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   memorySelect: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   memoryDeselect: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
-  inboxList: Type.Tuple([id]),
+  inboxList: Type.Tuple([nullableId]),
   runList: Type.Tuple([nullableId]),
   runReport: Type.Tuple([id]),
   runDiff: Type.Tuple([id]),

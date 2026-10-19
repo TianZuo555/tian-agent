@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Archive,
+  BoxArrowUp,
   CaretDown,
   CaretRight,
   ChatCircleDots,
@@ -11,7 +13,6 @@ import {
   Plus,
   Target,
   Tray,
-  X,
 } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
 import { motion, useReducedMotion } from 'motion/react';
@@ -54,69 +55,123 @@ function relativeTime(iso: string): string {
   });
 }
 
+/** Hover-revealed archive/restore affordance floating over a row's meta. */
+function RowAction({
+  conversation,
+  archived,
+}: {
+  conversation: ConversationInfo;
+  archived: boolean;
+}) {
+  const title = conversation.title ?? 'New conversation';
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={
+              archived
+                ? `Restore conversation: ${title}`
+                : `Archive conversation: ${title}`
+            }
+            className="absolute top-1/2 right-1 -translate-y-1/2 bg-sidebar-accent text-content-secondary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            onClick={() =>
+              void actions.archiveConversation(
+                conversation.conversationId,
+                !archived,
+              )
+            }
+          />
+        }
+      >
+        {archived ? (
+          <BoxArrowUp size={13} aria-hidden="true" />
+        ) : (
+          <Archive size={13} aria-hidden="true" />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup>{archived ? 'Restore' : 'Archive'}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function ConversationRow(props: {
   conversation: ConversationInfo;
   active: boolean;
+  archived?: boolean;
+  scopeName?: string;
 }) {
-  const { conversation: c, active } = props;
+  const { conversation: c, active, archived = false, scopeName } = props;
   const reduce = useReducedMotion();
+  const title = c.title ?? 'New conversation';
+  const when = relativeTime(
+    archived ? (c.archivedAt ?? c.createdAt) : c.createdAt,
+  );
+  const meta = archived && scopeName ? `${scopeName} · ${when}` : when;
+  const label = archived
+    ? `Archived conversation: ${title}`
+    : `Conversation: ${title}`;
   return (
-    <motion.button
-      layout={!reduce}
-      type="button"
-      aria-label={`Conversation: ${c.title ?? 'New conversation'}`}
-      aria-current={active ? 'true' : undefined}
-      onClick={() =>
-        void actions.selectConversation(c.conversationId, c.scopeId)
-      }
-      className={`group relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-        active
-          ? 'text-sidebar-accent-foreground'
-          : 'text-sidebar-foreground hover:bg-sidebar-accent/55 hover:text-sidebar-accent-foreground'
-      }`}
-    >
-      {active && (
-        <>
-          <motion.span
-            layoutId="conversation-active"
-            transition={
-              reduce
-                ? { duration: 0 }
-                : { type: 'spring', stiffness: 500, damping: 38 }
-            }
-            className="absolute inset-0 rounded-lg bg-sidebar-accent"
-          />
-          <motion.span
-            layoutId="conversation-active-bar"
-            transition={
-              reduce
-                ? { duration: 0 }
-                : { type: 'spring', stiffness: 500, damping: 38 }
-            }
-            className="absolute top-1/2 left-0 h-4 w-0.5 -translate-y-1/2 rounded-full bg-brand"
-          />
-        </>
-      )}
-      <ChatCircleText
-        size={14}
-        weight={active ? 'fill' : 'regular'}
-        className={`relative shrink-0 ${
-          active ? 'text-brand' : 'text-content-disabled'
-        }`}
-      />
-      <span className="relative min-w-0 flex-1 truncate text-[12.5px]">
-        {c.title ?? 'New conversation'}
-      </span>
-      <span
-        className={`relative shrink-0 font-mono text-[10px] tabular-nums transition-colors ${
+    <motion.div layout={!reduce} className="group relative">
+      <button
+        type="button"
+        aria-label={label}
+        aria-current={active ? 'true' : undefined}
+        onClick={() =>
+          void actions.selectConversation(c.conversationId, c.scopeId)
+        }
+        className={`relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
           active
-            ? 'text-content-secondary'
-            : 'text-content-disabled group-hover:text-content-secondary'
+            ? 'text-sidebar-accent-foreground'
+            : 'text-sidebar-foreground hover:bg-sidebar-accent/55 hover:text-sidebar-accent-foreground'
         }`}
       >
-        {relativeTime(c.createdAt)}
-      </span>
-    </motion.button>
+        {active && (
+          <>
+            <motion.span
+              layoutId="conversation-active"
+              transition={
+                reduce
+                  ? { duration: 0 }
+                  : { type: 'spring', stiffness: 500, damping: 38 }
+              }
+              className="absolute inset-0 rounded-lg bg-sidebar-accent"
+            />
+            <motion.span
+              layoutId="conversation-active-bar"
+              transition={
+                reduce
+                  ? { duration: 0 }
+                  : { type: 'spring', stiffness: 500, damping: 38 }
+              }
+              className="absolute top-1/2 left-0 h-4 w-0.5 -translate-y-1/2 rounded-full bg-brand"
+            />
+          </>
+        )}
+        <ChatCircleText
+          size={14}
+          weight={active ? 'fill' : 'regular'}
+          className={`relative shrink-0 ${
+            active ? 'text-brand' : 'text-content-disabled'
+          }`}
+        />
+        <span className="relative min-w-0 flex-1 truncate text-[12.5px]">
+          {title}
+        </span>
+        <span
+          className={`relative max-w-28 min-w-0 shrink-0 truncate font-mono text-[10px] tabular-nums transition-[color,opacity] group-hover:opacity-0 ${
+            active
+              ? 'text-content-secondary'
+              : 'text-content-disabled group-hover:text-content-secondary'
+          }`}
+        >
+          {meta}
+        </span>
+      </button>
+      <RowAction conversation={c} archived={archived} />
+    </motion.div>
   );
 }
 
@@ -276,10 +331,15 @@ function ScopeSection(props: {
   );
 }
 
-/** Brand block with the command palette entry point. */
+/**
+ * The sidebar's segment of the unified title bar: same 44px row, same bottom
+ * hairline, and the same drag region as every content header, so the top of
+ * the window reads as one continuous strip (Codex-style). The leading pad
+ * clears the hidden-inset traffic lights.
+ */
 function SidebarBrand() {
   return (
-    <div className="relative flex items-center gap-2.5 bg-[radial-gradient(18rem_6rem_at_18%_0%,hsl(var(--brand)/0.1),transparent_70%)] px-3 pt-1 pb-3">
+    <div className="flex h-11 shrink-0 items-center gap-2.5 border-border border-b pr-2 pl-20 [-webkit-app-region:drag]">
       <BrandMark glow />
       <div className="min-w-0 flex-1">
         <div className="truncate font-semibold text-[13px] text-foreground leading-tight tracking-tight">
@@ -296,7 +356,7 @@ function SidebarBrand() {
               variant="ghost"
               size="icon-sm"
               aria-label="Open command palette"
-              className="text-content-secondary"
+              className="text-content-secondary [-webkit-app-region:no-drag]"
               onClick={() => actions.setPaletteOpen(true)}
             />
           }
@@ -356,44 +416,6 @@ function PrimaryNav({
   );
 }
 
-/** Conversation filter field. */
-function ConversationSearch({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="px-2.5 pb-2">
-      <div className="group relative">
-        <MagnifyingGlass
-          size={13}
-          className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-content-disabled transition-colors group-focus-within:text-content-secondary"
-        />
-        <Input
-          placeholder="Search conversations"
-          aria-label="Search conversations"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          size="sm"
-          className="h-7 bg-transparent pr-7 pl-8 text-[11.5px]"
-        />
-        {value && (
-          <button
-            type="button"
-            aria-label="Clear search"
-            onClick={() => onChange('')}
-            className="absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-content-disabled transition-colors hover:bg-secondary hover:text-foreground"
-          >
-            <X size={11} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 const SERVICE_STATUS: Record<
   'ready' | 'starting' | 'disconnected' | 'failed',
   { label: string; dot: string; live: boolean }
@@ -434,7 +456,7 @@ function SettingsGear({ active, count }: { active: boolean; count: number }) {
             className={`ml-auto shrink-0 ${
               active ? 'text-brand' : 'text-content-secondary'
             }`}
-            onClick={() => actions.setNav('settings')}
+            onClick={() => actions.toggleSettings()}
           />
         }
       >
@@ -582,17 +604,17 @@ export function Sidebar() {
   const improvements = useStore((s) => s.improvements);
   const skills = useStore((s) => s.skills);
   const runtimeStatus = useStore((s) => s.runtimeStatus);
-  const [query, setQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const reduce = useReducedMotion();
 
-  const q = query.trim().toLowerCase();
-  const filtered = q
-    ? conversations.filter((c) => (c.title ?? '').toLowerCase().includes(q))
-    : conversations;
   const globalScope = scopes.find((s) => s.kind === 'global');
   const projects = scopes.filter((s) => s.kind === 'project');
+  const liveConversations = conversations.filter((c) => !c.archivedAt);
+  const archivedConversations = conversations
+    .filter((c) => c.archivedAt)
+    .sort((a, b) => (b.archivedAt ?? '').localeCompare(a.archivedAt ?? ''));
   const pendingTasks = tasks.filter((t) => t.status === 'pending').length;
   const unread = inbox.filter((m) => !m.read).length;
   const openImprovements = improvements.filter(
@@ -604,15 +626,9 @@ export function Sidebar() {
       aria-label="Navigation"
       className="flex min-h-0 w-full flex-col border-border border-r bg-sidebar text-sidebar-foreground"
     >
-      {/* Traffic-light gutter + window drag handle for the hidden-inset title bar. */}
-      <div
-        aria-hidden="true"
-        className="h-9 shrink-0 [-webkit-app-region:drag]"
-      />
-
       <SidebarBrand />
 
-      <div className="px-2 pb-2">
+      <div className="px-2 pb-2 pt-2">
         <Button
           variant="outline"
           size="sm"
@@ -679,8 +695,6 @@ export function Sidebar() {
         </Tooltip>
       </div>
 
-      <ConversationSearch value={query} onChange={setQuery} />
-
       <ScrollArea
         className="min-h-0 flex-1 px-2 pb-2"
         scrollbarGutter
@@ -689,7 +703,9 @@ export function Sidebar() {
         {globalScope && (
           <ScopeSection
             scope={globalScope}
-            conversations={filtered.filter((c) => c.scopeId === globalScope.id)}
+            conversations={liveConversations.filter(
+              (c) => c.scopeId === globalScope.id,
+            )}
             activeId={activeId}
             collapsed={projectsCollapsed}
           />
@@ -698,7 +714,7 @@ export function Sidebar() {
           <ScopeSection
             key={p.id}
             scope={p}
-            conversations={filtered.filter((c) => c.scopeId === p.id)}
+            conversations={liveConversations.filter((c) => c.scopeId === p.id)}
             activeId={activeId}
             collapsed={projectsCollapsed}
           />
@@ -716,6 +732,49 @@ export function Sidebar() {
               <Plus size={11} /> Add a project
             </button>
           </div>
+        )}
+        {archivedConversations.length > 0 && (
+          <section
+            aria-label="Archived conversations"
+            className="mt-3 border-border/60 border-t pt-2"
+          >
+            <div className="flex h-7 items-center gap-1 px-1">
+              <button
+                type="button"
+                aria-expanded={archiveOpen}
+                onClick={() => setArchiveOpen((v) => !v)}
+                className="group flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-medium font-mono text-[10px] text-content-disabled uppercase tracking-[0.1em] transition-colors hover:text-content-secondary"
+              >
+                <motion.span
+                  animate={{ rotate: archiveOpen ? 90 : 0 }}
+                  transition={{
+                    duration: reduce ? 0 : 0.16,
+                    ease: [0.22, 1, 0.36, 1],
+                  }}
+                  className="inline-flex"
+                >
+                  <CaretRight size={10} weight="bold" />
+                </motion.span>
+                Archive
+                <span className="ms-1 text-content-disabled/60 tabular-nums">
+                  {archivedConversations.length}
+                </span>
+              </button>
+            </div>
+            <Reveal open={archiveOpen}>
+              <div className="flex flex-col gap-px">
+                {archivedConversations.map((c) => (
+                  <ConversationRow
+                    key={c.conversationId}
+                    conversation={c}
+                    active={c.conversationId === activeId}
+                    archived
+                    scopeName={scopes.find((s) => s.id === c.scopeId)?.name}
+                  />
+                ))}
+              </div>
+            </Reveal>
+          </section>
         )}
         <div className="h-2" />
       </ScrollArea>

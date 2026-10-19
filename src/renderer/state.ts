@@ -23,6 +23,21 @@ import type {
 
 /** Primary destination chosen in the left rail. */
 export type Nav = 'chat' | 'goals' | 'skills' | 'inbox' | 'settings';
+
+/**
+ * The sidebar's shown/hidden choice, kept across launches the way a Mac app
+ * keeps it. The store also builds under Node's test runner, which has no
+ * localStorage, so reads fall back to shown.
+ */
+const SIDEBAR_OPEN_KEY = 'tian.sidebarOpen';
+function readSidebarOpen(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_OPEN_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 export interface State {
   scopes: ScopeInfo[];
   conversations: ConversationInfo[];
@@ -41,7 +56,10 @@ export interface State {
   settings: SettingsInfo | null;
   catalog: ModelCatalog | null;
   nav: Nav;
+  /** The view Settings overlays, so its close control knows where to land. */
+  navReturn: Nav;
   contextOpen: boolean;
+  sidebarOpen: boolean;
   paletteOpen: boolean;
   loading: boolean;
   error: string | null;
@@ -71,7 +89,9 @@ export function createAppStore(api: TianApi) {
     settings: null,
     catalog: null,
     nav: 'chat',
+    navReturn: 'chat',
     contextOpen: true,
+    sidebarOpen: readSidebarOpen(),
     paletteOpen: false,
     loading: true,
     error: null,
@@ -125,12 +145,15 @@ export function createAppStore(api: TianApi) {
   }
   async function refreshPanels(scopeId = state.activeScopeId): Promise<void> {
     await Promise.all([
-      load('tasks', () => api.listTasks(scopeId), scopeId),
-      load('goals', () => api.listGoals(scopeId), scopeId),
-      load('notices', () => api.listNotices(scopeId), scopeId),
+      // Tasks, goals, notices, and the inbox back whole-app dashboards, so
+      // they always load across scopes; memory and runs stay scoped to the
+      // conversation the context pane is inspecting.
+      load('tasks', () => api.listTasks(null)),
+      load('goals', () => api.listGoals(null)),
+      load('notices', () => api.listNotices(null)),
       load('improvements', () => api.listImprovements(null)),
       load('memory', () => api.memoryDump(scopeId), scopeId),
-      load('inbox', () => api.inboxList(scopeId), scopeId),
+      load('inbox', () => api.inboxList(null)),
       load(
         'runs',
         () => api.runList(scopeId === 'global' ? null : scopeId),
@@ -196,11 +219,7 @@ export function createAppStore(api: TianApi) {
       activeConversationId:
         active?.scopeId === scopeId ? state.activeConversationId : null,
       view: null,
-      tasks: [],
-      goals: [],
-      notices: [],
       memory: null,
-      inbox: [],
       runs: [],
       operationError: null,
     });
@@ -214,11 +233,7 @@ export function createAppStore(api: TianApi) {
       activeConversationId: id,
       activeScopeId: scopeId,
       view: null,
-      tasks: [],
-      goals: [],
-      notices: [],
       memory: null,
-      inbox: [],
       runs: [],
       operationError: null,
     });
@@ -247,23 +262,15 @@ export function createAppStore(api: TianApi) {
         }),
         api.on('tasks', (tasks) => {
           next('tasks');
-          set({
-            tasks: tasks.filter((task) => task.scopeId === state.activeScopeId),
-          });
+          set({ tasks });
         }),
         api.on('goals', (goals) => {
           next('goals');
-          set({
-            goals: goals.filter((goal) => goal.scopeId === state.activeScopeId),
-          });
+          set({ goals });
         }),
         api.on('notices', (notices) => {
           next('notices');
-          set({
-            notices: notices.filter(
-              (notice) => notice.scopeId === state.activeScopeId,
-            ),
-          });
+          set({ notices });
         }),
         api.on('improvements', (improvements) => {
           next('improvements');
@@ -289,11 +296,8 @@ export function createAppStore(api: TianApi) {
           next('skills');
           set({ skills });
         }),
-        api.on('inbox', (scopeId) => {
-          if (scopeId === state.activeScopeId)
-            void safe(() =>
-              load('inbox', () => api.inboxList(scopeId), scopeId),
-            );
+        api.on('inbox', () => {
+          void safe(() => load('inbox', () => api.inboxList(null)));
         }),
         api.on('runtime', (runtime) => {
           set({
@@ -356,6 +360,10 @@ export function createAppStore(api: TianApi) {
       safe(async () => {
         if (state.activeConversationId)
           await api.abort(state.activeConversationId);
+      }),
+    archiveConversation: (id: string, archived: boolean) =>
+      safe(async () => {
+        await api.archiveConversation(id, archived);
       }),
     addProject: (name: string, rootPath: string) =>
       safe(async () => {
@@ -508,10 +516,30 @@ export function createAppStore(api: TianApi) {
       await api.updateProject(id, patch);
     },
     setNav(nav: Nav) {
-      set({ nav });
+      set({
+        nav,
+        navReturn:
+          nav === 'settings'
+            ? state.nav === 'settings'
+              ? state.navReturn
+              : state.nav
+            : nav,
+      });
+    },
+    /** Open Settings, or leave it for the view it was opened from. */
+    toggleSettings() {
+      actions.setNav(state.nav === 'settings' ? state.navReturn : 'settings');
     },
     setContextOpen(contextOpen: boolean) {
       set({ contextOpen });
+    },
+    setSidebarOpen(sidebarOpen: boolean) {
+      set({ sidebarOpen });
+      try {
+        localStorage.setItem(SIDEBAR_OPEN_KEY, sidebarOpen ? '1' : '0');
+      } catch {
+        /* this window only */
+      }
     },
     async refreshModels() {
       const catalog = await api.refreshModels();

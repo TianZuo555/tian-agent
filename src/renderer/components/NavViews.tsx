@@ -47,7 +47,8 @@ import type {
 } from '@/shared/types';
 import { actions, useStore } from '../store';
 import { EASE } from './motion-primitives';
-import { BrandOrb } from './BrandMark';
+import { SidebarToggle } from './SidebarToggle';
+import { ContextToggle } from './ContextToggle';
 
 function Header({
   icon: IconComponent,
@@ -60,8 +61,15 @@ function Header({
   meta: string;
   action?: React.ReactNode;
 }) {
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 px-4 backdrop-blur-md [-webkit-app-region:drag]">
+    // A folded sidebar leaves the traffic lights over this row's left.
+    <header
+      className={`flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 backdrop-blur-md [-webkit-app-region:drag] ${
+        sidebarOpen ? 'px-4' : 'pr-4 pl-20'
+      }`}
+    >
+      <SidebarToggle />
       <span
         aria-hidden="true"
         className="flex size-5 shrink-0 items-center justify-center rounded-md bg-secondary text-content-secondary"
@@ -72,9 +80,10 @@ function Header({
       <span className="font-mono text-[9.5px] text-content-disabled">
         {meta}
       </span>
-      {action && (
-        <div className="ml-auto [-webkit-app-region:no-drag]">{action}</div>
-      )}
+      <div className="ml-auto flex items-center gap-1 [-webkit-app-region:no-drag]">
+        {action}
+        <ContextToggle />
+      </div>
     </header>
   );
 }
@@ -343,18 +352,102 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
   );
 }
 
+/** Hover-revealed run/pause/edit/cancel cluster on a goal card. */
+function GoalActions({
+  goal,
+  onEdit,
+}: {
+  goal: GoalItem;
+  onEdit: (goal: GoalItem) => void;
+}) {
+  const paused = goal.status === 'paused';
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 text-content-secondary opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Run now"
+              onClick={() => void actions.runGoalNow(goal.id)}
+            />
+          }
+        >
+          <Play size={13} weight="fill" className="text-brand" />
+        </TooltipTrigger>
+        <TooltipPopup>Run now</TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={paused ? 'Resume goal' : 'Pause goal'}
+              onClick={() =>
+                void actions.setGoalStatus(
+                  goal.id,
+                  paused ? 'active' : 'paused',
+                )
+              }
+            />
+          }
+        >
+          {paused ? <Play size={13} /> : <Pause size={13} weight="fill" />}
+        </TooltipTrigger>
+        <TooltipPopup>{paused ? 'Resume' : 'Pause'}</TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Edit goal"
+              onClick={() => onEdit(goal)}
+            />
+          }
+        >
+          <PencilSimple size={13} />
+        </TooltipTrigger>
+        <TooltipPopup>Edit</TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Cancel goal"
+              className="hover:text-destructive-foreground"
+              onClick={() => void actions.setGoalStatus(goal.id, 'cancelled')}
+            />
+          }
+        >
+          <X size={13} />
+        </TooltipTrigger>
+        <TooltipPopup>Cancel goal</TooltipPopup>
+      </Tooltip>
+    </div>
+  );
+}
+
 function GoalCard({
   goal,
   progress,
   onEdit,
   reduce,
   index,
+  scope,
 }: {
   goal: GoalItem;
   progress: { done: number; total: number } | undefined;
   onEdit: (goal: GoalItem) => void;
   reduce: boolean | null;
   index: number;
+  /** Scope display name; omitted when the app has a single scope. */
+  scope?: string;
 }) {
   const open = goal.status === 'active';
   const pct =
@@ -383,6 +476,11 @@ function GoalCard({
           <span className={`size-1 rounded-full ${goalDot[goal.status]}`} />
           {goalStatusText[goal.status]}
         </Badge>
+        {scope && (
+          <span className="mt-1 shrink-0 rounded-md border border-border px-1.5 py-px font-mono text-[9px] text-content-disabled">
+            {scope}
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <p className="break-words text-[13px] leading-snug">
             {goal.objective}
@@ -411,84 +509,7 @@ function GoalCard({
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 text-content-secondary opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Run now"
-                  onClick={() => void actions.runGoalNow(goal.id)}
-                />
-              }
-            >
-              <Play size={13} weight="fill" className="text-brand" />
-            </TooltipTrigger>
-            <TooltipPopup>Run now</TooltipPopup>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={
-                    goal.status === 'paused' ? 'Resume goal' : 'Pause goal'
-                  }
-                  onClick={() =>
-                    void actions.setGoalStatus(
-                      goal.id,
-                      goal.status === 'paused' ? 'active' : 'paused',
-                    )
-                  }
-                />
-              }
-            >
-              {goal.status === 'paused' ? (
-                <Play size={13} />
-              ) : (
-                <Pause size={13} weight="fill" />
-              )}
-            </TooltipTrigger>
-            <TooltipPopup>
-              {goal.status === 'paused' ? 'Resume' : 'Pause'}
-            </TooltipPopup>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Edit goal"
-                  onClick={() => onEdit(goal)}
-                />
-              }
-            >
-              <PencilSimple size={13} />
-            </TooltipTrigger>
-            <TooltipPopup>Edit</TooltipPopup>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Cancel goal"
-                  className="hover:text-destructive-foreground"
-                  onClick={() =>
-                    void actions.setGoalStatus(goal.id, 'cancelled')
-                  }
-                />
-              }
-            >
-              <X size={13} />
-            </TooltipTrigger>
-            <TooltipPopup>Cancel goal</TooltipPopup>
-          </Tooltip>
-        </div>
+        <GoalActions goal={goal} onEdit={onEdit} />
       </div>
       {open && (
         <div className="mt-2.5 pl-[4.25rem]">
@@ -528,7 +549,14 @@ const TASK_GROUPS: { key: TaskStatus; label: string }[] = (
   ] as TaskStatus[]
 ).map((key) => ({ key, label: taskStatusText[key] }));
 
-function TaskList({ tasks }: { tasks: TaskItem[] }) {
+function TaskList({
+  tasks,
+  scopeLabel,
+}: {
+  tasks: TaskItem[];
+  /** Resolves a scope id to a display name; '' hides the scope entirely. */
+  scopeLabel: (id: string) => string;
+}) {
   const reduce = useReducedMotion();
   const groups = TASK_GROUPS.map((group) => ({
     ...group,
@@ -607,7 +635,7 @@ function TaskList({ tasks }: { tasks: TaskItem[] }) {
                       )}
                     </span>
                     <span className="mt-0.5 flex items-center gap-2 font-mono text-[9.5px] text-content-disabled">
-                      <span className="truncate">{t.scopeId}</span>
+                      <span className="truncate">{scopeLabel(t.scopeId)}</span>
                       {t.due && (
                         <span className="ml-auto shrink-0">
                           due {t.due.slice(0, 10)}
@@ -648,6 +676,7 @@ export function GoalsView() {
   const goals = useStore((s) => s.goals);
   const tasks = useStore((s) => s.tasks);
   const notices = useStore((s) => s.notices);
+  const scopes = useStore((s) => s.scopes);
   const [draft, setDraft] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<GoalItem | null>(null);
@@ -662,6 +691,10 @@ export function GoalsView() {
     [goals],
   );
   const pending = tasks.filter((t) => t.status === 'pending').length;
+  const scopeName = (id: string) =>
+    scopes.find((scope) => scope.id === id)?.name ?? id;
+  // Scope labels only earn their pixels when scopes actually differ.
+  const scopeLabel = (id: string) => (scopes.length > 1 ? scopeName(id) : '');
   const progressByGoal = useMemo(() => {
     const map = new Map<string, { done: number; total: number }>();
     for (const task of tasks) {
@@ -715,43 +748,12 @@ export function GoalsView() {
 
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
         <div className="mx-auto w-full max-w-2xl px-5 py-6">
-          <form
-            className="group mb-7 flex items-center gap-2 rounded-xl border border-border bg-card/60 p-1.5 pl-3 transition-colors focus-within:border-border-secondary"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!draft.trim()) return;
-              await actions.addTask(draft.trim());
-              setDraft('');
-            }}
-          >
-            <Plus
-              size={12}
-              className="shrink-0 text-content-disabled transition-transform duration-200 group-focus-within:rotate-90 group-focus-within:text-brand"
-            />
-            <Input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Add a task…"
-              aria-label="New task"
-              unstyled
-              className="h-6 text-[13px]"
-            />
-            <Button
-              type="submit"
-              size="icon-sm"
-              aria-label="Add task"
-              disabled={!draft.trim()}
-            >
-              <ArrowRight size={13} />
-            </Button>
-          </form>
-
-          {openGoals.length === 0 && closedGoals.length === 0 && (
-            <div className="relative mx-auto flex max-w-md flex-col items-center gap-4 overflow-hidden rounded-2xl border border-dashed border-border px-6 py-14 text-center">
-              <div className="ambient-glow pointer-events-none absolute inset-0 opacity-60" />
-              <div className="relative scale-75">
-                <BrandOrb />
-              </div>
+          {goals.length === 0 ? (
+            <div className="relative mx-auto flex max-w-md flex-col items-center gap-4 overflow-hidden rounded-2xl border border-dashed border-border px-6 py-16 text-center">
+              <div className="ambient-glow pointer-events-none absolute inset-0 opacity-50" />
+              <span className="relative flex size-11 items-center justify-center rounded-2xl border border-border bg-card text-brand">
+                <Target size={19} weight="duotone" />
+              </span>
               <div className="relative flex flex-col items-center gap-1">
                 <p className="text-[13px] text-foreground">No goals yet.</p>
                 <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
@@ -770,32 +772,53 @@ export function GoalsView() {
                 New goal
               </Button>
             </div>
-          )}
-
-          {openGoals.length > 0 && (
+          ) : (
             <section aria-label="Open goals" className="mb-8">
               <SectionLabel
                 label="Goals"
                 count={openGoals.length}
                 tone="brand"
               />
-              <ul className="flex flex-col gap-2">
-                <AnimatePresence initial={false}>
-                  {openGoals.map((goal, i) => (
-                    <GoalCard
-                      key={goal.id}
-                      goal={goal}
-                      index={i}
-                      progress={progressByGoal.get(goal.id)}
-                      reduce={reduce}
-                      onEdit={(g) => {
-                        setEditing(g);
-                        setDialogOpen(true);
-                      }}
-                    />
-                  ))}
-                </AnimatePresence>
-              </ul>
+              {openGoals.length > 0 ? (
+                <ul className="flex flex-col gap-2">
+                  <AnimatePresence initial={false}>
+                    {openGoals.map((goal, i) => (
+                      <GoalCard
+                        key={goal.id}
+                        goal={goal}
+                        index={i}
+                        progress={progressByGoal.get(goal.id)}
+                        reduce={reduce}
+                        scope={
+                          scopes.length > 1
+                            ? scopeName(goal.scopeId)
+                            : undefined
+                        }
+                        onEdit={(g) => {
+                          setEditing(g);
+                          setDialogOpen(true);
+                        }}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </ul>
+              ) : (
+                <p className="mb-2 py-1 text-[12px] text-content-disabled">
+                  Nothing active — the closed ones are below.
+                </p>
+              )}
+              {/* The in-list affordance: quiet until it earns a look. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  setDialogOpen(true);
+                }}
+                className="mt-2 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-border px-3 py-2.5 text-[12px] text-content-disabled transition-colors hover:border-border-secondary hover:bg-card/50 hover:text-content-secondary"
+              >
+                <Plus size={12} />
+                New goal
+              </button>
             </section>
           )}
 
@@ -823,6 +846,11 @@ export function GoalsView() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
+                        {scopeLabel(n.scopeId) && (
+                          <span className="shrink-0 rounded-md border border-border px-1.5 py-px font-mono text-[9px] text-content-disabled">
+                            {scopeLabel(n.scopeId)}
+                          </span>
+                        )}
                         <span className="truncate font-mono text-[9.5px] text-content-disabled">
                           {n.fingerprint}
                         </span>
@@ -845,6 +873,45 @@ export function GoalsView() {
             </section>
           )}
 
+          <section aria-label="Tasks" className="mb-8">
+            <SectionLabel label="Tasks" count={tasks.length} />
+            {/* The add-row sits with its output: a dashed row on top of the
+                list, styled like the rows that land under it. */}
+            <form
+              className="group mb-1.5 flex items-center gap-2.5 rounded-lg border border-dashed border-border px-2.5 py-1 transition-colors focus-within:border-border-secondary focus-within:bg-card/60 hover:bg-card/40"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!draft.trim()) return;
+                await actions.addTask(draft.trim());
+                setDraft('');
+              }}
+            >
+              <Plus
+                size={12}
+                className="shrink-0 text-content-disabled transition-transform duration-200 group-focus-within:rotate-90 group-focus-within:text-brand"
+              />
+              <Input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="Add a task…"
+                aria-label="New task"
+                unstyled
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="submit"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Add task"
+                disabled={!draft.trim()}
+                className="shrink-0 text-content-secondary"
+              >
+                <ArrowRight size={12} />
+              </Button>
+            </form>
+            <TaskList tasks={tasks} scopeLabel={scopeLabel} />
+          </section>
+
           {closedGoals.length > 0 && (
             <section aria-label="Closed goals" className="mb-8">
               <SectionLabel label="Closed" count={closedGoals.length} />
@@ -861,6 +928,11 @@ export function GoalsView() {
                     >
                       {goalStatusText[goal.status]}
                     </Badge>
+                    {scopes.length > 1 && (
+                      <span className="shrink-0 font-mono text-[9px] text-content-disabled">
+                        {scopeName(goal.scopeId)}
+                      </span>
+                    )}
                     <span className="min-w-0 flex-1 truncate text-[12px] text-content-secondary line-through decoration-border-secondary">
                       {goal.objective}
                     </span>
@@ -881,11 +953,6 @@ export function GoalsView() {
               </ul>
             </section>
           )}
-
-          <section aria-label="Tasks">
-            <SectionLabel label="Tasks" count={tasks.length} />
-            <TaskList tasks={tasks} />
-          </section>
         </div>
       </ScrollArea>
 
@@ -895,7 +962,15 @@ export function GoalsView() {
 }
 
 /** Inbox rows; a keyed motion list so reads and arrivals animate in place. */
-function InboxList({ inbox, reduce }: { inbox: InboxItem[]; reduce: boolean }) {
+function InboxList({
+  inbox,
+  reduce,
+  scopeLabel,
+}: {
+  inbox: InboxItem[];
+  reduce: boolean;
+  scopeLabel: (id: string) => string;
+}) {
   return (
     <ul className="flex flex-col gap-2">
       <AnimatePresence initial={false}>
@@ -942,6 +1017,11 @@ function InboxList({ inbox, reduce }: { inbox: InboxItem[]; reduce: boolean }) {
                     new
                   </Badge>
                 )}
+                {scopeLabel(m.scopeId) && (
+                  <span className="shrink-0 rounded-md border border-border px-1.5 py-px font-mono text-[9px] text-content-disabled">
+                    {scopeLabel(m.scopeId)}
+                  </span>
+                )}
                 <span className="ml-auto shrink-0 font-mono text-[9.5px] text-content-disabled">
                   {m.ts.slice(5, 16).replace('T', ' ')}
                 </span>
@@ -966,8 +1046,13 @@ function inboxIcon(from: string): Icon {
 
 export function InboxView() {
   const inbox = useStore((s) => s.inbox);
+  const scopes = useStore((s) => s.scopes);
   const reduce = useReducedMotion();
   const unread = inbox.filter((m) => !m.read).length;
+  const scopeLabel = (id: string) =>
+    scopes.length > 1
+      ? (scopes.find((scope) => scope.id === id)?.name ?? id)
+      : '';
 
   return (
     <main
@@ -995,7 +1080,11 @@ export function InboxView() {
               </div>
             </div>
           ) : (
-            <InboxList inbox={inbox} reduce={Boolean(reduce)} />
+            <InboxList
+              inbox={inbox}
+              reduce={Boolean(reduce)}
+              scopeLabel={scopeLabel}
+            />
           )}
         </div>
       </ScrollArea>

@@ -1,11 +1,6 @@
 import { Suspense, lazy } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import {
-  ArrowsClockwise,
-  CaretDoubleLeft,
-  WarningCircle,
-  X,
-} from '@phosphor-icons/react';
+import { ArrowsClockwise, WarningCircle, X } from '@phosphor-icons/react';
 import { actions, useStore } from '../store';
 import { Sidebar } from './Sidebar';
 import { PaneDivider } from './PaneDivider';
@@ -30,9 +25,6 @@ const SettingsView = lazy(() =>
 const ContextPane = lazy(() =>
   import('./ContextPane').then((m) => ({ default: m.ContextPane })),
 );
-
-/** Context pane width while collapsed: just the vertical rail. */
-const RAIL_WIDTH = 44;
 
 /** One banner for both error and reconnect states; text comes from a table. */
 function ConnectionBanner() {
@@ -198,9 +190,10 @@ function MainPane() {
 }
 
 /**
- * The right pane and its collapsed rail share one grid column. Collapsing
- * animates a transform and a constant-width column, so the conversation never
- * reflows frame by frame the way an animated `width` would.
+ * The right pane keeps no rail when folded — the header's toggle brings it
+ * back. Collapsing animates a transform and a constant-width column, so the
+ * conversation never reflows frame by frame the way an animated `width`
+ * would.
  */
 function ContextSide({
   width,
@@ -219,7 +212,7 @@ function ContextSide({
     reduce || dragging ? { duration: 0 } : { duration: 0.24, ease: EASE };
   return (
     <AnimatePresence initial={false} mode="popLayout">
-      {contextOpen ? (
+      {contextOpen && (
         <motion.div
           key="context"
           initial={reduce ? false : { x: width + 2, opacity: 0 }}
@@ -244,29 +237,6 @@ function ContextSide({
             </Suspense>
           </div>
         </motion.div>
-      ) : (
-        <motion.div
-          key="rail"
-          initial={reduce ? false : { opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={reduce ? undefined : { opacity: 0 }}
-          transition={{ duration: 0.2, ease: EASE }}
-          className="flex shrink-0 flex-col items-center overflow-hidden border-border border-l bg-sidebar py-2"
-          style={{ width: RAIL_WIDTH }}
-        >
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Show context pane"
-            className="text-content-secondary hover:text-foreground"
-            onClick={() => actions.setContextOpen(true)}
-          >
-            <CaretDoubleLeft size={15} />
-          </Button>
-          <span className="mt-3 font-mono text-[9px] text-content-disabled uppercase tracking-[0.18em] [writing-mode:vertical-rl]">
-            Context
-          </span>
-        </motion.div>
       )}
     </AnimatePresence>
   );
@@ -288,6 +258,8 @@ export function Shell({
   onContextResize: (width: number) => void;
   onContextDraggingChange: (dragging: boolean) => void;
 }) {
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const reduce = useReducedMotion();
   return (
     // No role="application": it would suppress the screen reader's own
     // navigation shortcuts for the whole app.
@@ -295,20 +267,38 @@ export function Shell({
       aria-label="Tian Agent"
       className="flex h-screen overflow-hidden bg-background text-foreground"
     >
-      <div
-        className="flex min-h-0 shrink-0 overflow-hidden"
-        style={{ width: navWidth }}
-      >
-        <Sidebar />
-      </div>
-      <PaneDivider
-        side="left"
-        label="Resize navigation"
-        width={navWidth}
-        min={200}
-        max={380}
-        onResize={onNavResize}
-      />
+      {/* Collapsed as ContextSide is: the column slides to the window's edge
+          by transform while its space pops out of layout at once, so the
+          conversation never reflows frame by frame. The divider rides along
+          inside, its hover reach kept by the inner clip. */}
+      <AnimatePresence initial={false} mode="popLayout">
+        {sidebarOpen && (
+          <motion.div
+            key="nav"
+            initial={reduce ? false : { x: -(navWidth + 2), opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={reduce ? undefined : { x: -(navWidth + 2), opacity: 0 }}
+            transition={{ duration: reduce ? 0 : 0.24, ease: EASE }}
+            className="flex min-h-0 shrink-0"
+            style={{ width: navWidth + 2 }}
+          >
+            <div
+              className="flex min-h-0 shrink-0 overflow-hidden"
+              style={{ width: navWidth }}
+            >
+              <Sidebar />
+            </div>
+            <PaneDivider
+              side="left"
+              label="Resize navigation"
+              width={navWidth}
+              min={200}
+              max={380}
+              onResize={onNavResize}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
       <MainPane />
       <ContextSide
         width={contextWidth}

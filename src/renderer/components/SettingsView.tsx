@@ -8,6 +8,7 @@ import {
   Gear,
   Notebook,
   Pulse,
+  X,
 } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
 import { useReducedMotion } from 'motion/react';
@@ -15,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Select,
   SelectItem,
@@ -23,6 +25,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { actions, useStore } from '../store';
+import { SidebarToggle } from './SidebarToggle';
+import { ContextToggle } from './ContextToggle';
 import { UsageHeatmap } from './UsageHeatmap';
 import { ServiceSettings } from './ServiceSettings';
 import { ImprovementLog } from './ImprovementLog';
@@ -307,6 +311,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
     (s) => s.improvements.filter((entry) => entry.status === 'open').length,
   );
   const catalog = useStore((s) => s.catalog);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
   const reduce = useReducedMotion();
   const meta = useMemo(
     () =>
@@ -321,7 +326,14 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
       aria-label="Settings"
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
-      <header className="flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 px-4 backdrop-blur-md [-webkit-app-region:drag]">
+      {/* The traffic lights always cover this row's left in the boot view,
+          and in the shell whenever the sidebar is folded. */}
+      <header
+        className={`flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 backdrop-blur-md [-webkit-app-region:drag] ${
+          sidebarOpen && !onBack ? 'px-4' : 'pr-4 pl-20'
+        }`}
+      >
+        {!onBack && <SidebarToggle />}
         <span
           aria-hidden="true"
           className="flex size-5 shrink-0 items-center justify-center rounded-md bg-secondary text-content-secondary"
@@ -332,7 +344,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
         <span className="truncate font-mono text-[9.5px] text-content-disabled">
           {meta}
         </span>
-        {onBack && (
+        {onBack ? (
           <Button
             variant="ghost"
             size="sm"
@@ -342,6 +354,26 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
             <ArrowLeft size={13} />
             Back
           </Button>
+        ) : (
+          <div className="ml-auto flex items-center gap-1 [-webkit-app-region:no-drag]">
+            <ContextToggle />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Close settings"
+                    className="text-content-secondary"
+                    onClick={() => actions.toggleSettings()}
+                  />
+                }
+              >
+                <X size={15} />
+              </TooltipTrigger>
+              <TooltipPopup>Close</TooltipPopup>
+            </Tooltip>
+          </div>
         )}
       </header>
 

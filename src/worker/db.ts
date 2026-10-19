@@ -116,7 +116,8 @@ export class Db {
         base_branch TEXT NOT NULL DEFAULT 'main', prompt_preamble TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS conversations (
-        conversation_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, title TEXT, created_at TEXT NOT NULL
+        conversation_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, title TEXT,
+        created_at TEXT NOT NULL, archived_at TEXT
       );
       CREATE TABLE IF NOT EXISTS channel_sessions (
         channel TEXT NOT NULL, external_id TEXT NOT NULL, scope_id TEXT NOT NULL,
@@ -169,6 +170,9 @@ export class Db {
     `);
       this.ensureColumns('projects', {
         allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
+      });
+      this.ensureColumns('conversations', {
+        archived_at: 'TEXT',
       });
       this.ensureColumns('tasks', {
         goal_id: 'TEXT',
@@ -447,6 +451,7 @@ export class Db {
       scopeId,
       title: null,
       createdAt: new Date().toISOString(),
+      archivedAt: null,
     };
     this.insert('conversations', value);
     return value;
@@ -486,6 +491,13 @@ export class Db {
       )
       .run(title, id);
   }
+  setConversationArchived(id: string, archived: boolean): void {
+    this.db
+      .prepare(
+        'UPDATE conversations SET archived_at = ? WHERE conversation_id = ?',
+      )
+      .run(archived ? new Date().toISOString() : null, id);
+  }
   listConversations(): ConversationRow[] {
     return rows(
       this.db
@@ -494,14 +506,14 @@ export class Db {
     );
   }
   /**
-   * Latest conversation in a scope that scope-level wakes may target.
-   * Manager conversations are excluded: untargeted notifications
+   * Latest non-archived conversation in a scope that scope-level wakes may
+   * target. Manager conversations are excluded: untargeted notifications
    * (inbox scans, goal wakes) belong to the chief, not the project manager.
    */
   latestConversation(scopeId: string): ConversationRow | undefined {
     const value = this.db
       .prepare(
-        `SELECT * FROM conversations WHERE scope_id = ?
+        `SELECT * FROM conversations WHERE scope_id = ? AND archived_at IS NULL
         AND conversation_id NOT IN (SELECT conversation_id FROM channel_sessions WHERE channel = 'manager')
         ORDER BY created_at DESC LIMIT 1`,
       )
@@ -1013,14 +1025,21 @@ export class Db {
       )
       .run(scopeId, message.id, JSON.stringify(message));
   }
-  listMessages(scopeId: string): InboxItem[] {
-    const values = this.db
-      .prepare(
-        'SELECT payload,is_read FROM inbox WHERE scope_id = ? ORDER BY id',
-      )
-      .all(scopeId) as { payload: string; is_read: number }[];
+  listMessages(scopeId: string | null): InboxItem[] {
+    const values = (
+      scopeId
+        ? this.db
+            .prepare(
+              'SELECT scope_id,payload,is_read FROM inbox WHERE scope_id = ? ORDER BY id',
+            )
+            .all(scopeId)
+        : this.db
+            .prepare('SELECT scope_id,payload,is_read FROM inbox ORDER BY id')
+            .all()
+    ) as { scope_id: string; payload: string; is_read: number }[];
     return values.map((value) => ({
       ...(JSON.parse(value.payload) as InboxItem),
+      scopeId: value.scope_id,
       read: value.is_read === 1,
     }));
   }

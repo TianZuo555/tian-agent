@@ -81,7 +81,7 @@ shadcn/coss 需要的 `--background` / `--foreground` / `--muted` / `--primary` 
 | 输入框   | 双行结构：textarea + 发送/停止；聚焦时上浮 1px、反相光环、底部展开 `↵ send · ⇧↵ new line` 提示。发送按钮在可发送时用黑白渐变，停止按钮带呼吸环。                                                                                                                                                                                                                 |
 | 空状态   | 品牌标记 / 轨道光球 + 一句标题 + 一句解释 + 可点击建议（Plan my day / Review goals / Workspace check）。欢迎页给 New conversation + Browse（⌘K）。                                                                                                                                                                                                               |
 | 右栏     | 顶部三段 tab（Tasks / Runs / Memory），共享 `layoutId` 的滑动 pill，图标选中填充；面板切换 cross-fade；Run 列表 → 详情用横向滑动。                                                                                                                                                                                                                               |
-| 设置页   | 侧栏底部齿轮或 `⌘,` 进入整页；左侧锚点导航，右侧依次 Model（模型与 Gateway）、Usage（热力图，可切 scope）、Log（改进日志与筛选）、Service（服务与升级）。                                                                                                                                                                                                        |
+| 设置页   | 侧栏底部齿轮或 `⌘,` 进入整页浮层；左侧锚点导航，右侧依次 Model（模型与 Gateway）、Usage（热力图，可切 scope）、Log（改进日志与筛选）、Service（服务与升级）。关闭后回到打开前的视图。                                                                                                                                                                            |
 | Diff     | `@pierre/diffs`，unified + bars 指示器 + `line-info-basic` 折叠分隔，主题跟随系统明暗。                                                                                                                                                                                                                                                                          |
 | 服务状态 | 侧栏底部：绿色呼吸点 + mono 状态；断开/连接中切到 warning 色。                                                                                                                                                                                                                                                                                                   |
 
@@ -99,7 +99,8 @@ const SPRING = { type: 'spring', stiffness: 500, damping: 38 }; // 只在共享�
 | 消息入场            | `opacity 0→1` + `y 8→0` + `blur 2→0`          | 300ms EASE             |
 | 工具 chip 展开      | 高度 + 透明度                                 | 220ms EASE             |
 | 主视图切换          | 交叉淡入 + `y ±6`                             | 180ms EASE             |
-| 右栏开合            | 宽度 + 透明度                                 | 240ms EASE             |
+| 导航开合            | 位移 + 透明度（折叠侧滑向窗口边缘）           | 240ms EASE             |
+| 右栏开合            | 位移 + 透明度                                 | 240ms EASE             |
 | 导航/会话选中 pill  | `layoutId` 共享布局                           | spring 500/38          |
 | 任务勾选 / 列表重排 | `layout` + 高度淡出                           | 180ms EASE             |
 | 计数徽标            | 缩放弹出 `0.6→1`                              | spring 520/24          |
@@ -141,9 +142,9 @@ const SPRING = { type: 'spring', stiffness: 500, damping: 38 }; // 只在共享�
 
 - 三栏宽度都可拖动；两侧分隔条 2px，hover/focus 出现反相色和中央 grip，命中区向外扩 6px；支持键盘 ←→。
 - 宽度持久化到 `localStorage`（`tian.navWidth` / `tian.contextWidth`）。拖动时过渡为 0，松手后恢复。
-- 右栏可整体收起，收起后留 44px 竖条 + `»` 按钮；展开按钮 `«`。开合用宽度动画，内容保持固定宽度，避免挤压。
-- 窗口 `titleBarStyle: hiddenInset`，红绿灯在左栏顶部 36px 的 drag 区里；每个 pane 的 header 都是 `-webkit-app-region: drag`，交互控件单独标 `no-drag`。
-- 键盘流：`⌘K` 命令面板、`⌘N` 新会话、`⌘B` 开合右栏、`⌘,` 设置页、`⌘1/2/3/4` 切换 Chat/Goals/Skills/Inbox。
+- 两侧都可整体折叠，开关都在内容区标题栏：左端是侧栏开关（折叠时贴红绿灯安全区），右端是右栏开关；两个图标互为镜像（显示时对应 pane 填充淡色）。折叠不留竖条，只用 transform + 固定列宽做动画，内容保持固定宽度，避免挤压。侧栏折叠状态存 `tian.sidebarOpen`。
+- 窗口 `titleBarStyle: hiddenInset`，红绿灯在左栏顶部 44px 的 drag 区里；侧栏折叠后标题栏左侧留 `pl-20` 让开红绿灯。每个 pane 的 header 都是 `-webkit-app-region: drag`，交互控件单独标 `no-drag`。
+- 键盘流：`⌘K` 命令面板、`⌘N` 新会话、`⌘B` 开合右栏、`⌃⌘S` 开合侧栏、`⌘,` 开合设置页（关闭后回到来源视图）、`⌘1/2/3/4` 切换 Chat/Goals/Skills/Inbox。
 
 ## 反例（不要这么做）
 

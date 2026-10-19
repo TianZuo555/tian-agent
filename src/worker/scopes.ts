@@ -222,7 +222,15 @@ export class Scopes {
     return id;
   }
 
-  listMessages(scopeId: string): InboxItem[] {
+  listMessages(scopeId: string | null): InboxItem[] {
+    for (const id of scopeId
+      ? [scopeId]
+      : [GLOBAL_SCOPE, ...this.db.listProjects().map((p) => p.id)])
+      this.importInboxFiles(id);
+    return this.db.listMessages(scopeId);
+  }
+
+  private importInboxFiles(scopeId: string): void {
     const dir = this.inboxDir(scopeId);
     for (const file of readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
@@ -244,6 +252,7 @@ export class Scopes {
         }
       this.db.importMessage(scopeId, {
         id: meta.id || file.replace(/\.md$/, ''),
+        scopeId,
         from: meta.from || '?',
         to: meta.to || '',
         ts: meta.ts || file.slice(0, 20),
@@ -252,7 +261,6 @@ export class Scopes {
         read: false,
       });
     }
-    return this.db.listMessages(scopeId);
   }
 
   unreadMessages(scopeId: string): InboxItem[] {

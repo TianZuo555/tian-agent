@@ -11,8 +11,6 @@ import {
   ArrowSquareOut,
   Brain,
   CalendarCheck,
-  CaretDoubleLeft,
-  CaretDoubleRight,
   CaretRight,
   ChatCircleDots,
   Check,
@@ -51,7 +49,8 @@ import { MessageIn, Reveal, TypingDots, EASE } from './motion-primitives';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
 import { actions, useStore } from '../store';
-import { ModelPicker } from './ModelPicker';
+import { SidebarToggle } from './SidebarToggle';
+import { ContextToggle } from './ContextToggle';
 import { BrandMark, BrandOrb } from './BrandMark';
 
 /**
@@ -705,7 +704,7 @@ export function ChatView() {
   const activeScopeId = useStore((s) => s.activeScopeId);
   const connected = useStore((s) => s.runtimeStatus === 'ready');
   const scopes = useStore((s) => s.scopes);
-  const contextOpen = useStore((s) => s.contextOpen);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
   const reduce = useReducedMotion();
   const viewportRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -792,7 +791,13 @@ export function ChatView() {
       aria-label="Conversation"
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
-      <header className="flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 px-4 backdrop-blur-md [-webkit-app-region:drag]">
+      {/* A folded sidebar leaves the traffic lights over this row's left. */}
+      <header
+        className={`flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 backdrop-blur-md [-webkit-app-region:drag] ${
+          sidebarOpen ? 'px-4' : 'pr-4 pl-20'
+        }`}
+      >
+        <SidebarToggle />
         {conv ? (
           <>
             <span
@@ -815,24 +820,9 @@ export function ChatView() {
               </Badge>
             )}
           </>
-        ) : (
-          <span className="text-muted-foreground text-[13px]">Tian</span>
-        )}
+        ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]">
-          <ModelPicker />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={contextOpen ? 'Hide context pane' : 'Show context pane'}
-            className="text-content-secondary"
-            onClick={() => actions.setContextOpen(!contextOpen)}
-          >
-            {contextOpen ? (
-              <CaretDoubleRight size={15} />
-            ) : (
-              <CaretDoubleLeft size={15} />
-            )}
-          </Button>
+          <ContextToggle />
         </div>
       </header>
 

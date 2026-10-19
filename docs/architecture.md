@@ -9,13 +9,15 @@
 | Main     | 管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库                                    |
 | 常驻服务 | 唯一持有应用数据库与 Pi storage；执行模型调用、工具、Inbox、通知和 Run。客户端重连后重新获取快照与订阅        |
 
-总管和工兵共用服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵是 Durable 会话，生命周期与桌面客户端独立。
+总管、项目管理者和工兵共用服务内的 Harness 与 Pi storage，各自显式选择 extension。工兵与项目管理者都是 Durable 会话，生命周期与桌面客户端独立。
 
 ## 桌面客户端
 
-- 主导航：Chat、Goals、Skills、Inbox 四个视图；侧栏底部的齿轮打开整页 Settings。
-- Context Pane：Tasks / Runs / Memory 标签页。Memory 面板区分候选、Core 与可检索未常驻条目，显示 Core 用量，可直接晋升、驳回、选入/移出、修订（`memoryPromote` / `memoryDismiss` / `memorySelect` / `memoryDeselect` / `memoryRevise`）。
-- ⌘K 命令面板：新建会话、切换视图、开关 Context Pane。
+- 主导航：Chat、Goals、Skills、Inbox 四个视图；侧栏底部的齿轮或 `⌘,` 打开整页 Settings（再次按下或点关闭按钮回到来源视图）。侧栏与右栏都能折叠：侧栏 `⌃⌘S`，右栏 `⌘B`，开关都在内容区标题栏。
+- 会话归档：侧栏会话行 hover 出现 Archive / Restore（`archiveConversation`），归档会话收进底部 Archive 区；归档后不再作为 Scope 级唤醒目标。
+- 跨 scope 看板：Goals 视图统一展示所有 scope 的 goals / tasks / notices，Inbox 视图同理，条目带 scope 徽标。
+- Context Pane：Tasks / Runs / Memory 标签页（跟随当前会话的 scope）。Memory 面板区分候选、Core 与可检索未常驻条目，显示 Core 用量，可直接晋升、驳回、选入/移出、修订（`memoryPromote` / `memoryDismiss` / `memorySelect` / `memoryDeselect` / `memoryRevise`）。
+- ⌘K 命令面板：新建会话、切换视图、开关侧栏与 Context Pane。
 - Settings 页：模型选择与 Gateway 状态、用量统计热力图、改进日志（Log）、服务与升级（见 [service.md](service.md)）。
 - 聊天渲染：Streamdown 输出 Markdown，Mermaid 图表按需懒加载。
 - App 组件必须通过 oxlint 的 `jsx-a11y` 规则（error 级，见 `.oxlintrc.json`）。
