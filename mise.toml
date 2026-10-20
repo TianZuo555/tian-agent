@@ -13,8 +13,14 @@ run = ["pnpm install", "pnpm service:install"]
 
 [tasks.start]
 alias = "dev"
-description = "Run the Electron app"
-run = "pnpm start"
+description = "Run the resident service (stopped on exit) and the Electron app"
+run = """
+pnpm build:service
+node dist/service/service.cjs &
+SVC=$!
+trap 'kill $SVC 2>/dev/null || true' EXIT
+pnpm start
+"""
 
 [tasks.check]
 description = "Typecheck and lint"

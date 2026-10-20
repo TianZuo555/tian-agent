@@ -165,8 +165,10 @@ export function toRows(view: ConversationView | undefined): {
       default: {
         if (e.kind.startsWith('pi.')) break;
         // System wakes (goal, run, inbox notifications) and worker input keep
-        // their own entry kinds; show their text as a system row.
-        const text = textOf(msg?.content);
+        // their own entry kinds; show their text as a system row. Display-only
+        // entries carry their text in `data` instead of a model message.
+        const text =
+          textOf(msg?.content) || (typeof e.data === 'string' ? e.data : '');
         rows.push({
           id: `e${e.id}`,
           role: 'system',

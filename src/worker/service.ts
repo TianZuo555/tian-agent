@@ -1,5 +1,9 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type { EntryId, EntryRecord } from '@earendil-works/pi-durable';
+import type {
+  EntryId,
+  EntryRecord,
+  Submission,
+} from '@earendil-works/pi-durable';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   realpathSync,
@@ -87,6 +91,7 @@ export class Service {
     private emit: Emit,
     /** Telegram setup resolved by the service entry; absent = adapter off. */
     private telegramSetup: TelegramSetup = {},
+    private options: { warmModels?: boolean } = {},
   ) {
     this.db = new Db(userDataDir);
     this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
@@ -280,6 +285,15 @@ export class Service {
     }
     await this.deliverNotifications();
     this.agents.harness.resume();
+    // Warm the model catalog on service start: a fresh install has no saved
+    // catalog, and an empty one makes the generation task settle every
+    // submission unanswered with no_model — silently. Opt-in so tests keep
+    // their hermetic no-model behavior; best-effort, a failed refresh
+    // keeps the previous catalog.
+    if (this.options.warmModels)
+      void this.refreshModels().catch((error) =>
+        this.reportIssue('models.warm', error),
+      );
     await this.startTelegram();
   }
 
@@ -591,7 +605,39 @@ export class Service {
     this.db.setConversationTitle(id, content.split('\n')[0].slice(0, 60));
     this.history.touch(id, scopeId);
     this.emit('conversations', this.listConversations());
+    void this.settleNotice(id, submission);
     return { submissionId: String(submission.id) };
+  }
+
+  /**
+   * A submission that settles unanswered (no_model, model_error, aborted)
+   * writes no entry of its own — append a system row so the transcript
+   * shows the failure instead of staying silent.
+   */
+  private async settleNotice(
+    conversationId: string,
+    submission: Submission,
+  ): Promise<void> {
+    try {
+      const result = await submission.wait(BACKGROUND_CONTEXT);
+      if (result.status !== 'unanswered') return;
+      const conversation = await this.agents.conversation(conversationId);
+      // Display-only write (kind + data): pi appends and settles it `done` at
+      // once, busy or not — a model-bearing entry could queue behind a
+      // boundary and read as in-flight work to the maintenance gate.
+      await conversation.submit(
+        {
+          type: 'write',
+          entry: {
+            kind: 'tian.unanswered',
+            data: `Model did not respond (${result.reason}). Check Settings → Model and the gateway, then retry.`,
+          },
+        },
+        BACKGROUND_CONTEXT,
+      );
+    } catch (error) {
+      this.reportIssue('submit.settle', error, { conversationId });
+    }
   }
   async abort(id: string): Promise<void> {
     this.db.conversationScope(id);

@@ -115,6 +115,7 @@ export class ResidentServer {
         this.paths.dataDir,
         this.emit,
         this.options.telegram ?? {},
+        { warmModels: true },
       );
       this.maintenance = existsSync(
         join(this.paths.installationDir, 'maintenance.json'),
