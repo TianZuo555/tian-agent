@@ -1071,6 +1071,8 @@ function ForgetMemoryForm({
 /**
  * Right-hand context pane, Codex-style: a segmented tab strip that swaps one
  * inspector panel at a time, with the run list drilling into run detail.
+ * The Memory tab stays hidden; MemoryPanel below keeps the surface ready to
+ * bring back.
  */
 export function ContextPane() {
   const scope = useStore((s) => s.activeScopeId);
@@ -1080,6 +1082,8 @@ export function ContextPane() {
   const [tab, setTab] = useState<PaneTab>('tasks');
   const reduce = useReducedMotion();
   const t = useT();
+
+  const tabs = TABS.filter((entry) => entry.id !== 'memory');
 
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
   const memory = useStore((s) => s.memory);
@@ -1122,22 +1126,22 @@ export function ContextPane() {
         className="flex shrink-0 items-center gap-0.5 border-border border-b px-1.5 py-1"
         onKeyDown={(e) => {
           // Roving-tabindex arrow navigation per the ARIA tabs pattern.
-          const current = TABS.findIndex((t) => t.id === tab);
+          const current = tabs.findIndex((t) => t.id === tab);
           let next: number | null = null;
           if (e.key === 'ArrowRight' || e.key === 'ArrowDown')
-            next = (current + 1) % TABS.length;
+            next = (current + 1) % tabs.length;
           else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
-            next = (current - 1 + TABS.length) % TABS.length;
+            next = (current - 1 + tabs.length) % tabs.length;
           else if (e.key === 'Home') next = 0;
-          else if (e.key === 'End') next = TABS.length - 1;
+          else if (e.key === 'End') next = tabs.length - 1;
           if (next === null) return;
           e.preventDefault();
-          const nextTab = TABS[next];
+          const nextTab = tabs[next];
           setTab(nextTab.id);
           document.getElementById(`context-tab-${nextTab.id}`)?.focus();
         }}
       >
-        {TABS.map(({ id, label, icon: TabIcon }) => {
+        {tabs.map(({ id, label, icon: TabIcon }) => {
           const active = tab === id;
           return (
             <button
