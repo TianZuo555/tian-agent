@@ -194,6 +194,8 @@ export const en = {
   'context.taskLabel': 'Task: {title}',
   'context.runLabel': 'Run {id}: {status}',
   'context.followUp': 'Follow up',
+  'context.stop': 'Stop',
+  'context.stopRun': 'Stop run {id}',
   'context.land': 'Land',
   'context.ship': 'Ship',
   'context.discard': 'Discard',

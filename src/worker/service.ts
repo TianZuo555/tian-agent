@@ -1431,6 +1431,9 @@ export class Service {
   followUpRun(id: string, prompt: string) {
     return this.runs.followUp(id, prompt);
   }
+  async stopRun(id: string) {
+    await this.runs.stop(id);
+  }
   landRun(id: string) {
     return this.runs.land(id);
   }

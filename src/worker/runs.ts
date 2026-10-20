@@ -153,7 +153,20 @@ export class RunOrchestrator {
           Date.now() + project.runTimeoutMin * 60_000,
         ).toISOString(),
       };
-      this.db.addRun(run);
+      // Claim the slot atomically: the same dispatcher sending the same
+      // briefing while a run is still in flight reuses that run — a replayed
+      // or double-fired dispatch must not stack identical runs.
+      const claimed = this.db.transaction(() => {
+        const duplicate = this.db.activeRunByPrompt(
+          project.id,
+          run.prompt,
+          run.chiefConversationId,
+        );
+        if (duplicate) return duplicate;
+        this.db.addRun(run);
+        return run;
+      });
+      if (claimed !== run) return claimed;
       // Fail synchronously if isolation cannot be created; never change execution mode.
       try {
         await this.prepare(run);
@@ -256,7 +269,14 @@ export class RunOrchestrator {
   private async execute(id: string): Promise<void> {
     const prepared = await this.locked(id, async () => {
       let run = this.require(id);
-      if (this.closing || run.reviewStatus !== 'pending') return null;
+      // interrupted: a stop may land while the run is still queued — never
+      // launch a worker for it.
+      if (
+        this.closing ||
+        run.reviewStatus !== 'pending' ||
+        run.status === 'interrupted'
+      )
+        return null;
       if (run.status === 'collecting')
         return {
           run,
@@ -328,7 +348,13 @@ export class RunOrchestrator {
     if (this.closing) return;
     await this.locked(id, async () => {
       let run = this.require(id);
-      if (this.closing || run.reviewStatus !== 'pending') return;
+      // interrupted: stop() already finished the run — do not collect.
+      if (
+        this.closing ||
+        run.reviewStatus !== 'pending' ||
+        run.status === 'interrupted'
+      )
+        return;
       // Persist the outcome before collecting so a restart cannot turn failure into success.
       run = this.db.patchRun(id, {
         status: 'collecting',
@@ -538,6 +564,45 @@ export class RunOrchestrator {
         return output;
       }),
     );
+  }
+
+  /**
+   * Tian pressed stop: abort the worker mid-flight but keep the run — its
+   * worktree, report path and review state stay intact, so it can still be
+   * landed, followed up or discarded. Only queued/running runs respond; a
+   * collecting or finished run returns unchanged.
+   */
+  async stop(id: string): Promise<RunRow> {
+    return this.locked(id, async () => {
+      const run = this.require(id);
+      if (
+        !['queued', 'running'].includes(run.status) ||
+        run.reviewStatus !== 'pending'
+      )
+        return run;
+      const stopped = this.db.finishRun(id, 'interrupted', 'Stopped by Tian', {
+        id: `run:${id}:attempt:${run.attempt}:stopped`,
+        scopeId: run.projectId,
+        conversationId: run.chiefConversationId,
+        content: `[run ${id} stopped]\nStopped by Tian. Partial work is kept in the worktree; follow up to continue or discard to remove it.`,
+      });
+      this.events?.record({
+        id: `run:${id}:stopped`,
+        type: 'run.stopped',
+        actor: 'user',
+        scopeId: run.projectId,
+        runId: id,
+        conversationId: run.chiefConversationId,
+        summary: `Run ${id} stopped by Tian`,
+      });
+      this.changed();
+      clearTimeout(this.timers.get(id));
+      this.timers.delete(id);
+      if (run.conversationId)
+        await (await this.runtime.get(run.conversationId)).abort();
+      await this.notify();
+      return stopped;
+    });
   }
 
   async discard(id: string): Promise<void> {

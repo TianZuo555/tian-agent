@@ -15,6 +15,7 @@ import {
   PencilSimple,
   Plus,
   Stack,
+  Stop,
   Trash,
   WarningCircle,
   XCircle,
@@ -169,36 +170,51 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
   const RunIcon = meta.icon;
   const t = useT();
   return (
-    <motion.button
-      layout
-      type="button"
-      onClick={onOpen}
-      aria-label={t('context.runLabel', {
-        id: run.id,
-        status: t(runLabel(run)),
-      })}
-      whileTap={{ scale: 0.99 }}
-      className="group flex w-full cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-secondary"
-    >
-      <RunIcon
-        size={13}
-        weight={isLive(run) ? 'regular' : 'fill'}
-        className={`mt-0.5 shrink-0 ${meta.tone} ${meta.spin ? 'animate-spin' : ''}`}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="line-clamp-2 text-[12px] leading-snug">
-          {run.prompt}
+    <div className="group flex items-start rounded-lg transition-colors hover:bg-secondary">
+      <motion.button
+        layout
+        type="button"
+        onClick={onOpen}
+        aria-label={t('context.runLabel', {
+          id: run.id,
+          status: t(runLabel(run)),
+        })}
+        whileTap={{ scale: 0.99 }}
+        className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-left"
+      >
+        <RunIcon
+          size={13}
+          weight={isLive(run) ? 'regular' : 'fill'}
+          className={`mt-0.5 shrink-0 ${meta.tone} ${meta.spin ? 'animate-spin' : ''}`}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 text-[12px] leading-snug">
+            {run.prompt}
+          </span>
+          <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[9.5px] text-content-disabled">
+            {run.id}
+            {run.branch ? (
+              <span className="truncate">· {run.branch}</span>
+            ) : null}
+          </span>
         </span>
-        <span className="mt-0.5 flex items-center gap-1.5 font-mono text-[9.5px] text-content-disabled">
-          {run.id}
-          {run.branch ? <span className="truncate">· {run.branch}</span> : null}
-        </span>
-      </span>
-      <CaretRight
-        size={10}
-        className="mt-1 shrink-0 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100"
-      />
-    </motion.button>
+        <CaretRight
+          size={10}
+          className="mt-1 shrink-0 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100"
+        />
+      </motion.button>
+      {isLive(run) && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="mt-1 mr-1 shrink-0 text-destructive-foreground"
+          aria-label={t('context.stopRun', { id: run.id })}
+          onClick={() => void actions.stopRun(run.id)}
+        >
+          <Stop size={12} weight="fill" />
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -270,6 +286,18 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-border border-b px-2 py-1.5">
+        {isLive(run) && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-destructive-foreground"
+            loading={busy === 'stop'}
+            onClick={() => void act('stop', () => actions.stopRun(run.id))}
+          >
+            <Stop size={11} weight="fill" />
+            {t('context.stop')}
+          </Button>
+        )}
         {!isDiscarded(run) && (
           <Button
             variant="ghost"

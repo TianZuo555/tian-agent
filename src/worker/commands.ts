@@ -70,6 +70,7 @@ export const commandHandlers = (service: Service, clientId: number) =>
     runReport: (id) => service.runReport(id),
     runDiff: (id) => service.runDiff(id),
     followUpRun: (id, prompt) => service.followUpRun(id, prompt),
+    stopRun: (id) => service.stopRun(id),
     landRun: (id) => service.landRun(id),
     discardRun: (id) => service.discardRun(id),
     shipRun: (id) => service.shipRun(id),

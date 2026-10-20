@@ -524,6 +524,9 @@ export function createAppStore(api: TianApi) {
     async followUpRun(id: string, prompt: string) {
       await api.followUpRun(id, prompt);
     },
+    async stopRun(id: string) {
+      await api.stopRun(id);
+    },
     async landRun(id: string) {
       await api.landRun(id);
     },
