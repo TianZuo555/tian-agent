@@ -138,7 +138,8 @@ export class Db {
         execution_mode TEXT NOT NULL DEFAULT 'worktree', worktree_path TEXT, branch TEXT,
         status TEXT NOT NULL DEFAULT 'queued', review_status TEXT NOT NULL DEFAULT 'pending',
         attempt INTEGER NOT NULL DEFAULT 1, error TEXT, pr_url TEXT, report_path TEXT,
-        exit_code INTEGER, started_at TEXT NOT NULL, finished_at TEXT, deadline_at TEXT NOT NULL DEFAULT ''
+        exit_code INTEGER, started_at TEXT NOT NULL, finished_at TEXT, deadline_at TEXT NOT NULL DEFAULT '',
+        model TEXT, thinking_level TEXT
       );
       CREATE TABLE IF NOT EXISTS run_attempts (
         run_id TEXT NOT NULL, attempt INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL,
@@ -209,6 +210,10 @@ export class Db {
         task_id: 'INTEGER',
         injected_skills: 'TEXT',
         deadline_at: "TEXT NOT NULL DEFAULT ''",
+        // Per-run model override (a magpie model id); NULL = the global default.
+        model: 'TEXT',
+        // Per-run thinking level (a pi level name); NULL = the model's own.
+        thinking_level: 'TEXT',
       });
       this.db.exec(`
       -- A fresh tasks table declares dedupe_key UNIQUE, but migrated databases

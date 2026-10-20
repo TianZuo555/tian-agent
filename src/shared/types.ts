@@ -230,6 +230,10 @@ export interface RunInfo {
   taskId?: number | null;
   /** Approved skill versions injected into the worker prompt at dispatch (PRD §6.2). */
   injectedSkills?: RunInjection[] | null;
+  /** Per-run model pin (a magpie model id); absent = the app-wide model. */
+  model?: string | null;
+  /** Per-run thinking level pin (a pi level name); absent = the model's default. */
+  thinkingLevel?: string | null;
   startedAt: string;
   finishedAt: string | null;
 }

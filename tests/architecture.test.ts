@@ -307,6 +307,7 @@ test('chief and worker capabilities remain separate, including previously contam
     emitImprovements: () => {},
     emitNotices: () => {},
     dispatch: (input) => f.runs.dispatch(input),
+    workerModels: () => [],
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),
     sendRunMessage: (runId, body, operationId) =>

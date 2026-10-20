@@ -9,8 +9,10 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { join } from 'node:path';
 import type { Db, RunRow } from './db.js';
+import { MAGPIE_PROVIDER } from './magpie.js';
 import type { Settings } from './settings.js';
 import type { SkillRegistry } from './skills.js';
 import type { WorkerConversation, WorkerRuntime } from './runs.js';
@@ -140,7 +142,13 @@ export class AgentRuntime implements WorkerRuntime {
       {
         ownership: { kind: 'ownerless' },
         agent: {
-          model: this.settings.get().model,
+          // A run may pin its worker's model and thinking level at dispatch
+          // (D13); unpinned runs follow the app-wide model.
+          model: run.model
+            ? { provider: MAGPIE_PROVIDER, modelId: run.model }
+            : this.settings.get().model,
+          thinkingLevel:
+            (run.thinkingLevel as ModelThinkingLevel | null) ?? undefined,
           cwd: run.worktreePath ?? run.rootPath,
           extensions: [CodingTools, this.worker],
           instructions: [
