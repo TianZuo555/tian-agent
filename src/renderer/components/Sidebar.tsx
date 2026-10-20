@@ -652,7 +652,7 @@ export function Sidebar() {
   return (
     <aside
       aria-label={t('sidebar.navigation')}
-      className="flex min-h-0 w-full flex-col bg-window text-sidebar-foreground"
+      className="flex min-h-0 w-full flex-col bg-window text-sidebar-foreground dark:bg-white/[0.045] dark:backdrop-blur-2xl"
     >
       <SidebarBrand />
 
