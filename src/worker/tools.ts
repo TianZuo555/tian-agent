@@ -27,6 +27,12 @@ import type { ImprovementStore } from './improvements.js';
 import type { GoalStore } from './goals.js';
 import { goalsTools } from './tools-goals.js';
 import { workerModelLine, type WorkerModelChoice } from './run-model.js';
+import {
+  managerClause,
+  managerLabel,
+  managerName,
+  noManagerError,
+} from './manager-label.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
@@ -153,7 +159,7 @@ DISPATCH. You command, others execute. You have no shell and cannot edit code �
 
 WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
-MANAGERS. Each project can have a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. delegate(project, title, briefing, goal?) hands it a management task: the task is assigned to the manager and you are woken when it closes with the outcome. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Delegated tasks are the manager's — do not start_task/complete_task/fail_task or send_run_msg its runs yourself; steer with send_manager_msg. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate substantial multi-step project work; keep one-off questions and quick code changes on dispatch yourself.
+MANAGERS. Each project can have a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. <state> and list_scopes show every project with its manager (for example '- tian-agent (/path) — manager: 阿七'), and 'manager: 无' when the project has no manager yet (Tian opens one from the project's manager button in the sidebar). A manager name is only what Tian calls it; it does not exist until that conversation is opened, and delegate/send_manager_msg tell you so instead of creating one. Address the manager by its name when you talk about it. delegate(project, title, briefing, goal?) hands it a management task: the task is assigned to the manager and you are woken when it closes with the outcome. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Delegated tasks are the manager's — do not start_task/complete_task/fail_task or send_run_msg its runs yourself; steer with send_manager_msg. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate substantial multi-step project work; keep one-off questions and quick code changes on dispatch yourself.
 
 SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to remember.
 
@@ -214,8 +220,16 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     const models = workerModelLine(deps.workerModels());
     if (models) lines.push(models);
     const project = scope === GLOBAL_SCOPE ? null : db.getProject(scope);
+    // Every project carries its manager's name (or `无`): the chief addresses
+    // the manager by that name and knows which projects it can delegate to.
+    const projects = db.listProjects();
+    if (projects.length > 0) {
+      lines.push(`projects (${projects.length}):`);
+      for (const p of projects.slice(0, 20))
+        lines.push(`- ${p.name} (${p.rootPath})${managerClause(db, p)}`);
+    }
     const header = [
-      `scope: ${project ? `${project.name} (${project.rootPath})` : 'General'}`,
+      `scope: ${project ? `${project.name} (${project.rootPath})${managerClause(db, project)}` : 'General'}`,
       `now: ${new Date().toISOString().slice(0, 16)}`,
     ];
     return lines.length > 0
@@ -261,13 +275,15 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   const listScopes = defineTool({
     name: 'list_scopes',
     description:
-      'List all scopes: General plus every registered project (name, id, path).',
+      "List all scopes: General plus every registered project (id, name, path, and the manager's name — `manager: 无` means no manager is configured).",
     parameters: Type.Object({}),
     execute: async () => {
       const projects = db.listProjects();
       const lines = [
         `global — General`,
-        ...projects.map((p) => `${p.id} — ${p.name} (${p.rootPath})`),
+        ...projects.map(
+          (p) => `${p.id} — ${p.name} (${p.rootPath})${managerClause(db, p)}`,
+        ),
       ];
       return text(lines.join('\n'));
     },
@@ -661,6 +677,11 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       );
       if (scope === GLOBAL_SCOPE)
         return err('delegate needs a project scope — pass a project name.');
+      // The manager is the bound conversation, not the name: a project that
+      // was only named has nobody to hand work to.
+      const project = db.getProject(scope);
+      if (!project) return err(`Unknown project: ${scope}`);
+      if (!db.hasManager(scope)) return err(noManagerError(project));
       const goal = args.goal ? deps.goals.getGoal(args.goal) : null;
       if (args.goal && !goal) return err(`Unknown goal: ${args.goal}`);
       if (goal && goal.scopeId !== scope)
@@ -677,7 +698,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
           operationId: `delegate:${api.taskId}:${api.callId}`,
         });
         return text(
-          `delegated as task #${task.id} to the ${db.getProject(scope)?.name ?? scope} manager. You'll be woken when it closes.`,
+          `delegated as task #${task.id} to ${managerLabel(project, true)}, the ${project.name} manager. You'll be woken when it closes.`,
         );
       } catch (e) {
         return err(String(e));
@@ -717,6 +738,9 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         return err(
           'send_manager_msg needs a project scope — pass a project name.',
         );
+      const project = db.getProject(scope);
+      if (!project) return err(`Unknown project: ${scope}`);
+      if (!db.hasManager(scope)) return err(noManagerError(project));
       try {
         const result = await deps.sendManagerMessage({
           projectId: scope,
@@ -749,9 +773,18 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         String(api.conversationId),
         args.project,
       );
+      const project = db.getProject(scope);
+      if (!project) return err(`Unknown project: ${scope}`);
       try {
         const messages = deps.managerMessages(scope);
-        if (messages.length === 0) return text('(no messages)');
+        // An empty thread means different things: name the manager (or say
+        // there is none) instead of leaving the chief to guess.
+        if (messages.length === 0)
+          return text(
+            db.hasManager(scope)
+              ? `(no messages with ${managerName(project) ?? `the ${project.name} manager`} yet)`
+              : `(${noManagerError(project)})`,
+          );
         return text(
           messages
             .map(

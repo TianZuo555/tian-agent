@@ -24,6 +24,8 @@ import { ImprovementStore } from '../src/worker/improvements';
 import { RunOrchestrator, type WorkerRuntime } from '../src/worker/runs';
 import { ResidentServer } from '../src/service/server';
 import { servicePaths } from '../src/shared/service-paths';
+import { DATABASE_VERSION } from '../src/shared/version';
+import { DatabaseSync } from 'node:sqlite';
 
 function temporary(t: TestContext): string {
   const path = mkdtempSync(join(tmpdir(), 'tian-manager-'));
@@ -622,6 +624,249 @@ test('manager dispatch forwards a pinned model and thinking level', async (t) =>
   assert.match(toolText(result), /model deep\/pro think:high/);
 });
 
+// ---- manager names (D14) ----------------------------------------------------
+
+/** The chief extension's <state> and list_scopes, rendered for a conversation. */
+function chiefSurface(f: Fixture) {
+  const chief = chiefExtension({
+    scopes: f.scopes,
+    db: f.db,
+    data: f.data,
+    goals: new GoalStore(f.db),
+    improvements: new ImprovementStore(f.db),
+    latestInputEntry: async () => null,
+    currentInput: async () => null,
+    openGoalConversation: async () => 'goal-conv',
+    emitUpdates: () => {},
+    emitImprovements: () => {},
+    emitNotices: () => {},
+    dispatch: () => Promise.reject(new Error('not used')),
+    runReport: () => '',
+    runDiff: async () => '',
+    sendRunMessage: () => {
+      throw new Error('not used');
+    },
+    runMessages: () => [],
+    delegateToManager: () => Promise.reject(new Error('not used')),
+    sendManagerMessage: () => Promise.reject(new Error('not used')),
+    managerMessages: (projectId) => f.data.managerMessages(projectId),
+    history: {
+      db: f.db,
+      events: new EventLog(f.db),
+      history: {} as HistoryIndex,
+    },
+  });
+  const state = chief.sections?.find((entry) => entry.key === 'state');
+  if (!state) throw new Error('Missing state section');
+  const listScopes = chief.tools?.find((entry) => entry.name === 'list_scopes');
+  if (!listScopes) throw new Error('Missing list_scopes');
+  return {
+    state: (conversationId: string) =>
+      String(state.render({ conversationId } as never, {} as never) as unknown),
+    listScopes: async () =>
+      toolText(
+        await (listScopes as unknown as ExecutableTool).execute(
+          {},
+          api('chief-conv'),
+        ),
+      ),
+  };
+}
+
+test('a named manager appears in <state> and list_scopes; an unnamed one reads (未命名)', async (t) => {
+  const f = fixture(t);
+  const chief = chiefSurface(f);
+  f.db.updateProject('p-1', { managerName: '阿七' });
+  const state = await chief.state('chief-conv');
+  // Both projects are listed; the one without a manager says 无.
+  assert.match(state, /- alpha \(.*\) — manager: 阿七/);
+  assert.match(state, /- beta \(.*\) — manager: 无/);
+  // The current scope header carries the manager too.
+  assert.match(state, /scope: alpha \(.*\) — manager: 阿七/);
+  const scopes = await chief.listScopes();
+  assert.match(scopes, /alpha \(.*\) — manager: 阿七/);
+  assert.match(scopes, /beta \(.*\) — manager: 无/);
+  // A name with no bound manager is marked (未配置): it is a label, not one.
+  f.db.updateProject('p-2', { managerName: '小七' });
+  assert.match(
+    await chief.state('chief-conv'),
+    /- beta \(.*\) — manager: 小七 \(未配置\)/,
+  );
+  assert.equal(f.db.hasManager('p-2'), false);
+  // Once the manager is opened, a bound but unnamed project reads (未命名).
+  f.db.mapConversation('mgr-beta', 'p-2');
+  f.db.bindSession(
+    { channel: 'manager', externalId: 'p-2', scopeId: 'p-2' },
+    'mgr-beta',
+  );
+  f.db.updateProject('p-2', { managerName: null });
+  assert.match(
+    await chief.state('chief-conv'),
+    /- beta \(.*\) — manager: \(未命名\)/,
+  );
+  // A bound and named manager reads its name.
+  f.db.updateProject('p-2', { managerName: '小七' });
+  assert.match(
+    await chief.state('chief-conv'),
+    /- beta \(.*\) — manager: 小七/,
+  );
+  // General has no manager line of its own.
+  assert.doesNotMatch(await chief.state('mgr-beta'), /scope: General.*manager/);
+});
+
+test('delegate and send_manager_msg refuse a project with no manager, even when named', async (t) => {
+  const f = fixture(t);
+  f.db.updateProject('p-2', { managerName: '阿七' });
+  // p-2 has a name but no bound manager conversation: no empty task appears.
+  const before = f.db.listTasks('p-2').length;
+  const delegated = await f
+    .chiefTool('delegate')
+    .execute(
+      { project: 'beta', title: 'triage', briefing: 'look at CI' },
+      api('chief-conv'),
+    );
+  assert.equal(delegated.isError, true);
+  assert.match(
+    toolText(delegated),
+    /project 'beta' has no manager configured — open its manager first/,
+  );
+  const sent = await f
+    .chiefTool('send_manager_msg')
+    .execute({ project: 'beta', body: 'hi' }, api('chief-conv'));
+  assert.equal(sent.isError, true);
+  assert.match(
+    toolText(sent),
+    /project 'beta' has no manager configured — open its manager first/,
+  );
+  assert.equal(f.db.listTasks('p-2').length, before);
+  assert.equal(f.db.listManagerMessages('p-2').length, 0);
+});
+
+test('list_manager_msgs names the manager instead of a bare (no messages)', async (t) => {
+  const f = fixture(t);
+  f.db.updateProject('p-1', { managerName: '阿七' });
+  const named = await f
+    .chiefTool('list_manager_msgs')
+    .execute({ project: 'alpha' }, api('chief-conv'));
+  assert.match(toolText(named), /no messages with 阿七 yet/);
+  const unnamed = await f
+    .chiefTool('list_manager_msgs')
+    .execute({ project: 'beta' }, api('chief-conv'));
+  assert.match(toolText(unnamed), /has no manager configured/);
+  const unknown = await f
+    .chiefTool('list_manager_msgs')
+    .execute({ project: 'eta' }, api('chief-conv'));
+  assert.match(toolText(unknown), /Unknown project: eta/);
+});
+
+// ---- manager_name storage (D14) -------------------------------------------
+
+test('a v6 database gains an optional manager_name without losing projects', (t) => {
+  const root = temporary(t);
+  const dataDir = join(root, 'data');
+  mkdirSync(dataDir, { recursive: true });
+  const legacy = new DatabaseSync(join(dataDir, 'tian.db'));
+  // The projects table as the previous release created it (no manager_name).
+  legacy.exec(`
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL,
+      auto_land INTEGER NOT NULL DEFAULT 0, allow_in_place INTEGER NOT NULL DEFAULT 0,
+      agent_kind TEXT NOT NULL DEFAULT 'durable-worker', run_timeout_min INTEGER NOT NULL DEFAULT 30,
+      base_branch TEXT NOT NULL DEFAULT 'main', prompt_preamble TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO projects (id,name,root_path,created_at) VALUES
+      ('p-old','legacy','/tmp/legacy','2026-01-01T00:00:00.000Z');
+    PRAGMA user_version = 6;
+  `);
+  legacy.close();
+
+  const db = new Db(dataDir);
+  assert.equal(
+    (db.sqlite.prepare('PRAGMA user_version').get() as { user_version: number })
+      .user_version,
+    DATABASE_VERSION,
+  );
+  const migrated = db.getProject('p-old')!;
+  assert.equal(migrated.name, 'legacy');
+  assert.equal(migrated.rootPath, '/tmp/legacy');
+  assert.equal(migrated.managerName, null);
+  db.updateProject('p-old', { managerName: '阿七' });
+  db.close();
+
+  // Reopening at the current version is a no-op and keeps the name.
+  const reopened = new Db(dataDir);
+  t.after(() => reopened.close());
+  assert.equal(reopened.getProject('p-old')?.managerName, '阿七');
+  assert.ok(
+    (
+      reopened.sqlite.prepare('PRAGMA table_info(projects)').all() as {
+        name: string;
+      }[]
+    ).some((column) => column.name === 'manager_name'),
+  );
+  const backup = new DatabaseSync(join(dataDir, 'tian.db_v6.backup'), {
+    readOnly: true,
+  });
+  try {
+    assert.equal(
+      (
+        backup.prepare('PRAGMA table_info(projects)').all() as {
+          name: string;
+        }[]
+      ).length,
+      10,
+    );
+  } finally {
+    backup.close();
+  }
+});
+
+test('add and update project carry the manager name through the command surface', async (t) => {
+  const f = await serviceFixture(t);
+  const service = f.service as unknown as {
+    addProject: (
+      name: string,
+      rootPath: string,
+      managerName?: string | null,
+    ) => { id: string; name: string; managerName?: string | null }[];
+    updateProject: (
+      id: string,
+      patch: { managerName?: string | null },
+    ) => Promise<{ id: string; name: string; managerName?: string | null }[]>;
+    listScopes: () => {
+      id: string;
+      name: string;
+      managerName?: string | null;
+    }[];
+  };
+  const projectDir = join(f.root, 'named');
+  mkdirSync(projectDir, { recursive: true });
+  const added = service.addProject('named', projectDir, '  阿七  ');
+  const created = added.find((scope) => scope.name === 'named')!;
+  // Trimmed on write; naming does not create a manager.
+  assert.equal(created.managerName, '阿七');
+  assert.equal(f.db.hasManager(created.id), false);
+  const cleared = await service.updateProject(created.id, {
+    managerName: '   ',
+  });
+  assert.equal(
+    cleared.find((scope) => scope.id === created.id)!.managerName,
+    null,
+  );
+  const renamed = await service.updateProject(created.id, {
+    managerName: '小七',
+  });
+  assert.equal(
+    renamed.find((scope) => scope.id === created.id)!.managerName,
+    '小七',
+  );
+  assert.equal(
+    service.listScopes().find((scope) => scope.id === created.id)!.managerName,
+    '小七',
+  );
+});
+
 // ---- Tian turns -------------------------------------------------------------
 
 test('in a Tian turn ask_chief returns guidance without a message or wake', async (t) => {
@@ -739,8 +984,10 @@ interface ServiceFixture {
       message: ManagerMessageRow;
       delivered: 'waiting' | 'woken';
     }>;
+    openManager: (projectId: string) => Promise<{ role: string }>;
   };
   db: Db;
+  root: string;
 }
 
 async function serviceFixture(t: TestContext): Promise<ServiceFixture> {
@@ -770,7 +1017,7 @@ async function serviceFixture(t: TestContext): Promise<ServiceFixture> {
     promptPreamble: '',
   });
   const service = server.service as unknown as ServiceFixture['service'];
-  return { server, service, db };
+  return { server, service, db, root };
 }
 
 const managerWakes = (f: ServiceFixture) => {
@@ -783,6 +1030,8 @@ const managerWakes = (f: ServiceFixture) => {
 
 test('delegate creates a delegated task, one manager wake, and is replay-safe', async (t) => {
   const f = await serviceFixture(t);
+  // A manager exists only once it is opened; a project row alone has none.
+  await f.service.openManager('p-1');
   const goal = new GoalStore(f.db).insertGoal({
     scopeId: 'p-1',
     objective: 'keep main green',
@@ -819,6 +1068,7 @@ test('delegate creates a delegated task, one manager wake, and is replay-safe', 
 
 test('a reply_to answer while the question is open does not wake; a late one does', async (t) => {
   const f = await serviceFixture(t);
+  await f.service.openManager('p-1');
   const question = f.db.addManagerMessage({
     id: 'mm:p-1:q1',
     projectId: 'p-1',

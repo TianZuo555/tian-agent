@@ -539,5 +539,9 @@ export const zh: Partial<Messages> = {
   'project.timeout': 'Run 超时（分钟）',
   'project.baseBranch': '基础分支',
   'project.preamble': '工兵预设指令',
+  'project.managerName': 'Manager 名称',
+  'project.managerNamePlaceholder': '例如：阿七',
+  'project.managerNameHint':
+    '总管用这个名字称呼项目管理者。可以留空（未命名）；填名字不会创建管理者——需要先打开该项目的管理者。',
   'project.saveAria': '保存 {name} 的设置',
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   BoxArrowUp,
@@ -547,6 +547,8 @@ function AddProjectDialog({
 }) {
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
+  const [managerName, setManagerName] = useState('');
+  const id = useId();
   const nameRef = useRef<HTMLInputElement>(null);
   const t = useT();
   // Move focus once the dialog is inserted; unlike the autoFocus attribute
@@ -571,9 +573,14 @@ function AddProjectDialog({
           onSubmit={async (e) => {
             e.preventDefault();
             if (!name.trim() || !path.trim()) return;
-            await actions.addProject(name.trim(), path.trim());
+            await actions.addProject(
+              name.trim(),
+              path.trim(),
+              managerName.trim(),
+            );
             setName('');
             setPath('');
+            setManagerName('');
             onOpenChange(false);
           }}
         >
@@ -606,6 +613,19 @@ function AddProjectDialog({
                 {t('common.browse')}
               </Button>
             </div>
+            <label
+              className="grid gap-1.5 text-xs text-muted-foreground"
+              htmlFor={`${id}-manager-name`}
+            >
+              {t('project.managerName')}
+              <Input
+                id={`${id}-manager-name`}
+                value={managerName}
+                maxLength={200}
+                placeholder={t('project.managerNamePlaceholder')}
+                onChange={(e) => setManagerName(e.target.value)}
+              />
+            </label>
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button variant="ghost" />}>

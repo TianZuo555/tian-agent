@@ -33,6 +33,7 @@ import { GoalScheduler, parseCron } from './scheduler.js';
 import { MemoryWorker } from './memory-worker.js';
 import { chiefExtension } from './tools.js';
 import { managerExtension } from './manager-tools.js';
+import { noManagerError } from './manager-label.js';
 import { workerExtension } from './worker-tools.js';
 import {
   TelegramAdapter,
@@ -417,6 +418,7 @@ export class Service {
           kind: 'project',
           name: project.name,
           rootPath: project.rootPath,
+          managerName: project.managerName ?? null,
           settings: {
             autoLand: project.autoLand === 1,
             allowInPlace: project.allowInPlace === 1,
@@ -436,7 +438,11 @@ export class Service {
       throw new Error('Project path must be a directory');
     return root;
   }
-  addProject(name: string, rootPath: string): ScopeInfo[] {
+  addProject(
+    name: string,
+    rootPath: string,
+    managerName?: string | null,
+  ): ScopeInfo[] {
     const root = this.projectRoot(rootPath);
     if (
       !name.trim() ||
@@ -455,6 +461,7 @@ export class Service {
       runTimeoutMin: 30,
       baseBranch: 'main',
       promptPreamble: '',
+      managerName: managerName?.trim() || null,
     });
     this.scopes.ensureDirs(id);
     this.watchInbox(id);
@@ -495,6 +502,12 @@ export class Service {
       ...patch,
       name,
       rootPath,
+      // A blank name and an explicit null both mean "unnamed"; the name never
+      // creates a manager (see noManagerError).
+      managerName:
+        patch.managerName === undefined
+          ? existing.managerName
+          : patch.managerName?.trim() || null,
       autoLand:
         patch.autoLand === undefined
           ? existing.autoLand
@@ -1042,6 +1055,10 @@ export class Service {
   }): Promise<{ task: TaskRow; message: ManagerMessageRow }> {
     const project = this.db.getProject(input.projectId);
     if (!project) throw new Error(`Unknown project: ${input.projectId}`);
+    // A name is not a manager: delegation needs the bound manager conversation,
+    // which only openManager creates. Never fabricate one here.
+    if (!this.db.hasManager(input.projectId))
+      throw new Error(noManagerError(project));
     const conversation = await this.ensureManagerConversation(input.projectId);
     const { task, message } = this.db.once(input.operationId, () => {
       const task = this.db.insertTask({
@@ -1091,6 +1108,8 @@ export class Service {
   }> {
     const project = this.db.getProject(input.projectId);
     if (!project) throw new Error(`Unknown project: ${input.projectId}`);
+    if (!this.db.hasManager(input.projectId))
+      throw new Error(noManagerError(project));
     if (input.taskId != null) {
       const task = this.db.getTask(input.taskId);
       if (!task) throw new Error(`Unknown task: ${input.taskId}`);

@@ -18,6 +18,7 @@ import {
 import { taskExecutionTools } from './tools-goals.js';
 import type { HistoryDeps } from './tools-history.js';
 import { workerModelLine, type WorkerModelChoice } from './run-model.js';
+import { managerName } from './manager-label.js';
 
 export interface ManagerDeps extends MemoryToolDeps {
   goals: GoalStore;
@@ -88,7 +89,8 @@ export function managerExtension(deps: ManagerDeps) {
     (input) => {
       const scope = own(String(input.conversationId));
       const project = db.getProject(scope);
-      return `You are the project manager of ${project?.name ?? scope} (${project?.rootPath ?? scope}) — you run this project for Tian's chief and for Tian.
+      const name = project ? managerName(project) : null;
+      return `You are ${name ? `${name}, the project manager of ${project?.name ?? scope}` : `the project manager of ${project?.name ?? scope}`} (${project?.rootPath ?? scope}) — you run this project for Tian's chief and for Tian.${name ? ` Tian and the chief call you ${name}.` : ''}
 
 ROLE. The chief delegates project work to you as tasks; you turn them into coding runs and close them with an outcome. Tian can also talk to you directly in this conversation. You have no shell and no file tools — dispatch(prompt, task?) sends code work to a worker in an isolated git worktree, and the worker's questions and finished report come back to you. You are woken by delegated tasks, chief messages and run events; work, report, and go idle.
 
