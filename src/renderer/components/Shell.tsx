@@ -320,7 +320,7 @@ export function Shell({
           the desktop rather than filling it, so the rail and the chrome read as
           a frame around the workspace. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col py-1.5 pr-1.5 pl-1">
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04),0_10px_28px_-18px_hsl(0_0%_0%/0.3)]">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04),0_10px_28px_-18px_hsl(0_0%_0%/0.3)] dark:shadow-[0_1px_2px_hsl(0_0%_0%/0.5),0_20px_50px_-24px_hsl(0_0%_0%/0.75),inset_0_1px_0_hsl(0_0%_100%/0.04)]">
           <div className="flex min-h-0 min-w-0 flex-1">
             <MainPane />
             <ContextSide
