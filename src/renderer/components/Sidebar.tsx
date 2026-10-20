@@ -5,8 +5,8 @@ import {
   CaretDown,
   CaretRight,
   ChatCircleDots,
-  ChatCircleText,
   FolderPlus,
+  FolderSimple,
   Gear,
   Lightning,
   MagnifyingGlass,
@@ -111,11 +111,8 @@ function ConversationRow(props: {
   const reduce = useReducedMotion();
   const t = useT();
   const title = c.title ?? t('common.newConversation');
-  const when = relativeTime(
-    archived ? (c.archivedAt ?? c.createdAt) : c.createdAt,
-  );
-  const meta = archived && scopeName ? `${scopeName} · ${when}` : when;
-  const RowIcon = c.role === 'manager' ? UserGear : ChatCircleText;
+  const when = relativeTime(c.archivedAt ?? c.createdAt);
+  const meta = archived ? `${scopeName ? `${scopeName} · ` : ''}${when}` : null;
   const label = t(
     c.role === 'manager'
       ? archived
@@ -135,54 +132,44 @@ function ConversationRow(props: {
         onClick={() =>
           void actions.selectConversation(c.conversationId, c.scopeId)
         }
-        className={`relative flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+        className={`relative flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
           active
-            ? 'text-sidebar-accent-foreground'
+            ? 'font-medium text-sidebar-accent-foreground'
             : 'text-sidebar-foreground hover:bg-sidebar-accent/55 hover:text-sidebar-accent-foreground'
         }`}
       >
         {active && (
-          <>
-            <motion.span
-              layoutId="conversation-active"
-              transition={
-                reduce
-                  ? { duration: 0 }
-                  : { type: 'spring', stiffness: 500, damping: 38 }
-              }
-              className="absolute inset-0 rounded-lg bg-sidebar-accent"
-            />
-            <motion.span
-              layoutId="conversation-active-bar"
-              transition={
-                reduce
-                  ? { duration: 0 }
-                  : { type: 'spring', stiffness: 500, damping: 38 }
-              }
-              className="absolute top-1/2 left-0 h-4 w-0.5 -translate-y-1/2 rounded-full bg-brand"
-            />
-          </>
+          <motion.span
+            layoutId="conversation-active"
+            transition={
+              reduce
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 500, damping: 38 }
+            }
+            className="absolute inset-0 rounded-md bg-sidebar-accent"
+          />
         )}
-        <RowIcon
-          size={14}
-          weight={active ? 'fill' : 'regular'}
-          aria-hidden
-          className={`relative shrink-0 ${
-            active ? 'text-brand' : 'text-content-disabled'
-          }`}
-        />
+        {c.role === 'manager' && (
+          <UserGear
+            size={13}
+            aria-hidden
+            className="relative shrink-0 text-content-disabled"
+          />
+        )}
         <span className="relative min-w-0 flex-1 truncate text-[12.5px]">
           {title}
         </span>
-        <span
-          className={`relative max-w-28 min-w-0 shrink-0 truncate font-mono text-[10px] tabular-nums transition-[color,opacity] group-hover:opacity-0 ${
-            active
-              ? 'text-content-secondary'
-              : 'text-content-disabled group-hover:text-content-secondary'
-          }`}
-        >
-          {meta}
-        </span>
+        {meta && (
+          <span
+            className={`relative max-w-28 min-w-0 shrink-0 truncate font-mono text-[10px] tabular-nums transition-[color,opacity] group-hover:opacity-0 ${
+              active
+                ? 'text-content-secondary'
+                : 'text-content-disabled group-hover:text-content-secondary'
+            }`}
+          >
+            {meta}
+          </span>
+        )}
       </button>
       <RowAction conversation={c} archived={archived} />
     </motion.div>
@@ -206,7 +193,7 @@ function NavItem(props: {
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       whileTap={reduce ? undefined : { scale: 0.985 }}
-      className={`group relative flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors ${
+      className={`group relative flex h-7.5 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[12.5px] transition-colors ${
         active
           ? 'font-medium text-sidebar-accent-foreground'
           : 'text-sidebar-foreground hover:bg-sidebar-accent/55 hover:text-sidebar-accent-foreground'
@@ -220,14 +207,13 @@ function NavItem(props: {
               ? { duration: 0 }
               : { type: 'spring', stiffness: 500, damping: 38 }
           }
-          className="absolute inset-0 rounded-lg bg-sidebar-accent"
+          className="absolute inset-0 rounded-md bg-sidebar-accent"
         />
       )}
       <IconComponent
-        size={16}
-        weight={active ? 'fill' : 'regular'}
+        size={15}
         className={`relative shrink-0 transition-colors ${
-          active ? 'text-brand' : 'text-content-secondary'
+          active ? 'text-content-secondary' : 'text-content-disabled'
         }`}
       />
       <span className="relative flex-1 text-left">{label}</span>
@@ -274,17 +260,24 @@ function ScopeSection(props: {
       aria-label={t('sidebar.scopeLabel', { name: scope.name })}
       className="mb-1.5"
     >
-      <div className="group flex h-7 items-center gap-1 px-1">
+      <div className="group flex h-7.5 items-center gap-1 px-1">
         <button
           type="button"
           aria-label={t('sidebar.selectScope', { name: scope.name })}
           onClick={() => void actions.selectScope(scope.id)}
-          className="min-w-0 flex-1 cursor-pointer truncate text-left font-medium font-mono text-[10px] text-content-disabled uppercase tracking-[0.1em] transition-colors hover:text-content-secondary"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-[12.5px] text-sidebar-foreground transition-colors hover:bg-sidebar-accent/55 hover:text-sidebar-accent-foreground"
           title={scope.rootPath}
         >
-          {scope.name}
+          <FolderSimple
+            size={14}
+            aria-hidden
+            className="shrink-0 text-content-disabled"
+          />
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {scope.name}
+          </span>
           {collapsed && conversations.length > 0 && (
-            <span className="ml-1.5 text-content-disabled/60">
+            <span className="font-mono text-[10px] text-content-disabled/60 tabular-nums">
               {conversations.length}
             </span>
           )}
@@ -332,7 +325,7 @@ function ScopeSection(props: {
         </div>
       </div>
       <Reveal open={!collapsed}>
-        <div className="flex flex-col gap-px">
+        <div className="flex flex-col gap-px pl-2">
           {visible.map((c) => (
             <ConversationRow
               key={c.conversationId}
@@ -377,42 +370,19 @@ function ScopeSection(props: {
 }
 
 /**
- * The sidebar's segment of the unified title bar: same 44px row, same bottom
- * hairline, and the same drag region as every content header, so the top of
- * the window reads as one continuous strip (Codex-style). The leading pad
- * clears the hidden-inset traffic lights.
+ * The rail's brand row lines up with the card's title strip: same 44px row,
+ * same drag region, no hairline — the card's own top edge marks the seam. The
+ * leading pad clears the hidden-inset traffic lights.
  */
 function SidebarBrand() {
-  const t = useT();
   return (
-    <div className="flex h-11 shrink-0 items-center gap-2.5 border-border border-b pr-2 pl-20 [-webkit-app-region:drag]">
-      <BrandMark glow />
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-semibold text-[13px] text-foreground leading-tight tracking-tight">
+    <div className="flex h-11 shrink-0 items-center gap-1.5 pr-1 pl-20 [-webkit-app-region:drag]">
+      <div className="flex h-7 items-center gap-1.5 rounded-lg border border-border bg-card px-2 shadow-sm/5">
+        <BrandMark size="sm" />
+        <span className="font-semibold text-[12.5px] text-foreground tracking-tight">
           Tian
-        </div>
-        <div className="truncate font-mono text-[10px] text-content-secondary leading-tight">
-          {t('sidebar.tagline')}
-        </div>
+        </span>
       </div>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t('sidebar.commandPalette')}
-              className="text-content-secondary [-webkit-app-region:no-drag]"
-              onClick={() => actions.setPaletteOpen(true)}
-            />
-          }
-        >
-          <MagnifyingGlass size={15} />
-        </TooltipTrigger>
-        <TooltipPopup>
-          {t('sidebar.commandPalette')} <Kbd className="ml-1.5">⌘K</Kbd>
-        </TooltipPopup>
-      </Tooltip>
     </div>
   );
 }
@@ -433,8 +403,14 @@ function PrimaryNav({
   return (
     <nav
       aria-label={t('sidebar.primaryNav')}
-      className="flex flex-col gap-0.5 px-2 pb-3"
+      className="flex flex-col gap-0.5 px-2 pt-2 pb-2"
     >
+      <NavItem
+        icon={MagnifyingGlass}
+        label={t('sidebar.search')}
+        active={false}
+        onClick={() => actions.setPaletteOpen(true)}
+      />
       <NavItem
         icon={ChatCircleDots}
         label={t('nav.chat')}
@@ -542,16 +518,17 @@ function ServiceStatus({
   const t = useT();
   const copy = SERVICE_STATUS[status];
   return (
-    <div className="flex items-center gap-2 border-border border-t px-3 py-2.5">
-      <span className="relative flex size-2 shrink-0">
-        {copy.live && (
-          <span className="absolute inset-0 animate-ping rounded-full bg-foreground opacity-30 motion-reduce:animate-none" />
-        )}
-        <span className={`relative size-2 rounded-full ${copy.dot}`} />
+    <div className="flex items-center gap-2 border-border border-t px-2.5 py-2">
+      <span className="relative shrink-0">
+        <BrandMark size="sm" />
+        <span
+          aria-hidden="true"
+          className={`absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-sidebar ${copy.dot}`}
+        />
       </span>
       <span
         role="status"
-        className="truncate font-mono text-[10px] text-content-disabled"
+        className="truncate text-[12px] text-sidebar-foreground"
       >
         {t(copy.label)}
       </span>
@@ -648,7 +625,6 @@ export function Sidebar() {
   const scopes = useStore((s) => s.scopes);
   const conversations = useStore((s) => s.conversations);
   const activeId = useStore((s) => s.activeConversationId);
-  const activeScopeId = useStore((s) => s.activeScopeId);
   const nav = useStore((s) => s.nav);
   const inbox = useStore((s) => s.inbox);
   const tasks = useStore((s) => s.tasks);
@@ -676,27 +652,9 @@ export function Sidebar() {
   return (
     <aside
       aria-label={t('sidebar.navigation')}
-      className="flex min-h-0 w-full flex-col border-border border-r bg-sidebar text-sidebar-foreground"
+      className="flex min-h-0 w-full flex-col bg-window text-sidebar-foreground"
     >
       <SidebarBrand />
-
-      <div className="px-2 pb-2 pt-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="group h-8 w-full justify-start gap-2 border-border bg-transparent px-2.5 text-[12.5px] text-content-secondary shadow-none hover:border-border-secondary hover:bg-sidebar-accent/60 hover:text-foreground"
-          onClick={() => void actions.newConversation(activeScopeId)}
-        >
-          <Plus
-            size={14}
-            className="text-brand transition-transform duration-200 group-hover:rotate-90"
-          />
-          {t('common.newConversation')}
-          <Kbd className="ms-auto h-4 bg-sidebar-accent px-1 font-mono text-[9px]">
-            ⌘N
-          </Kbd>
-        </Button>
-      </div>
 
       <PrimaryNav
         nav={nav}
@@ -705,14 +663,12 @@ export function Sidebar() {
         unread={unread}
       />
 
-      <div className="mx-3 border-border border-t" />
-
-      <div className="flex items-center gap-1 px-3 pt-3 pb-1.5">
+      <div className="flex items-center gap-1 px-3 pt-1.5 pb-1">
         <button
           type="button"
           aria-expanded={!projectsCollapsed}
           onClick={() => setProjectsCollapsed((v) => !v)}
-          className="group flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-medium font-mono text-[10px] text-content-disabled uppercase tracking-[0.1em] transition-colors hover:text-content-secondary"
+          className="group flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left text-[11px] text-content-disabled transition-colors hover:text-content-secondary"
         >
           <motion.span
             animate={{ rotate: projectsCollapsed ? 0 : 90 }}
@@ -795,7 +751,7 @@ export function Sidebar() {
                 type="button"
                 aria-expanded={archiveOpen}
                 onClick={() => setArchiveOpen((v) => !v)}
-                className="group flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-medium font-mono text-[10px] text-content-disabled uppercase tracking-[0.1em] transition-colors hover:text-content-secondary"
+                className="group flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left text-[11px] text-content-disabled transition-colors hover:text-content-secondary"
               >
                 <motion.span
                   animate={{ rotate: archiveOpen ? 90 : 0 }}

@@ -19,6 +19,7 @@ export function PaneDivider({
   onResize,
   onDraggingChange,
   label,
+  quiet = false,
 }: {
   /** Which pane the divider resizes: the one to its left or right. */
   side: 'left' | 'right';
@@ -28,6 +29,8 @@ export function PaneDivider({
   onResize: (width: number) => void;
   onDraggingChange?: (dragging: boolean) => void;
   label: string;
+  /** No resting hairline: the pane's own edge already draws the seam. */
+  quiet?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState(false);
@@ -94,9 +97,9 @@ export function PaneDivider({
         if (e.key === 'ArrowRight')
           onResize(clamp(width + (side === 'left' ? 16 : -16)));
       }}
-      className={`group relative z-10 -mx-px w-0.5 shrink-0 cursor-col-resize bg-border outline-none transition-colors duration-150 focus-visible:bg-brand ${
-        active ? 'bg-brand/50' : ''
-      }`}
+      className={`group relative z-10 -mx-px w-0.5 shrink-0 cursor-col-resize outline-none transition-colors duration-150 focus-visible:bg-brand ${
+        quiet ? '' : 'bg-border'
+      } ${active ? 'bg-brand/50' : ''}`}
     >
       <span
         aria-hidden="true"

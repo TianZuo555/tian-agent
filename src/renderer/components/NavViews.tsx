@@ -48,8 +48,8 @@ import type {
 import { actions, useStore } from '../store';
 import { t, useT, type MessageKey } from '../i18n';
 import { EASE } from './motion-primitives';
-import { SidebarToggle } from './SidebarToggle';
-import { ContextToggle } from './ContextToggle';
+import { ContextToggle, SidebarToggle } from './SidebarToggle';
+import { PaneHeader } from './PaneHeader';
 
 function Header({
   icon: IconComponent,
@@ -63,12 +63,12 @@ function Header({
   action?: React.ReactNode;
 }) {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const contextOpen = useStore((s) => s.contextOpen);
   return (
     // A folded sidebar leaves the traffic lights over this row's left.
-    <header
-      className={`flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 backdrop-blur-md [-webkit-app-region:drag] ${
-        sidebarOpen ? 'px-4' : 'pr-4 pl-20'
-      }`}
+    <PaneHeader
+      clearance={!sidebarOpen}
+      className="bg-background/80 backdrop-blur-md"
     >
       <SidebarToggle />
       <span
@@ -83,9 +83,10 @@ function Header({
       </span>
       <div className="ml-auto flex items-center gap-1 [-webkit-app-region:no-drag]">
         {action}
-        <ContextToggle />
+        {/* The open context pane carries its own toggle at the same seam. */}
+        {!contextOpen && <ContextToggle />}
       </div>
-    </header>
+    </PaneHeader>
   );
 }
 

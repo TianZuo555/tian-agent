@@ -74,6 +74,7 @@ export const en = {
   'sidebar.navigation': 'Navigation',
   'sidebar.primaryNav': 'Primary',
   'sidebar.commandPalette': 'Command palette',
+  'sidebar.search': 'Search',
   'sidebar.projects': 'Projects',
   'sidebar.addProject': 'Add project',
   'sidebar.noProjects':
@@ -126,6 +127,8 @@ export const en = {
   'composer.placeholder': 'Message the chief…',
   'composer.waiting': 'Waiting for the service…',
   'composer.message': 'Message',
+  'composer.model': 'Model',
+  'composer.local': 'Local',
   'composer.send': 'Send',
   'composer.stop': 'Stop',
   'composer.sendHint': 'send',
@@ -358,12 +361,19 @@ export const en = {
   'settings.magpieOffline': 'magpie offline',
   'settings.openCount': '{count} open',
   'settings.section.general': 'General',
+  'settings.section.appearance': 'Appearance',
   'settings.section.model': 'Model',
   'settings.section.usage': 'Usage',
   'settings.section.log': 'Improvement log',
   'settings.section.service': 'Service',
   'settings.language': 'Language',
   'settings.languageDesc': 'Interface language. English is the default.',
+  'settings.appearance.theme': 'Theme',
+  'settings.appearance.themeDesc':
+    'System follows the appearance setting of macOS.',
+  'settings.appearance.system': 'System',
+  'settings.appearance.light': 'Light',
+  'settings.appearance.dark': 'Dark',
 
   // ─── 18. Model Configuration ───────────────────────────────────────────────
   'model.available': '{count} available',

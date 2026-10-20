@@ -6,7 +6,7 @@
 /* Streamdown ships Tailwind classes inside its dist bundle. */
 @source '../node_modules/streamdown/dist/*.js';
 
-@custom-variant dark (@media (prefers-color-scheme: dark));
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
 html,
 body,
@@ -15,8 +15,13 @@ body,
   margin: 0;
 }
 
+/* The renderer sets data-theme on <html>; see src/renderer/theme.ts. */
 html {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 body {
@@ -98,6 +103,7 @@ body {
   --color-brand-2: hsl(var(--brand-2));
   --color-brand-soft: hsl(var(--brand-soft));
   --color-brand-contrast: hsl(var(--brand-contrast));
+  --color-window: hsl(var(--surface-window));
   --color-surface-primary: hsl(var(--surface-primary));
   --color-surface-secondary: hsl(var(--surface-secondary));
   --color-surface-tertiary: hsl(var(--surface-tertiary));
@@ -336,6 +342,8 @@ body {
   --brand-soft: 240 6% 94%;
   --brand-contrast: 0 0% 100%;
 
+  /* the desktop behind the floating card, a step darker than the card */
+  --surface-window: 240 5% 94%;
   --surface-primary: 0 0% 100%;
   --surface-secondary: 240 5% 96%;
   --surface-tertiary: 240 6% 90%;
@@ -398,7 +406,7 @@ body {
   --code-foreground: hsl(var(--content-primary));
   --code-highlight: hsl(var(--surface-tertiary));
 
-  --sidebar: hsl(240 5% 98%);
+  --sidebar: hsl(var(--surface-secondary));
   --sidebar-foreground: hsl(var(--content-secondary));
   --sidebar-accent: hsl(var(--surface-tertiary));
   --sidebar-accent-foreground: hsl(var(--content-primary));
@@ -408,86 +416,85 @@ body {
   --sidebar-ring: hsl(var(--brand));
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --content-primary: 0 0% 100%;
-    --content-secondary: 240 5% 65%;
-    --content-disabled: 240 5% 26%;
-    --content-invert: 240 10% 4%;
-    --content-link: 0 0% 98%;
-    --content-success: 150 40% 60%;
-    --content-warning: 38 75% 66%;
-    --content-destructive: 0 60% 66%;
+:root[data-theme='dark'] {
+  --content-primary: 0 0% 100%;
+  --content-secondary: 240 5% 65%;
+  --content-disabled: 240 5% 26%;
+  --content-invert: 240 10% 4%;
+  --content-link: 0 0% 98%;
+  --content-success: 150 40% 60%;
+  --content-warning: 38 75% 66%;
+  --content-destructive: 0 60% 66%;
 
-    --brand: 0 0% 98%;
-    --brand-2: 240 4% 72%;
-    --brand-soft: 240 5% 14%;
-    --brand-contrast: 240 10% 4%;
+  --brand: 0 0% 98%;
+  --brand-2: 240 4% 72%;
+  --brand-soft: 240 5% 14%;
+  --brand-contrast: 240 10% 4%;
 
-    --surface-primary: 240 10% 4%;
-    --surface-secondary: 240 6% 10%;
-    --surface-tertiary: 240 4% 16%;
-    --surface-quaternary: 240 5% 26%;
-    --surface-control: 240 4% 46%;
-    --surface-invert-primary: 240 6% 90%;
-    --surface-invert-secondary: 240 5% 65%;
-    --surface-scrollbar: 240 4% 46%;
-    --surface-destructive: 0 75% 15%;
-    --surface-green: 145 80% 10%;
-    --surface-sky: 240 5% 12%;
-    --surface-git-added: 145 80% 10%;
-    --surface-git-deleted: 0 75% 15%;
+  --surface-window: 240 8% 2%;
+  --surface-primary: 240 10% 4%;
+  --surface-secondary: 240 6% 10%;
+  --surface-tertiary: 240 4% 16%;
+  --surface-quaternary: 240 5% 26%;
+  --surface-control: 240 4% 46%;
+  --surface-invert-primary: 240 6% 90%;
+  --surface-invert-secondary: 240 5% 65%;
+  --surface-scrollbar: 240 4% 46%;
+  --surface-destructive: 0 75% 15%;
+  --surface-green: 145 80% 10%;
+  --surface-sky: 240 5% 12%;
+  --surface-git-added: 145 80% 10%;
+  --surface-git-deleted: 0 75% 15%;
 
-    --border-default: 240 4% 16%;
-    --border-secondary: 240 5% 26%;
-    --border-control: 240 4% 46%;
-    --border-destructive: 0 60% 66%;
-    --border-success: 150 40% 60%;
-    --border-warning: 32 80% 55%;
-    --border-sky: 240 4% 28%;
+  --border-default: 240 4% 16%;
+  --border-secondary: 240 5% 26%;
+  --border-control: 240 4% 46%;
+  --border-destructive: 0 60% 66%;
+  --border-success: 150 40% 60%;
+  --border-warning: 32 80% 55%;
+  --border-sky: 240 4% 28%;
 
-    --git-added: 142 77% 73%;
-    --git-deleted: 0 94% 82%;
+  --git-added: 142 77% 73%;
+  --git-deleted: 0 94% 82%;
 
-    --background: hsl(var(--surface-primary));
-    --foreground: hsl(var(--content-primary));
-    --card: hsl(var(--surface-secondary));
-    --card-foreground: hsl(var(--content-primary));
-    --popover: hsl(var(--surface-secondary));
-    --popover-foreground: hsl(var(--content-primary));
-    --primary: hsl(var(--surface-invert-primary));
-    --primary-foreground: hsl(var(--surface-primary));
-    --secondary: hsl(var(--surface-secondary));
-    --secondary-foreground: hsl(var(--content-primary));
-    --muted: hsl(var(--surface-secondary));
-    --muted-foreground: hsl(var(--content-secondary));
-    --accent: hsl(var(--surface-tertiary));
-    --accent-foreground: hsl(var(--content-primary));
-    --destructive: hsl(var(--content-destructive));
-    --destructive-foreground: hsl(var(--content-destructive));
-    --border: hsl(var(--border-default));
-    --input: hsl(var(--border-default));
-    --ring: hsl(var(--brand));
-    --success: hsl(var(--content-success));
-    --success-foreground: hsl(var(--content-success));
-    --warning: hsl(var(--content-warning));
-    --warning-foreground: hsl(var(--content-warning));
-    --info: hsl(var(--content-secondary));
-    --info-foreground: hsl(var(--content-secondary));
+  --background: hsl(var(--surface-primary));
+  --foreground: hsl(var(--content-primary));
+  --card: hsl(var(--surface-secondary));
+  --card-foreground: hsl(var(--content-primary));
+  --popover: hsl(var(--surface-secondary));
+  --popover-foreground: hsl(var(--content-primary));
+  --primary: hsl(var(--surface-invert-primary));
+  --primary-foreground: hsl(var(--surface-primary));
+  --secondary: hsl(var(--surface-secondary));
+  --secondary-foreground: hsl(var(--content-primary));
+  --muted: hsl(var(--surface-secondary));
+  --muted-foreground: hsl(var(--content-secondary));
+  --accent: hsl(var(--surface-tertiary));
+  --accent-foreground: hsl(var(--content-primary));
+  --destructive: hsl(var(--content-destructive));
+  --destructive-foreground: hsl(var(--content-destructive));
+  --border: hsl(var(--border-default));
+  --input: hsl(var(--border-default));
+  --ring: hsl(var(--brand));
+  --success: hsl(var(--content-success));
+  --success-foreground: hsl(var(--content-success));
+  --warning: hsl(var(--content-warning));
+  --warning-foreground: hsl(var(--content-warning));
+  --info: hsl(var(--content-secondary));
+  --info-foreground: hsl(var(--content-secondary));
 
-    --code: hsl(var(--surface-secondary));
-    --code-foreground: hsl(var(--content-primary));
-    --code-highlight: hsl(var(--surface-tertiary));
+  --code: hsl(var(--surface-secondary));
+  --code-foreground: hsl(var(--content-primary));
+  --code-highlight: hsl(var(--surface-tertiary));
 
-    --sidebar: hsl(var(--surface-secondary));
-    --sidebar-foreground: hsl(var(--content-secondary));
-    --sidebar-accent: hsl(var(--surface-tertiary));
-    --sidebar-accent-foreground: hsl(var(--content-primary));
-    --sidebar-border: hsl(var(--border-default));
-    --sidebar-primary: hsl(var(--content-primary));
-    --sidebar-primary-foreground: hsl(var(--surface-primary));
-    --sidebar-ring: hsl(var(--brand));
-  }
+  --sidebar: hsl(var(--surface-secondary));
+  --sidebar-foreground: hsl(var(--content-secondary));
+  --sidebar-accent: hsl(var(--surface-tertiary));
+  --sidebar-accent-foreground: hsl(var(--content-primary));
+  --sidebar-border: hsl(var(--border-default));
+  --sidebar-primary: hsl(var(--content-primary));
+  --sidebar-primary-foreground: hsl(var(--surface-primary));
+  --sidebar-ring: hsl(var(--brand));
 }
 
 @layer utilities {

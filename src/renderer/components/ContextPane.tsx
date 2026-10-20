@@ -43,7 +43,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { tian } from '../api';
 import { useT, type MessageKey } from '../i18n';
 import { CountPulse, EASE } from './motion-primitives';
-import { ContextToggle } from './ContextToggle';
+import { PaneHeader } from './PaneHeader';
+import { ContextToggle } from './SidebarToggle';
 import type { MemoryItem, RunInfo } from '@/shared/types';
 import { actions, useStore } from '../store';
 
@@ -101,21 +102,28 @@ const DIFF_OPTIONS = {
   disableFileHeader: false,
 } as const;
 
-function useSystemTheme(): 'light' | 'dark' {
-  const [dark, setDark] = useState(
-    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
+/**
+ * Pierre's diff needs a concrete light/dark choice, so read the resolved
+ * appearance off <html> — the same switch the tokens use, which already
+ * folds the "system" preference into a concrete value.
+ */
+function useResolvedTheme(): 'light' | 'dark' {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
   );
   useEffect(() => {
-    const mql = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = (e: MediaQueryListEvent) => setDark(e.matches);
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
+    const root = document.documentElement;
+    const observer = new MutationObserver(() =>
+      setTheme(root.dataset.theme === 'dark' ? 'dark' : 'light'),
+    );
+    observer.observe(root, { attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
   }, []);
-  return dark ? 'dark' : 'light';
+  return theme;
 }
 
 function DiffView({ patch }: { patch: string }) {
-  const themeType = useSystemTheme();
+  const themeType = useResolvedTheme();
   const t = useT();
   const files = useMemo<FileDiffMetadata[]>(() => {
     if (!patch.trim()) return [];
@@ -1085,9 +1093,9 @@ export function ContextPane() {
   return (
     <aside
       aria-label={t('context.title')}
-      className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar"
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
-      <div className="flex h-11 shrink-0 items-center gap-2 border-border border-b px-3 [-webkit-app-region:drag]">
+      <PaneHeader inset="compact">
         <span
           aria-hidden="true"
           className="flex size-5 items-center justify-center rounded-md bg-secondary text-content-secondary"
@@ -1105,7 +1113,7 @@ export function ContextPane() {
           {name}
         </Badge>
         <ContextToggle />
-      </div>
+      </PaneHeader>
 
       <div
         role="tablist"

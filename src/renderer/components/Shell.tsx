@@ -148,13 +148,12 @@ function MainPane() {
   const nav = useStore((s) => s.nav);
   const reduce = useReducedMotion();
   return (
+    // The main pane re-lays out whenever a rail folds. It rides the same
+    // tween as the rail's own slide, so the toggle in its header travels with
+    // the card edge instead of lagging behind it on a separate spring.
     <motion.div
       layout={!reduce}
-      transition={
-        reduce
-          ? { duration: 0 }
-          : { type: 'spring', stiffness: 320, damping: 34, mass: 0.7 }
-      }
+      transition={{ duration: reduce ? 0 : 0.24, ease: EASE }}
       className="relative flex min-h-0 min-w-0 flex-1 flex-col"
     >
       <ConnectionBanner />
@@ -270,9 +269,19 @@ export function Shell({
   return (
     // No role="application": it would suppress the screen reader's own
     // navigation shortcuts for the whole app.
+    //
+    // The window is a desktop around one floating card: the navigation rail
+    // sits on the desktop, while the conversation and the context pane share
+    // a single rounded, shadowed surface whose title strip runs unbroken
+    // across both (Qoder's layout). The rail only draws a divider when it is
+    // open; folded, the card takes the whole window.
+    // `relative` keeps the exiting panes' popLayout absolute boxes inside this
+    // clipped box: without a positioned ancestor they escape it, and a pane
+    // sliding off the right edge would briefly widen the document and flash
+    // window scrollbars.
     <div
       aria-label="Tian Agent"
-      className="flex h-screen overflow-hidden bg-background text-foreground"
+      className="relative flex h-screen overflow-hidden bg-window text-foreground"
     >
       {/* Collapsed as ContextSide is: the column slides to the window's edge
           by transform while its space pops out of layout at once, so the
@@ -302,17 +311,27 @@ export function Shell({
               min={200}
               max={380}
               onResize={onNavResize}
+              quiet
             />
           </motion.div>
         )}
       </AnimatePresence>
-      <MainPane />
-      <ContextSide
-        width={contextWidth}
-        dragging={contextDragging}
-        onResize={onContextResize}
-        onDraggingChange={onContextDraggingChange}
-      />
+      {/* The gutter between the card and the window edges: the card floats on
+          the desktop rather than filling it, so the rail and the chrome read as
+          a frame around the workspace. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col py-1.5 pr-1.5 pl-1">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04),0_10px_28px_-18px_hsl(0_0%_0%/0.3)]">
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <MainPane />
+            <ContextSide
+              width={contextWidth}
+              dragging={contextDragging}
+              onResize={onContextResize}
+              onDraggingChange={onContextDraggingChange}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

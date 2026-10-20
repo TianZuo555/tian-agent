@@ -5,9 +5,13 @@ import {
   ChartBar,
   Check,
   Cpu,
+  Desktop,
   Gear,
+  Moon,
   Notebook,
+  PaintBrush,
   Pulse,
+  Sun,
   Translate,
   X,
 } from '@phosphor-icons/react';
@@ -34,14 +38,16 @@ import {
   type Locale,
   type MessageKey,
 } from '../i18n';
-import { SidebarToggle } from './SidebarToggle';
-import { ContextToggle } from './ContextToggle';
+import { setTheme, useTheme, type Theme } from '../theme';
+import { ContextToggle, SidebarToggle } from './SidebarToggle';
+import { PaneHeader } from './PaneHeader';
 import { UsageHeatmap } from './UsageHeatmap';
 import { ServiceSettings } from './ServiceSettings';
 import { ImprovementLog } from './ImprovementLog';
 
 const SECTIONS: { id: string; label: MessageKey; icon: Icon }[] = [
   { id: 'general', label: 'settings.section.general', icon: Translate },
+  { id: 'appearance', label: 'settings.section.appearance', icon: PaintBrush },
   { id: 'model', label: 'settings.section.model', icon: Cpu },
   { id: 'usage', label: 'settings.section.usage', icon: ChartBar },
   { id: 'log', label: 'settings.section.log', icon: Notebook },
@@ -128,6 +134,64 @@ function GeneralSection() {
           </SelectPopup>
         </Select>
         <FieldDescription>{t('settings.languageDesc')}</FieldDescription>
+      </Field>
+    </Section>
+  );
+}
+
+/** A three-way segmented control: system, light, dark. */
+function ThemeChoice() {
+  const t = useT();
+  const theme = useTheme();
+  const options: { id: Theme; label: MessageKey; icon: Icon }[] = [
+    { id: 'system', label: 'settings.appearance.system', icon: Desktop },
+    { id: 'light', label: 'settings.appearance.light', icon: Sun },
+    { id: 'dark', label: 'settings.appearance.dark', icon: Moon },
+  ];
+  return (
+    <div
+      role="radiogroup"
+      aria-label={t('settings.appearance.theme')}
+      className="flex w-fit items-center gap-0.5 rounded-lg bg-muted p-0.5"
+    >
+      {options.map(({ id, label, icon: OptionIcon }) => {
+        const selected = theme === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => setTheme(id)}
+            className={`flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 font-medium text-[11px] transition-colors ${
+              selected
+                ? 'bg-secondary text-foreground'
+                : 'text-content-secondary hover:text-foreground'
+            }`}
+          >
+            <OptionIcon size={12} aria-hidden="true" />
+            {t(label)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AppearanceSection() {
+  const t = useT();
+  return (
+    <Section
+      id="appearance"
+      title={t('settings.section.appearance')}
+      icon={PaintBrush}
+    >
+      <Field>
+        <FieldLabel>{t('settings.appearance.theme')}</FieldLabel>
+        <ThemeChoice />
+        <FieldDescription>
+          {t('settings.appearance.themeDesc')}
+        </FieldDescription>
       </Field>
     </Section>
   );
@@ -368,6 +432,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
   );
   const catalog = useStore((s) => s.catalog);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const contextOpen = useStore((s) => s.contextOpen);
   const reduce = useReducedMotion();
   const t = useT();
   const meta = `${t(
@@ -385,10 +450,9 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
     >
       {/* The traffic lights always cover this row's left in the boot view,
           and in the shell whenever the sidebar is folded. */}
-      <header
-        className={`flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 backdrop-blur-md [-webkit-app-region:drag] ${
-          sidebarOpen && !onBack ? 'px-4' : 'pr-4 pl-20'
-        }`}
+      <PaneHeader
+        clearance={!(sidebarOpen && !onBack)}
+        className="bg-background/80 backdrop-blur-md"
       >
         {!onBack && <SidebarToggle />}
         <span
@@ -413,7 +477,8 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
           </Button>
         ) : (
           <div className="ml-auto flex items-center gap-1 [-webkit-app-region:no-drag]">
-            <ContextToggle />
+            {/* The open context pane carries its own toggle at the same seam. */}
+            {!contextOpen && <ContextToggle />}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -432,7 +497,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
             </Tooltip>
           </div>
         )}
-      </header>
+      </PaneHeader>
 
       <div className="@container flex min-h-0 flex-1">
         <nav
@@ -464,6 +529,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
         >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-7 px-5 py-6">
             <GeneralSection />
+            <AppearanceSection />
             <ModelSection />
             <UsageSection />
             <LogSection />

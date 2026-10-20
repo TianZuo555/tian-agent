@@ -230,9 +230,14 @@ export function createAppStore(api: TianApi) {
     id: string,
     scopeId: string,
   ): Promise<void> {
+    // Picking a conversation is a request to read it, whichever view is up:
+    // the rail lists conversations on every page, so selecting one from Goals
+    // or Inbox has to land on Chat instead of leaving the old view in place.
     set({
       activeConversationId: id,
       activeScopeId: scopeId,
+      nav: 'chat',
+      navReturn: 'chat',
       view: null,
       memory: null,
       runs: [],

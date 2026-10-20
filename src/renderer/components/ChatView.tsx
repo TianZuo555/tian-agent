@@ -50,8 +50,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
 import { actions, useStore } from '../store';
 import { useT, type MessageKey } from '../i18n';
-import { SidebarToggle } from './SidebarToggle';
-import { ContextToggle } from './ContextToggle';
+import { ContextToggle, SidebarToggle } from './SidebarToggle';
+import { PaneHeader } from './PaneHeader';
 import { BrandMark, BrandOrb } from './BrandMark';
 
 /**
@@ -633,6 +633,7 @@ function Transcript({
   busy,
   connected,
   scopeName,
+  scopeId,
   atBottom,
   reduce,
   viewportRef,
@@ -647,6 +648,7 @@ function Transcript({
   busy: boolean;
   connected: boolean;
   scopeName: string | null;
+  scopeId: string | null;
   atBottom: boolean;
   reduce: boolean;
   viewportRef: React.RefObject<HTMLDivElement | null>;
@@ -704,6 +706,8 @@ function Transcript({
             onValueChange={onDraftChange}
             onSend={onSend}
             onStop={() => void actions.abort()}
+            scopeName={scopeName}
+            scopeId={scopeId}
             textareaRef={composerRef}
           />
         </div>
@@ -720,6 +724,7 @@ export function ChatView() {
   const connected = useStore((s) => s.runtimeStatus === 'ready');
   const scopes = useStore((s) => s.scopes);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const contextOpen = useStore((s) => s.contextOpen);
   const reduce = useReducedMotion();
   const viewportRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -808,10 +813,9 @@ export function ChatView() {
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       {/* A folded sidebar leaves the traffic lights over this row's left. */}
-      <header
-        className={`flex h-11 shrink-0 items-center gap-2 border-border border-b bg-background/80 backdrop-blur-md [-webkit-app-region:drag] ${
-          sidebarOpen ? 'px-4' : 'pr-4 pl-20'
-        }`}
+      <PaneHeader
+        clearance={!sidebarOpen}
+        className="bg-background/80 backdrop-blur-md"
       >
         <SidebarToggle />
         {conv ? (
@@ -838,9 +842,11 @@ export function ChatView() {
           </>
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]">
-          <ContextToggle />
+          {/* The open context pane carries its own toggle at the same seam;
+              showing both would put two identical buttons side by side. */}
+          {!contextOpen && <ContextToggle />}
         </div>
-      </header>
+      </PaneHeader>
 
       {!conv ? (
         <WelcomePane
@@ -854,6 +860,7 @@ export function ChatView() {
           busy={busy}
           connected={connected}
           scopeName={scope?.name ?? null}
+          scopeId={scope?.id ?? null}
           atBottom={atBottom}
           reduce={Boolean(reduce)}
           viewportRef={viewportRef}
