@@ -91,7 +91,12 @@ interface Fixture {
   tool: (name: string) => ExecutableTool;
   chiefTool: (name: string) => ExecutableTool;
   wakes: Wake[];
-  dispatched: { projectRef: string; chiefConversationId: string | null }[];
+  dispatched: {
+    projectRef: string;
+    chiefConversationId: string | null;
+    model?: string;
+    thinkingLevel?: string;
+  }[];
   searches: { scopeId: string | null }[];
   /** The input a tool call would see — set to a user turn for a Tian turn. */
   turn: {
@@ -152,8 +157,11 @@ function fixture(t: TestContext): Fixture {
         id: 'r-dispatched',
         projectId: input.projectRef,
         chiefConversationId: input.chiefConversationId,
+        model: input.model ?? null,
+        thinkingLevel: input.thinkingLevel ?? null,
       });
     },
+    workerModels: () => [],
     runReport: () => 'the report',
     runDiff: async () => 'the diff',
     sendRunMessage: (runId, body, operationId) =>
@@ -205,6 +213,7 @@ function fixture(t: TestContext): Fixture {
         emitImprovements: () => {},
         emitNotices: () => {},
         dispatch: () => Promise.reject(new Error('not used')),
+        workerModels: () => [],
         runReport: () => '',
         runDiff: async () => '',
         sendRunMessage: () => {
@@ -596,6 +605,21 @@ test('manager dispatch always targets its own project as the supervising convers
   assert.equal(f.dispatched.length, 1);
   assert.equal(f.dispatched[0].projectRef, 'p-1');
   assert.equal(f.dispatched[0].chiefConversationId, 'mgr-conv');
+});
+
+test('manager dispatch forwards a pinned model and thinking level', async (t) => {
+  const f = fixture(t);
+  const result = await f.tool('dispatch').execute(
+    {
+      prompt: 'migrate the schema',
+      model: 'deep/pro',
+      thinking_level: 'high',
+    },
+    api(f.managerConv),
+  );
+  assert.equal(f.dispatched[0].model, 'deep/pro');
+  assert.equal(f.dispatched[0].thinkingLevel, 'high');
+  assert.match(toolText(result), /model deep\/pro think:high/);
 });
 
 // ---- Tian turns -------------------------------------------------------------

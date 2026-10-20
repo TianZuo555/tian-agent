@@ -252,3 +252,19 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - **Tian 直连管理者**：除总管委派外，Tian 可经 `openManager(projectId)` 命令（侧栏项目作用域的管理者按钮）直接打开管理者会话派活；`ConversationInfo.role`（`'chief' | 'manager'`）随 `openManager` / `openSession` / `listConversations` 等全链路透出（由 `channel_sessions` 的 manager 绑定派生，不落 `conversations` 列），`SERVICE_PROTOCOL` 升至 5。Tian 轮次（本轮 `currentInput` 为 `kind='user'`）里，`ask_chief` 与 `report_chief` 被工具层守卫挡下并返回提示语——不写 `manager_messages`、不唤醒总管；例外是 `report_chief` 带 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 直接派的 Task 由 `add_task` 创建（`assignee = NULL`），静默收口不通知总管；`remember(source:'user')` 在 Tian 轮次照常记 `user_confirmed`。
 
 **后果**：委派变成可枚举、可追踪、可归因的工作项——总管能列出未完成委派、汇报能对应到 Task；问答语义清晰，答覆不再被无关消息吞掉或重复投递；Manager 拥有项目内完整管理回路，越权写入被工具层拦截。Tian 直连让项目琐事绕过总管直达管理者且不打扰总管会话，同时不削弱上行通道——归属总管委派的 Task 在 Tian 轮次中收口、上报照常。局限：Tian 让管理者「把非委派事项转告总管」目前不实现——`report_chief` 仅放行委派 Task；`ask_chief` 阻塞轮询（2 秒间隔、默认上限 5 分钟）；用户界面操作（doneTask）不受 assignee 限制，作为最终逃生通道保留。
+
+## D13 · Run 级 worker 模型与思考强度：dispatch 参数钉选，校验收口在 Service
+
+总管与管理者派活时可给本次 Run 钉一个模型和思考强度（effort），不再一律使用全局默认模型。
+
+**背景**：worker 历来用 `settings.model` 全局默认模型、按模型自带 effort 跑。有些任务值得用更强的模型或更高的思考强度，另一些只是跑腿、便宜快速即可。需要让总管和管理者在 `dispatch` 时按任务指定，而不是改全局配置。
+
+**决定**：
+
+- **dispatch 钉选**：总管 `dispatch(project, prompt, task?, model?, thinking_level?)` 与管理者 `dispatch(prompt, task?, model?, thinking_level?)` 各增加两个可选参数——`model` 是 Magpie catalog 的 model id，`thinking_level` 是 pi 的 level 名（off/minimal/low/medium/high/xhigh/max）。省略时沿用全局默认模型与该模型自己的默认 effort。
+- **校验收口一处**：总管与管理者的 dispatch dep 都指向 `Service.dispatchRun`，其中 `resolveWorkerSpec` 对照 `catalogState().models` 校验——model 必须存在、thinking_level 必须被目标模型支持；gateway 的 `none` 映射为 pi 的 `off`。校验失败抛错、不创建 run，两条路径同一套规则。
+- **持久化与消费**：`runs` 表在同一 v7 迁移里新增 `model`、`thinking_level` 两个可空列（NULL = 继承默认），`run.dispatched` 事件 payload 带上钉选值；`AgentRuntime.create` 把钉选的 `{provider: 'magpie', modelId}` 与 `thinkingLevel` 传给 pi，未钉时回落 `settings.model`。
+- **可发现性**：总管与管理者的 `<state>` 块各多一行 `worker models:`（catalog 为空时不出现），列出每个 model id、它支持的 thinking level 和默认标记；工具描述指引从该行取值。
+- **兼容**：`RunInfo.model` / `thinkingLevel` 为可选可空字段，旧库行与旧 fixture 不受影响。
+
+**后果**：总管可以把重活钉到强模型 / 高强度、跑腿钉到便宜模型，同一个项目内不同 Run 并存不同配置；错值在 run 创建前被拦下，不会产生半初始化 run。局限：thinking_level 单独传入时按默认模型校验，默认模型不在 catalog 中会拒绝（需先钉 model）；UI 侧手动派活 / 复跑暂不接这两个参数。

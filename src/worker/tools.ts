@@ -26,6 +26,7 @@ import { improvementTools } from './tools-improvements.js';
 import type { ImprovementStore } from './improvements.js';
 import type { GoalStore } from './goals.js';
 import { goalsTools } from './tools-goals.js';
+import { workerModelLine, type WorkerModelChoice } from './run-model.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
@@ -52,7 +53,11 @@ export interface ChiefDeps {
     chiefConversationId: string | null;
     taskId?: number;
     operationId: string;
+    model?: string;
+    thinkingLevel?: string;
   }) => Promise<RunRow>;
+  /** Model ids and thinking levels dispatch may pin for a worker. */
+  workerModels: () => WorkerModelChoice[];
   /** Post a message into a run's mailbox — a reply or mid-run guidance. */
   sendRunMessage: (
     runId: string,
@@ -144,7 +149,7 @@ MEMORY. Your memory outlives every session — without it you do not know who Ti
 
 WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each belongs to a scope with success criteria, constraints, a current state and a next action, and gets its own conversation (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. dispatch(project, prompt, task) records code work on a task id from <state>.
 
-DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to check progress; Tian can also follow up, land, ship or discard a run from the UI.
+DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. dispatch(project, prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state> when a task needs a stronger or cheaper worker. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to check progress; Tian can also follow up, land, ship or discard a run from the UI.
 
 WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
@@ -206,6 +211,8 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     } catch {
       // scope dirs not created yet — nothing to report
     }
+    const models = workerModelLine(deps.workerModels());
+    if (models) lines.push(models);
     const project = scope === GLOBAL_SCOPE ? null : db.getProject(scope);
     const header = [
       `scope: ${project ? `${project.name} (${project.rootPath})` : 'General'}`,
@@ -486,6 +493,18 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
             'Task id this run advances (from list_tasks). The run is recorded on the task.',
         }),
       ),
+      model: Type.Optional(
+        Type.String({
+          description:
+            'Worker model id from the worker models line in <state>. Default: the app-wide model.',
+        }),
+      ),
+      thinking_level: Type.Optional(
+        Type.String({
+          description:
+            "Worker thinking level — one of off, minimal, low, medium, high, xhigh, max that the chosen model lists in <state>. Default: the model's own.",
+        }),
+      ),
     }),
     execute: async (args, api) => {
       const scope = resolveScope(
@@ -502,9 +521,15 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
           chiefConversationId: String(api.conversationId),
           taskId: args.task,
           operationId: `dispatch:${api.taskId}:${api.callId}`,
+          model: args.model,
+          thinkingLevel: args.thinking_level,
         });
         return text(
-          `dispatched run ${run.id} on ${run.agentKind} — worktree ${run.worktreePath ?? '(in place, not a git repo)'}. I'll report when it finishes.`,
+          `dispatched run ${run.id} on ${run.agentKind}${
+            run.model
+              ? ` [model ${run.model}${run.thinkingLevel ? ` think:${run.thinkingLevel}` : ''}]`
+              : ''
+          } — worktree ${run.worktreePath ?? '(in place, not a git repo)'}. I'll report when it finishes.`,
         );
       } catch (e) {
         return err(`dispatch failed: ${e instanceof Error ? e.message : e}`);

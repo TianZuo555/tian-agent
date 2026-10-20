@@ -19,6 +19,7 @@ import { Settings } from './settings.js';
 import { DataService } from './data.js';
 import { AgentRuntime } from './agents.js';
 import { RunOrchestrator, type DispatchInput } from './runs.js';
+import { resolveWorkerSpec, workerModelChoices } from './run-model.js';
 import { EventLog } from './events.js';
 import {
   ImprovementStore,
@@ -187,12 +188,17 @@ export class Service {
             .trigger(scopeId, 'task-completed')
             .catch((error) => console.error('Memory worker:', error));
         },
-        dispatch: (input) => this.runs.dispatch(input),
+        dispatch: (input) => this.dispatchRun(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
         sendRunMessage: (runId, body, operationId) =>
           this.data.sendRunMessage(runId, body, operationId),
         runMessages: (runId) => this.data.runMessages(runId),
+        workerModels: () =>
+          workerModelChoices(
+            this.settings.catalogState().models,
+            this.settings.get().model.modelId,
+          ),
         delegateToManager: (input) => this.delegateToManager(input),
         sendManagerMessage: (input) => this.sendManagerMessage(input),
         managerMessages: (projectId) => this.data.managerMessages(projectId),
@@ -223,12 +229,17 @@ export class Service {
             .trigger(scopeId, 'task-completed')
             .catch((error) => console.error('Memory worker:', error));
         },
-        dispatch: (input) => this.runs.dispatch(input),
+        dispatch: (input) => this.dispatchRun(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
         sendRunMessage: (runId, body, operationId) =>
           this.data.sendRunMessage(runId, body, operationId),
         runMessages: (runId) => this.data.runMessages(runId),
+        workerModels: () =>
+          workerModelChoices(
+            this.settings.catalogState().models,
+            this.settings.get().model.modelId,
+          ),
         wakeChief: async (projectId, content, notificationId, taskId) => {
           this.db.queueNotification({
             id: notificationId,
@@ -1382,8 +1393,21 @@ export class Service {
   skillRollback(id: string, reason: string | null) {
     return this.skills.rollback(id, reason);
   }
+  /**
+   * Every dispatch path lands here (chief and manager tools alike): a pinned
+   * model / thinking level is validated against the catalog before the run
+   * exists — bad ids must never create a run.
+   */
   dispatchRun(input: DispatchInput) {
-    return this.runs.dispatch(input);
+    return this.runs.dispatch({
+      ...input,
+      ...resolveWorkerSpec(
+        this.settings.catalogState().models,
+        this.settings.get().model.modelId,
+        input.model,
+        input.thinkingLevel,
+      ),
+    });
   }
   followUpRun(id: string, prompt: string) {
     return this.runs.followUp(id, prompt);

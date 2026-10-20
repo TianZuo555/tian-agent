@@ -17,6 +17,7 @@ import {
 } from './tools-memory.js';
 import { taskExecutionTools } from './tools-goals.js';
 import type { HistoryDeps } from './tools-history.js';
+import { workerModelLine, type WorkerModelChoice } from './run-model.js';
 
 export interface ManagerDeps extends MemoryToolDeps {
   goals: GoalStore;
@@ -32,7 +33,11 @@ export interface ManagerDeps extends MemoryToolDeps {
     chiefConversationId: string | null;
     taskId?: number;
     operationId: string;
+    model?: string;
+    thinkingLevel?: string;
   }) => Promise<RunRow>;
+  /** Model ids and thinking levels dispatch may pin for a worker. */
+  workerModels: () => WorkerModelChoice[];
   runReport: (id: string) => string;
   runDiff: (id: string) => Promise<string>;
   /** Post a message into a run's mailbox — a reply or mid-run guidance. */
@@ -95,7 +100,7 @@ REPORTING UP. The chief cannot see your work unless you say so. report_chief(tex
 
 MEMORY. You read global and this project's memory (injected below), but you write ONLY this project's — remember/revise/forget/select/deselect always target this project; global stays the chief's domain. Record project decisions, conventions and outcomes.
 
-RUNS. dispatch gets a full briefing (the worker sees nothing else); send_run_msg answers a waiting worker or steers a run; list_runs/read_run_report/read_run_diff/list_run_msgs follow progress. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
+RUNS. dispatch gets a full briefing (the worker sees nothing else); dispatch(prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state>. send_run_msg answers a waiting worker or steers a run; list_runs/read_run_report/read_run_diff/list_run_msgs follow progress. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
 
 HISTORY & NOTES. search_history reads this project's past sessions, tool calls and events; read_history expands a ref. Notes are this project's long documents — keep plans and standing context there.`;
     },
@@ -140,6 +145,8 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     } catch {
       // scope dirs not created yet — nothing to report
     }
+    const models = workerModelLine(deps.workerModels());
+    if (models) lines.push(models);
     const project = db.getProject(scope);
     const header = [
       `project: ${project ? `${project.name} (${project.rootPath})` : scope}`,
@@ -359,6 +366,18 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
             'Task id this run advances (from list_tasks). The run is recorded on the task.',
         }),
       ),
+      model: Type.Optional(
+        Type.String({
+          description:
+            'Worker model id from the worker models line in <state>. Default: the app-wide model.',
+        }),
+      ),
+      thinking_level: Type.Optional(
+        Type.String({
+          description:
+            "Worker thinking level — one of off, minimal, low, medium, high, xhigh, max that the chosen model lists in <state>. Default: the model's own.",
+        }),
+      ),
     }),
     execute: async (args, api) => {
       const scope = own(String(api.conversationId));
@@ -369,9 +388,15 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
           chiefConversationId: String(api.conversationId),
           taskId: args.task,
           operationId: `dispatch:${api.taskId}:${api.callId}`,
+          model: args.model,
+          thinkingLevel: args.thinking_level,
         });
         return text(
-          `dispatched run ${run.id} on ${run.agentKind} — worktree ${run.worktreePath ?? '(in place, not a git repo)'}. You will be woken when it finishes.`,
+          `dispatched run ${run.id} on ${run.agentKind}${
+            run.model
+              ? ` [model ${run.model}${run.thinkingLevel ? ` think:${run.thinkingLevel}` : ''}]`
+              : ''
+          } — worktree ${run.worktreePath ?? '(in place, not a git repo)'}. You will be woken when it finishes.`,
         );
       } catch (e) {
         return err(`dispatch failed: ${e instanceof Error ? e.message : e}`);

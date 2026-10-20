@@ -50,7 +50,7 @@ export function magpieApiKey(): string {
   return process.env.MAGPIE_API_KEY?.trim() || 'magpie';
 }
 
-const THINKING_LEVELS: ModelThinkingLevel[] = [
+export const THINKING_LEVELS: ModelThinkingLevel[] = [
   'off',
   'minimal',
   'low',
@@ -71,6 +71,14 @@ function thinkingLevelMap(levels: string[]): ThinkingLevelMap {
     }
   }
   return map;
+}
+
+/** pi thinking levels a catalog model actually accepts, in increasing order. */
+export function supportedThinkingLevels(
+  info: MagpieModelInfo,
+): ModelThinkingLevel[] {
+  const map = thinkingLevelMap(info.levels);
+  return THINKING_LEVELS.filter((level) => map[level] != null);
 }
 
 function supportsCompletions(model: MagpieModelPayload): boolean {

@@ -29,6 +29,10 @@ export interface DispatchInput {
   /** Code tasks record the task this run executes. */
   taskId?: number;
   operationId?: string;
+  /** Magpie model id pinned for this run's worker; unset = the app default. */
+  model?: string | null;
+  /** pi thinking level pinned for this run's worker; unset = the model's own. */
+  thinkingLevel?: string | null;
 }
 
 /**
@@ -141,6 +145,8 @@ export class RunOrchestrator {
           name: skill.name,
           version: skill.version,
         })),
+        model: input.model ?? null,
+        thinkingLevel: input.thinkingLevel ?? null,
         startedAt,
         finishedAt: null,
         deadlineAt: new Date(
@@ -168,7 +174,11 @@ export class RunOrchestrator {
         runId: id,
         conversationId: input.chiefConversationId,
         summary: `Dispatched to ${project.name}: ${input.prompt.split('\n')[0].slice(0, 120)}`,
-        payload: { prompt: input.prompt.slice(0, 2000) },
+        payload: {
+          prompt: input.prompt.slice(0, 2000),
+          model: run.model,
+          thinkingLevel: run.thinkingLevel,
+        },
       });
       this.changed();
       return this.require(id);
