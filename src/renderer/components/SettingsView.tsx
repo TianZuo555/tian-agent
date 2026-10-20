@@ -16,7 +16,7 @@ import {
   X,
 } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
-import { useReducedMotion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
@@ -39,13 +39,23 @@ import {
   type MessageKey,
 } from '../i18n';
 import { setTheme, useTheme, type Theme } from '../theme';
+import { EASE } from './motion-primitives';
 import { ContextToggle, SidebarToggle } from './SidebarToggle';
 import { PaneHeader } from './PaneHeader';
 import { UsageHeatmap } from './UsageHeatmap';
 import { ServiceSettings } from './ServiceSettings';
 import { ImprovementLog } from './ImprovementLog';
 
-const SECTIONS: { id: string; label: MessageKey; icon: Icon }[] = [
+/** One page per category: the rail switches pages, it does not scroll a long one. */
+type SettingsPage =
+  | 'general'
+  | 'appearance'
+  | 'model'
+  | 'usage'
+  | 'log'
+  | 'service';
+
+const SECTIONS: { id: SettingsPage; label: MessageKey; icon: Icon }[] = [
   { id: 'general', label: 'settings.section.general', icon: Translate },
   { id: 'appearance', label: 'settings.section.appearance', icon: PaintBrush },
   { id: 'model', label: 'settings.section.model', icon: Cpu },
@@ -53,6 +63,24 @@ const SECTIONS: { id: string; label: MessageKey; icon: Icon }[] = [
   { id: 'log', label: 'settings.section.log', icon: Notebook },
   { id: 'service', label: 'settings.section.service', icon: Pulse },
 ];
+
+const PAGES: Record<
+  SettingsPage,
+  { title: MessageKey; render: () => React.ReactNode }
+> = {
+  general: { title: 'settings.section.general', render: () => <GeneralPage /> },
+  appearance: {
+    title: 'settings.section.appearance',
+    render: () => <AppearancePage />,
+  },
+  model: { title: 'settings.section.model', render: () => <ModelSection /> },
+  usage: { title: 'settings.section.usage', render: () => <UsageSection /> },
+  log: { title: 'settings.section.log', render: () => <LogSection /> },
+  service: {
+    title: 'settings.section.service',
+    render: () => <ServiceSection />,
+  },
+};
 
 function SectionTitle({
   icon: IconComponent,
@@ -74,6 +102,7 @@ function SectionTitle({
   );
 }
 
+/** One settings page: the section header plus its fields, no page chrome. */
 function Section({
   id,
   title,
@@ -91,7 +120,7 @@ function Section({
     <section
       id={`settings-${id}`}
       aria-label={title}
-      className="scroll-mt-4 border-border border-b pb-7 last:border-b-0"
+      className="flex flex-col gap-4"
     >
       <SectionTitle icon={icon} label={title} trailing={trailing} />
       {children}
@@ -99,7 +128,7 @@ function Section({
   );
 }
 
-function GeneralSection() {
+function GeneralPage() {
   const t = useT();
   const locale = useLocale();
   const items = LOCALES.map((l) => ({ label: l.label, value: l.id }));
@@ -178,7 +207,7 @@ function ThemeChoice() {
   );
 }
 
-function AppearanceSection() {
+function AppearancePage() {
   const t = useT();
   return (
     <Section
@@ -434,6 +463,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const contextOpen = useStore((s) => s.contextOpen);
   const reduce = useReducedMotion();
+  const [page, setPage] = useState<SettingsPage>('general');
   const t = useT();
   const meta = `${t(
     catalog?.ok ? 'settings.magpieOnline' : 'settings.magpieOffline',
@@ -508,13 +538,13 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
             <button
               key={id}
               type="button"
-              onClick={() =>
-                document.getElementById(`settings-${id}`)?.scrollIntoView({
-                  behavior: reduce ? 'auto' : 'smooth',
-                  block: 'start',
-                })
-              }
-              className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-content-secondary transition-colors hover:bg-secondary/60 hover:text-foreground"
+              aria-current={page === id ? 'page' : undefined}
+              onClick={() => setPage(id)}
+              className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors ${
+                page === id
+                  ? 'bg-secondary font-medium text-foreground'
+                  : 'text-content-secondary hover:bg-secondary/60 hover:text-foreground'
+              }`}
             >
               <SectionIcon size={13} className="shrink-0" />
               {t(label)}
@@ -527,14 +557,15 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
           scrollbarGutter
           scrollFade
         >
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-7 px-5 py-6">
-            <GeneralSection />
-            <AppearanceSection />
-            <ModelSection />
-            <UsageSection />
-            <LogSection />
-            <ServiceSection />
-          </div>
+          <motion.div
+            key={page}
+            initial={reduce ? false : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.16, ease: EASE }}
+            className="mx-auto flex w-full max-w-2xl flex-col px-5 py-6"
+          >
+            {PAGES[page].render()}
+          </motion.div>
         </ScrollArea>
       </div>
     </main>

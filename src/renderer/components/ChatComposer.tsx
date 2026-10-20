@@ -112,13 +112,25 @@ function ModelPicker() {
     >
       <SelectTrigger
         aria-label={t('composer.model')}
-        className="h-7 min-h-7 w-auto min-w-0 max-w-44 gap-1 rounded-md border-0 bg-transparent px-2 text-[11.5px] text-content-secondary shadow-none before:shadow-none hover:bg-secondary hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        className="h-7 min-h-7 w-auto min-w-0 max-w-44 gap-1 rounded-md border-0 bg-transparent px-2 text-[11px] text-content-secondary shadow-none before:shadow-none hover:bg-secondary hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring sm:text-[11px]"
       >
         <SelectValue />
       </SelectTrigger>
-      <SelectPopup side="top" align="end">
+      {/* A plain scrolling list, not Base UI's "align the selected item under
+          the trigger" mode: that mode turns the wheel into selection changes,
+          so a long catalog can only be walked one way and never scrolled. */}
+      <SelectPopup
+        side="top"
+        align="end"
+        alignItemWithTrigger={false}
+        className="max-h-[min(22rem,var(--available-height))]"
+      >
         {items.map((m) => (
-          <SelectItem key={m.value} value={m}>
+          <SelectItem
+            key={m.value}
+            value={m}
+            className="text-[11.5px] sm:text-[11.5px]"
+          >
             <span className="truncate">{m.label}</span>
           </SelectItem>
         ))}
