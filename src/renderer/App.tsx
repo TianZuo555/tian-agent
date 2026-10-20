@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useState } from 'react';
 import { tian } from './api';
 import { WarningCircle } from '@phosphor-icons/react';
 import { actions, getState, useStore } from './store';
+import { useT } from './i18n';
 import { usePersistedWidth } from './components/PaneDivider';
 import { useReducedMotion, motion } from 'motion/react';
 import { EASE } from './components/motion-primitives';
@@ -45,6 +46,7 @@ function BootScreen({
   onOpenSettings: () => void;
 }) {
   const reduce = useReducedMotion();
+  const t = useT();
   return (
     <div className="ambient-glow flex flex-1 flex-col items-center justify-center gap-6 px-8">
       <motion.div
@@ -65,7 +67,7 @@ function BootScreen({
           >
             <span className="flex items-center gap-1.5 text-destructive-foreground text-xs">
               <WarningCircle size={14} />
-              无法连接后台服务
+              {t('boot.unreachable')}
             </span>
             <span className="text-content-secondary text-xs leading-relaxed">
               {error}
@@ -73,13 +75,13 @@ function BootScreen({
           </div>
         ) : (
           <span className="shimmer-text font-mono text-[11px]">
-            waking the steward…
+            {t('boot.waking')}
           </span>
         )}
       </div>
       {error && (
         <Button variant="outline" size="sm" onClick={onOpenSettings}>
-          打开服务设置
+          {t('boot.openServiceSettings')}
         </Button>
       )}
     </div>

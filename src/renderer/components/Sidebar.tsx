@@ -35,6 +35,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip';
 import type { ConversationInfo, ScopeInfo } from '@/shared/types';
 import type { Nav } from '../state';
 import { actions, useStore } from '../store';
+import { t, useT, type MessageKey } from '../i18n';
 import { CountPulse, Reveal } from './motion-primitives';
 import { ProjectSettingsDialog } from './ProjectSettingsDialog';
 import { BrandMark } from './BrandMark';
@@ -44,12 +45,12 @@ function relativeTime(iso: string): string {
   if (Number.isNaN(then)) return '';
   const diff = Date.now() - then;
   const min = Math.round(diff / 60_000);
-  if (min < 1) return 'now';
-  if (min < 60) return `${min}m`;
+  if (min < 1) return t('time.now');
+  if (min < 60) return t('time.m', { n: min });
   const hours = Math.round(min / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return t('time.h', { n: hours });
   const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d`;
+  if (days < 7) return t('time.d', { n: days });
   return new Date(then).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -64,7 +65,8 @@ function RowAction({
   conversation: ConversationInfo;
   archived: boolean;
 }) {
-  const title = conversation.title ?? 'New conversation';
+  const t = useT();
+  const title = conversation.title ?? t('common.newConversation');
   return (
     <Tooltip>
       <TooltipTrigger
@@ -72,11 +74,10 @@ function RowAction({
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={
-              archived
-                ? `Restore conversation: ${title}`
-                : `Archive conversation: ${title}`
-            }
+            aria-label={t(
+              archived ? 'sidebar.restoreAction' : 'sidebar.archiveAction',
+              { title },
+            )}
             className="absolute top-1/2 right-1 -translate-y-1/2 bg-sidebar-accent text-content-secondary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
             onClick={() =>
               void actions.archiveConversation(
@@ -93,7 +94,9 @@ function RowAction({
           <Archive size={13} aria-hidden="true" />
         )}
       </TooltipTrigger>
-      <TooltipPopup>{archived ? 'Restore' : 'Archive'}</TooltipPopup>
+      <TooltipPopup>
+        {t(archived ? 'sidebar.restore' : 'sidebar.archiveTooltip')}
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -106,20 +109,23 @@ function ConversationRow(props: {
 }) {
   const { conversation: c, active, archived = false, scopeName } = props;
   const reduce = useReducedMotion();
-  const title = c.title ?? 'New conversation';
+  const t = useT();
+  const title = c.title ?? t('common.newConversation');
   const when = relativeTime(
     archived ? (c.archivedAt ?? c.createdAt) : c.createdAt,
   );
   const meta = archived && scopeName ? `${scopeName} · ${when}` : when;
   const RowIcon = c.role === 'manager' ? UserGear : ChatCircleText;
-  const label =
+  const label = t(
     c.role === 'manager'
       ? archived
-        ? `Archived project manager: ${title}`
-        : `Project manager: ${title}`
+        ? 'sidebar.archivedManagerLabel'
+        : 'sidebar.managerLabel'
       : archived
-        ? `Archived conversation: ${title}`
-        : `Conversation: ${title}`;
+        ? 'sidebar.archivedConversationLabel'
+        : 'sidebar.conversationLabel',
+    { title },
+  );
   return (
     <motion.div layout={!reduce} className="group relative">
       <button
@@ -243,6 +249,7 @@ function ScopeSection(props: {
 }) {
   const { scope, conversations, activeId, collapsed } = props;
   const [expanded, setExpanded] = useState(false);
+  const t = useT();
   // Fold everything past the first five, but keep the selected conversation
   // visible so the list never hides where the reader currently is. The
   // project's manager conversation always sorts first within its scope.
@@ -263,11 +270,14 @@ function ScopeSection(props: {
   }, [activeId, conversations, expanded]);
   const collapsible = conversations.length > VISIBLE_CONVERSATIONS;
   return (
-    <section aria-label={`Scope: ${scope.name}`} className="mb-1.5">
+    <section
+      aria-label={t('sidebar.scopeLabel', { name: scope.name })}
+      className="mb-1.5"
+    >
       <div className="group flex h-7 items-center gap-1 px-1">
         <button
           type="button"
-          aria-label={`Select scope ${scope.name}`}
+          aria-label={t('sidebar.selectScope', { name: scope.name })}
           onClick={() => void actions.selectScope(scope.id)}
           className="min-w-0 flex-1 cursor-pointer truncate text-left font-medium font-mono text-[10px] text-content-disabled uppercase tracking-[0.1em] transition-colors hover:text-content-secondary"
           title={scope.rootPath}
@@ -289,14 +299,16 @@ function ScopeSection(props: {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Open ${scope.name} manager`}
+                      aria-label={t('sidebar.openManager', {
+                        name: scope.name,
+                      })}
                       onClick={() => void actions.openManager(scope.id)}
                     />
                   }
                 >
                   <UserGear size={14} aria-hidden />
                 </TooltipTrigger>
-                <TooltipPopup>Project manager</TooltipPopup>
+                <TooltipPopup>{t('sidebar.projectManager')}</TooltipPopup>
               </Tooltip>
             </>
           )}
@@ -306,14 +318,16 @@ function ScopeSection(props: {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  aria-label={`New conversation in ${scope.name}`}
+                  aria-label={t('sidebar.newConversationIn', {
+                    name: scope.name,
+                  })}
                   onClick={() => void actions.newConversation(scope.id)}
                 />
               }
             >
               <ChatCircleDots size={14} />
             </TooltipTrigger>
-            <TooltipPopup>New conversation</TooltipPopup>
+            <TooltipPopup>{t('sidebar.newConversationTooltip')}</TooltipPopup>
           </Tooltip>
         </div>
       </div>
@@ -334,7 +348,7 @@ function ScopeSection(props: {
               className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] text-content-disabled transition-colors hover:bg-sidebar-accent/55 hover:text-content-secondary"
             >
               <CaretDown size={10} weight="bold" />
-              Show more
+              {t('sidebar.showMore')}
               <span className="font-mono text-[10px] tabular-nums">
                 ({hiddenCount})
               </span>
@@ -348,12 +362,12 @@ function ScopeSection(props: {
               className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] text-content-disabled transition-colors hover:bg-sidebar-accent/55 hover:text-content-secondary"
             >
               <CaretRight size={10} weight="bold" />
-              Show less
+              {t('sidebar.showLess')}
             </button>
           )}
           {conversations.length === 0 && (
             <p className="px-2 py-1.5 font-mono text-[10px] text-content-disabled">
-              no conversations yet
+              {t('sidebar.noConversations')}
             </p>
           )}
         </div>
@@ -369,6 +383,7 @@ function ScopeSection(props: {
  * clears the hidden-inset traffic lights.
  */
 function SidebarBrand() {
+  const t = useT();
   return (
     <div className="flex h-11 shrink-0 items-center gap-2.5 border-border border-b pr-2 pl-20 [-webkit-app-region:drag]">
       <BrandMark glow />
@@ -377,7 +392,7 @@ function SidebarBrand() {
           Tian
         </div>
         <div className="truncate font-mono text-[10px] text-content-secondary leading-tight">
-          大内总管
+          {t('sidebar.tagline')}
         </div>
       </div>
       <Tooltip>
@@ -386,7 +401,7 @@ function SidebarBrand() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Open command palette"
+              aria-label={t('sidebar.commandPalette')}
               className="text-content-secondary [-webkit-app-region:no-drag]"
               onClick={() => actions.setPaletteOpen(true)}
             />
@@ -395,7 +410,7 @@ function SidebarBrand() {
           <MagnifyingGlass size={15} />
         </TooltipTrigger>
         <TooltipPopup>
-          Command palette <Kbd className="ml-1.5">⌘K</Kbd>
+          {t('sidebar.commandPalette')} <Kbd className="ml-1.5">⌘K</Kbd>
         </TooltipPopup>
       </Tooltip>
     </div>
@@ -414,31 +429,35 @@ function PrimaryNav({
   candidates: number;
   unread: number;
 }) {
+  const t = useT();
   return (
-    <nav aria-label="Primary" className="flex flex-col gap-0.5 px-2 pb-3">
+    <nav
+      aria-label={t('sidebar.primaryNav')}
+      className="flex flex-col gap-0.5 px-2 pb-3"
+    >
       <NavItem
         icon={ChatCircleDots}
-        label="Chat"
+        label={t('nav.chat')}
         active={nav === 'chat'}
         onClick={() => actions.setNav('chat')}
       />
       <NavItem
         icon={Target}
-        label="Goals"
+        label={t('nav.goals')}
         active={nav === 'goals'}
         badge={pendingTasks}
         onClick={() => actions.setNav('goals')}
       />
       <NavItem
         icon={Lightning}
-        label="Skills"
+        label={t('nav.skills')}
         active={nav === 'skills'}
         badge={candidates}
         onClick={() => actions.setNav('skills')}
       />
       <NavItem
         icon={Tray}
-        label="Inbox"
+        label={t('nav.inbox')}
         active={nav === 'inbox'}
         badge={unread}
         onClick={() => actions.setNav('inbox')}
@@ -449,25 +468,25 @@ function PrimaryNav({
 
 const SERVICE_STATUS: Record<
   'ready' | 'starting' | 'disconnected' | 'failed',
-  { label: string; dot: string; live: boolean }
+  { label: MessageKey; dot: string; live: boolean }
 > = {
   ready: {
-    label: 'service connected',
+    label: 'service.connected',
     dot: 'bg-foreground',
     live: true,
   },
   starting: {
-    label: 'connecting…',
+    label: 'service.connecting',
     dot: 'animate-pulse bg-warning',
     live: false,
   },
   disconnected: {
-    label: 'reconnecting…',
+    label: 'service.reconnecting',
     dot: 'animate-pulse bg-warning',
     live: false,
   },
   failed: {
-    label: 'service unavailable',
+    label: 'service.unavailable',
     dot: 'bg-destructive',
     live: false,
   },
@@ -475,6 +494,7 @@ const SERVICE_STATUS: Record<
 
 /** Bottom-right gear: the only entry point to the settings page. */
 function SettingsGear({ active, count }: { active: boolean; count: number }) {
+  const t = useT();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -482,7 +502,7 @@ function SettingsGear({ active, count }: { active: boolean; count: number }) {
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Open settings"
+            aria-label={t('sidebar.openSettings')}
             aria-current={active ? 'page' : undefined}
             className={`ml-auto shrink-0 ${
               active ? 'text-brand' : 'text-content-secondary'
@@ -502,7 +522,7 @@ function SettingsGear({ active, count }: { active: boolean; count: number }) {
         )}
       </TooltipTrigger>
       <TooltipPopup>
-        Settings
+        {t('nav.settings')}
         <Kbd className="ml-1.5">⌘,</Kbd>
       </TooltipPopup>
     </Tooltip>
@@ -519,6 +539,7 @@ function ServiceStatus({
   active: boolean;
   openImprovements: number;
 }) {
+  const t = useT();
   const copy = SERVICE_STATUS[status];
   return (
     <div className="flex items-center gap-2 border-border border-t px-3 py-2.5">
@@ -532,7 +553,7 @@ function ServiceStatus({
         role="status"
         className="truncate font-mono text-[10px] text-content-disabled"
       >
-        {copy.label}
+        {t(copy.label)}
       </span>
       <SettingsGear active={active} count={openImprovements} />
     </div>
@@ -550,6 +571,7 @@ function AddProjectDialog({
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
+  const t = useT();
   // Move focus once the dialog is inserted; unlike the autoFocus attribute
   // this also works for content added after first paint.
   useEffect(() => {
@@ -563,11 +585,9 @@ function AddProjectDialog({
             <span className="flex size-7 items-center justify-center rounded-lg bg-brand/12 text-brand">
               <FolderPlus size={15} />
             </span>
-            New project
+            {t('sidebar.addProjectTitle')}
           </DialogTitle>
-          <DialogDescription>
-            Register a directory as a scope for the steward.
-          </DialogDescription>
+          <DialogDescription>{t('sidebar.addProjectDesc')}</DialogDescription>
         </DialogHeader>
         <form
           className="contents"
@@ -583,15 +603,15 @@ function AddProjectDialog({
           <DialogPanel className="grid gap-3">
             <Input
               ref={nameRef}
-              placeholder="Name"
-              aria-label="Project name"
+              placeholder={t('sidebar.projectName')}
+              aria-label={t('sidebar.projectNameAria')}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
             <div className="flex gap-2">
               <Input
-                placeholder="/path/to/project"
-                aria-label="Project path"
+                placeholder={t('sidebar.projectPath')}
+                aria-label={t('sidebar.projectPathAria')}
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
               />
@@ -606,16 +626,16 @@ function AddProjectDialog({
                   }
                 }}
               >
-                Browse
+                {t('common.browse')}
               </Button>
             </div>
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button variant="ghost" />}>
-              Cancel
+              {t('common.cancel')}
             </DialogClose>
             <Button type="submit" disabled={!name.trim() || !path.trim()}>
-              Add project
+              {t('sidebar.addProject')}
             </Button>
           </DialogFooter>
         </form>
@@ -639,6 +659,7 @@ export function Sidebar() {
   const [projectsCollapsed, setProjectsCollapsed] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const reduce = useReducedMotion();
+  const t = useT();
 
   const globalScope = scopes.find((s) => s.kind === 'global');
   const projects = scopes.filter((s) => s.kind === 'project');
@@ -654,7 +675,7 @@ export function Sidebar() {
 
   return (
     <aside
-      aria-label="Navigation"
+      aria-label={t('sidebar.navigation')}
       className="flex min-h-0 w-full flex-col border-border border-r bg-sidebar text-sidebar-foreground"
     >
       <SidebarBrand />
@@ -670,7 +691,7 @@ export function Sidebar() {
             size={14}
             className="text-brand transition-transform duration-200 group-hover:rotate-90"
           />
-          New conversation
+          {t('common.newConversation')}
           <Kbd className="ms-auto h-4 bg-sidebar-accent px-1 font-mono text-[9px]">
             ⌘N
           </Kbd>
@@ -703,7 +724,7 @@ export function Sidebar() {
           >
             <CaretRight size={10} weight="bold" />
           </motion.span>
-          Projects
+          {t('sidebar.projects')}
           <span className="ms-1 text-content-disabled/60 tabular-nums">
             {projects.length}
           </span>
@@ -714,7 +735,7 @@ export function Sidebar() {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="Add project"
+                aria-label={t('sidebar.addProject')}
                 className="text-content-secondary"
                 onClick={() => setDialogOpen(true)}
               />
@@ -722,7 +743,7 @@ export function Sidebar() {
           >
             <FolderPlus size={14} />
           </TooltipTrigger>
-          <TooltipPopup>Add project</TooltipPopup>
+          <TooltipPopup>{t('sidebar.addProject')}</TooltipPopup>
         </Tooltip>
       </div>
 
@@ -753,20 +774,20 @@ export function Sidebar() {
         {projects.length === 0 && !projectsCollapsed && (
           <div className="mx-1 mt-2 rounded-lg border border-dashed border-border px-3 py-3">
             <p className="text-[11px] text-content-secondary leading-relaxed">
-              No projects yet. Add a directory to give the steward a workspace.
+              {t('sidebar.noProjects')}
             </p>
             <button
               type="button"
               onClick={() => setDialogOpen(true)}
               className="mt-2 flex cursor-pointer items-center gap-1 font-medium text-[11px] text-brand transition-opacity hover:opacity-80"
             >
-              <Plus size={11} /> Add a project
+              <Plus size={11} /> {t('sidebar.addAProject')}
             </button>
           </div>
         )}
         {archivedConversations.length > 0 && (
           <section
-            aria-label="Archived conversations"
+            aria-label={t('sidebar.archivedSection')}
             className="mt-3 border-border/60 border-t pt-2"
           >
             <div className="flex h-7 items-center gap-1 px-1">
@@ -786,7 +807,7 @@ export function Sidebar() {
                 >
                   <CaretRight size={10} weight="bold" />
                 </motion.span>
-                Archive
+                {t('sidebar.archive')}
                 <span className="ms-1 text-content-disabled/60 tabular-nums">
                   {archivedConversations.length}
                 </span>

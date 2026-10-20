@@ -35,6 +35,7 @@ import type {
   ScopeInfo,
 } from '@/shared/types';
 import { actions, useStore } from '../store';
+import { t, useT, type MessageKey } from '../i18n';
 import { EASE } from './motion-primitives';
 
 type StatusFilter = 'active' | 'done' | 'all';
@@ -42,25 +43,25 @@ type KindFilter = 'all' | ImprovementKind;
 
 const KIND_META: Record<
   ImprovementKind,
-  { label: string; icon: Icon; className: string }
+  { label: MessageKey; icon: Icon; className: string }
 > = {
   issue: {
-    label: 'Issue',
+    label: 'log.kind.issue',
     icon: WarningCircle,
     className: 'bg-destructive/8 text-destructive-foreground',
   },
   friction: {
-    label: 'Friction',
+    label: 'log.kind.friction',
     icon: Lightning,
     className: 'bg-warning/8 text-warning-foreground',
   },
   idea: {
-    label: 'Idea',
+    label: 'log.kind.idea',
     icon: Lightbulb,
     className: 'bg-secondary text-brand',
   },
   win: {
-    label: 'Win',
+    label: 'log.kind.win',
     icon: Sparkle,
     className: 'bg-success/8 text-success-foreground',
   },
@@ -69,37 +70,37 @@ const KIND_META: Record<
 const STATUS_META: Record<
   ImprovementStatus,
   {
-    label: string;
+    label: MessageKey;
     variant: 'warning' | 'info' | 'success' | 'outline';
   }
 > = {
-  open: { label: 'Open', variant: 'warning' },
-  promoted: { label: 'Promoted', variant: 'info' },
-  resolved: { label: 'Resolved', variant: 'success' },
-  dismissed: { label: 'Dismissed', variant: 'outline' },
+  open: { label: 'log.status.open', variant: 'warning' },
+  promoted: { label: 'log.status.promoted', variant: 'info' },
+  resolved: { label: 'log.status.resolved', variant: 'success' },
+  dismissed: { label: 'log.status.dismissed', variant: 'outline' },
 };
 
 const SEVERITY_META: Record<
   ImprovementSeverity,
-  { label: string; dot: string }
+  { label: MessageKey; dot: string }
 > = {
-  low: { label: 'Low', dot: 'bg-content-disabled' },
-  medium: { label: 'Medium', dot: 'bg-warning' },
-  high: { label: 'High', dot: 'bg-destructive' },
+  low: { label: 'log.severity.low', dot: 'bg-content-disabled' },
+  medium: { label: 'log.severity.medium', dot: 'bg-warning' },
+  high: { label: 'log.severity.high', dot: 'bg-destructive' },
 };
 
-const KIND_FILTERS: { value: KindFilter; label: string }[] = [
-  { value: 'all', label: 'All kinds' },
-  { value: 'issue', label: 'Issues' },
-  { value: 'friction', label: 'Friction' },
-  { value: 'idea', label: 'Ideas' },
-  { value: 'win', label: 'Wins' },
+const KIND_FILTERS: { value: KindFilter; label: MessageKey }[] = [
+  { value: 'all', label: 'log.filter.allKinds' },
+  { value: 'issue', label: 'log.filter.issues' },
+  { value: 'friction', label: 'log.filter.friction' },
+  { value: 'idea', label: 'log.filter.ideas' },
+  { value: 'win', label: 'log.filter.wins' },
 ];
 
-const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
-  { value: 'active', label: 'Active' },
-  { value: 'done', label: 'Done' },
-  { value: 'all', label: 'All' },
+const STATUS_FILTERS: { value: StatusFilter; label: MessageKey }[] = [
+  { value: 'active', label: 'log.filter.active' },
+  { value: 'done', label: 'log.filter.done' },
+  { value: 'all', label: 'log.filter.all' },
 ];
 
 const GROUP_ORDER: ImprovementStatus[] = [
@@ -113,13 +114,13 @@ function ago(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return '';
   const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (seconds < 45) return 'just now';
+  if (seconds < 45) return t('ago.justNow');
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return t('ago.m', { n: minutes });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t('ago.h', { n: hours });
   const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return t('ago.d', { n: days });
   return iso.slice(0, 10);
 }
 
@@ -128,9 +129,9 @@ function scopeLabel(scopes: ScopeInfo[], scopeId: string): string {
 }
 
 function sourceLabel(entry: ImprovementSummary): string {
-  if (entry.source === 'user') return 'You';
-  if (entry.source === 'chief') return 'Chief';
-  return 'System';
+  if (entry.source === 'user') return t('log.source.you');
+  if (entry.source === 'chief') return t('log.source.chief');
+  return t('log.source.system');
 }
 
 function SectionLabel({
@@ -202,6 +203,7 @@ function MetaRef({ label, value }: { label: string; value: string }) {
 
 /** Promote / resolve / dismiss / reopen controls for one entry. */
 function EntryActions({ entry }: { entry: ImprovementSummary }) {
+  const t = useT();
   const canPromote = entry.status === 'open';
   const canClose = entry.status === 'open' || entry.status === 'promoted';
   return (
@@ -213,7 +215,7 @@ function EntryActions({ entry }: { entry: ImprovementSummary }) {
           onClick={() => void actions.promoteImprovement(entry.id)}
         >
           <ArrowRight size={11} />
-          Promote
+          {t('log.promote')}
         </Button>
       )}
       {canClose && (
@@ -221,8 +223,8 @@ function EntryActions({ entry }: { entry: ImprovementSummary }) {
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="Resolve"
-            title="Resolve"
+            aria-label={t('log.resolve')}
+            title={t('log.resolve')}
             className="text-content-secondary"
             onClick={() =>
               void actions.setImprovementStatus(entry.id, 'resolved')
@@ -233,8 +235,8 @@ function EntryActions({ entry }: { entry: ImprovementSummary }) {
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="Dismiss"
-            title="Dismiss"
+            aria-label={t('log.dismiss')}
+            title={t('log.dismiss')}
             className="text-content-secondary"
             onClick={() =>
               void actions.setImprovementStatus(entry.id, 'dismissed')
@@ -248,8 +250,8 @@ function EntryActions({ entry }: { entry: ImprovementSummary }) {
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Reopen"
-          title="Reopen"
+          aria-label={t('log.reopen')}
+          title={t('log.reopen')}
           className="text-content-secondary"
           onClick={() => void actions.setImprovementStatus(entry.id, 'open')}
         >
@@ -268,23 +270,24 @@ function EntryMeta({
   entry: ImprovementSummary;
   scopes: ScopeInfo[];
 }) {
+  const t = useT();
   const status = STATUS_META[entry.status];
   const severity = SEVERITY_META[entry.severity];
   const kind = KIND_META[entry.kind];
   return (
     <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
       <Badge variant={status.variant} size="sm" className="font-mono">
-        {status.label}
+        {t(status.label)}
       </Badge>
       <span className="inline-flex items-center gap-1 font-mono text-[9.5px] text-content-disabled">
         <span className={`size-1.5 rounded-full ${severity.dot}`} />
-        {severity.label}
+        {t(severity.label)}
       </span>
       <Badge variant="outline" size="sm" className="font-mono">
         {scopeLabel(scopes, entry.scopeId)}
       </Badge>
       <span className="font-mono text-[9.5px] text-content-disabled">
-        {kind.label} · {sourceLabel(entry)}
+        {t(kind.label)} · {sourceLabel(entry)}
       </span>
       {entry.area && entry.source === 'system' && (
         <span className="font-mono text-[9.5px] text-content-disabled">
@@ -318,6 +321,7 @@ function EntryRow({
   onToggle: () => void;
   reduce: boolean;
 }) {
+  const t = useT();
   const kind = KIND_META[entry.kind];
   const KindIcon = kind.icon;
   return (
@@ -372,25 +376,39 @@ function EntryRow({
               <div className="flex flex-col gap-2.5 bg-surface-secondary/20 px-3 py-2.5">
                 <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[10.5px] text-content-secondary leading-relaxed">
                   {detail === undefined
-                    ? 'Loading…'
-                    : detail.trim() || 'No detail recorded.'}
+                    ? t('common.loading')
+                    : detail.trim() || t('log.noDetail')}
                 </pre>
                 <div className="flex flex-wrap gap-x-4 gap-y-1.5">
                   {entry.taskId != null && (
-                    <MetaRef label="task" value={`#${entry.taskId}`} />
+                    <MetaRef
+                      label={t('log.meta.task')}
+                      value={`#${entry.taskId}`}
+                    />
                   )}
-                  {entry.runId && <MetaRef label="run" value={entry.runId} />}
+                  {entry.runId && (
+                    <MetaRef label={t('log.meta.run')} value={entry.runId} />
+                  )}
                   {entry.conversationId && (
-                    <MetaRef label="conv" value={entry.conversationId} />
+                    <MetaRef
+                      label={t('log.meta.conv')}
+                      value={entry.conversationId}
+                    />
                   )}
                   {entry.eventId && (
-                    <MetaRef label="event" value={entry.eventId} />
+                    <MetaRef
+                      label={t('log.meta.event')}
+                      value={entry.eventId}
+                    />
                   )}
                   {entry.fingerprint && (
-                    <MetaRef label="fp" value={entry.fingerprint} />
+                    <MetaRef
+                      label={t('log.meta.fp')}
+                      value={entry.fingerprint}
+                    />
                   )}
                   <MetaRef
-                    label="first"
+                    label={t('log.meta.first')}
                     value={entry.firstSeenAt.slice(0, 16).replace('T', ' ')}
                   />
                 </div>
@@ -418,6 +436,7 @@ function NewEntryDialog({
   const [summary, setSummary] = useState('');
   const [detail, setDetail] = useState('');
   const [seed, setSeed] = useState('');
+  const t = useT();
   const generation = open ? 'open' : 'closed';
   if (seed !== generation) {
     setSeed(generation);
@@ -433,16 +452,13 @@ function NewEntryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>New log entry</DialogTitle>
-          <DialogDescription>
-            Record a durable issue, friction point, idea, or win. The Chief can
-            also write here while it works.
-          </DialogDescription>
+          <DialogTitle>{t('log.dialog.title')}</DialogTitle>
+          <DialogDescription>{t('log.dialog.desc')}</DialogDescription>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-4">
           <fieldset>
             <legend className="mb-1.5 font-medium text-[11px] text-content-secondary">
-              Kind
+              {t('log.dialog.kind')}
             </legend>
             <div className="flex flex-wrap gap-1">
               {(Object.keys(KIND_META) as ImprovementKind[]).map((value) => {
@@ -457,7 +473,7 @@ function NewEntryDialog({
                     onClick={() => setKind(value)}
                   >
                     <IconComponent size={12} />
-                    {meta.label}
+                    {t(meta.label)}
                   </Button>
                 );
               })}
@@ -465,31 +481,31 @@ function NewEntryDialog({
           </fieldset>
           <label className="flex flex-col gap-1.5" htmlFor={`${id}-summary`}>
             <span className="font-medium text-[11px] text-content-secondary">
-              Summary
+              {t('log.dialog.summary')}
             </span>
             <Input
               id={`${id}-summary`}
               value={summary}
               maxLength={300}
-              placeholder="What could be better?"
+              placeholder={t('log.dialog.summaryPlaceholder')}
               onChange={(event) => setSummary(event.target.value)}
             />
           </label>
           <label className="flex flex-col gap-1.5" htmlFor={`${id}-detail`}>
             <span className="font-medium text-[11px] text-content-secondary">
-              Detail
+              {t('log.dialog.detail')}
             </span>
             <Textarea
               id={`${id}-detail`}
               value={detail}
               maxLength={20_000}
-              placeholder="Reproduction, evidence, or the concrete proposal…"
+              placeholder={t('log.dialog.detailPlaceholder')}
               onChange={(event) => setDetail(event.target.value)}
             />
           </label>
           <fieldset>
             <legend className="mb-1.5 font-medium text-[11px] text-content-secondary">
-              Severity
+              {t('log.dialog.severity')}
             </legend>
             <div className="flex flex-wrap gap-1">
               {(Object.keys(SEVERITY_META) as ImprovementSeverity[]).map(
@@ -504,18 +520,20 @@ function NewEntryDialog({
                     <span
                       className={`size-1.5 rounded-full ${SEVERITY_META[value].dot}`}
                     />
-                    {SEVERITY_META[value].label}
+                    {t(SEVERITY_META[value].label)}
                   </Button>
                 ),
               )}
             </div>
           </fieldset>
           <p className="font-mono text-[9.5px] text-content-disabled">
-            Adding to {label}
+            {t('log.dialog.addingTo', { scope: label })}
           </p>
         </DialogPanel>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>
+            {t('common.cancel')}
+          </DialogClose>
           <Button
             disabled={!summary.trim()}
             onClick={async () => {
@@ -528,7 +546,7 @@ function NewEntryDialog({
               onOpenChange(false);
             }}
           >
-            Log entry
+            {t('log.dialog.submit')}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -551,6 +569,7 @@ export function ImprovementLog() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const reduce = useReducedMotion();
+  const t = useT();
 
   const open = improvements.filter((entry) => entry.status === 'open').length;
   const promoted = improvements.filter(
@@ -586,7 +605,7 @@ export function ImprovementLog() {
   return (
     <div
       role="group"
-      aria-label="Improvement log"
+      aria-label={t('log.title')}
       className="flex flex-col gap-4"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -597,7 +616,7 @@ export function ImprovementLog() {
               active={statusFilter === filter.value}
               onClick={() => setStatusFilter(filter.value)}
             >
-              {filter.label}
+              {t(filter.label)}
             </FilterChip>
           ))}
         </div>
@@ -619,23 +638,23 @@ export function ImprovementLog() {
           onClick={() => setDialogOpen(true)}
         >
           <Plus size={12} />
-          New entry
+          {t('log.newEntry')}
         </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
           <FilterChip active={allScopes} onClick={() => setAllScopes(true)}>
-            All scopes
+            {t('common.allScopes')}
           </FilterChip>
           <FilterChip active={!allScopes} onClick={() => setAllScopes(false)}>
             {scopeLabel(scopes, activeScopeId)}
           </FilterChip>
         </div>
         <div className="ms-auto flex items-baseline gap-3 font-mono text-[10px] text-content-disabled">
-          <span>{open} open</span>
-          <span>{promoted} promoted</span>
-          <span>{improvements.length} total</span>
+          <span>{t('log.openCount', { count: open })}</span>
+          <span>{t('log.promotedCount', { count: promoted })}</span>
+          <span>{t('log.totalCount', { count: improvements.length })}</span>
         </div>
       </div>
 
@@ -646,29 +665,29 @@ export function ImprovementLog() {
           </span>
           <div className="flex flex-col gap-1">
             <p className="text-[13px] text-foreground">
-              {improvements.length === 0
-                ? 'Nothing logged yet.'
-                : 'No entries match this view.'}
+              {t(improvements.length === 0 ? 'log.empty' : 'log.noMatch')}
             </p>
             <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
-              {improvements.length === 0
-                ? 'Log a product issue, friction point, idea, or win. The Chief also records observations while it works.'
-                : 'Try a different status, kind, or scope filter.'}
+              {t(
+                improvements.length === 0 ? 'log.emptyHint' : 'log.noMatchHint',
+              )}
             </p>
           </div>
           <Button size="sm" onClick={() => setDialogOpen(true)}>
             <Plus size={12} />
-            New entry
+            {t('log.newEntry')}
           </Button>
         </div>
       ) : (
         groups.map((group) => (
           <section
             key={group.status}
-            aria-label={`${STATUS_META[group.status].label} entries`}
+            aria-label={t('log.sectionAria', {
+              label: t(STATUS_META[group.status].label),
+            })}
           >
             <SectionLabel
-              label={STATUS_META[group.status].label}
+              label={t(STATUS_META[group.status].label)}
               count={group.entries.length}
               tone={
                 group.status === 'open'

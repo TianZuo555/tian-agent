@@ -41,6 +41,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
 import { tian } from '../api';
+import { useT, type MessageKey } from '../i18n';
 import { CountPulse, EASE } from './motion-primitives';
 import { ContextToggle } from './ContextToggle';
 import type { MemoryItem, RunInfo } from '@/shared/types';
@@ -48,33 +49,35 @@ import { actions, useStore } from '../store';
 
 type PaneTab = 'tasks' | 'runs' | 'memory';
 
-const TABS: { id: PaneTab; label: string; icon: Icon }[] = [
-  { id: 'tasks', label: 'Tasks', icon: ListChecks },
-  { id: 'runs', label: 'Runs', icon: GitMerge },
-  { id: 'memory', label: 'Memory', icon: Stack },
+const TABS: { id: PaneTab; label: MessageKey; icon: Icon }[] = [
+  { id: 'tasks', label: 'context.tasks', icon: ListChecks },
+  { id: 'runs', label: 'context.runs', icon: GitMerge },
+  { id: 'memory', label: 'context.memory', icon: Stack },
 ];
 
 /** Discarded/landed/shipped runs read as terminal, whatever status they had. */
-function runLabel(run: RunInfo): string {
-  if (run.reviewStatus === 'discarded') return 'discarded';
-  if (run.reviewStatus === 'landed') return 'landed';
-  if (run.reviewStatus === 'shipped') return 'shipped';
-  return run.status;
+function runLabel(run: RunInfo): MessageKey {
+  if (run.reviewStatus === 'discarded') return 'run.discarded';
+  if (run.reviewStatus === 'landed') return 'run.landed';
+  if (run.reviewStatus === 'shipped') return 'run.shipped';
+  return `run.${run.status}`;
 }
 
-const statusVariant: Record<
-  string,
-  'secondary' | 'outline' | 'success' | 'destructive' | 'warning'
+const statusVariant: Partial<
+  Record<
+    MessageKey,
+    'secondary' | 'outline' | 'success' | 'destructive' | 'warning'
+  >
 > = {
-  running: 'secondary',
-  queued: 'outline',
-  collecting: 'secondary',
-  done: 'secondary',
-  failed: 'destructive',
-  interrupted: 'warning',
-  discarded: 'outline',
-  landed: 'secondary',
-  shipped: 'secondary',
+  'run.running': 'secondary',
+  'run.queued': 'outline',
+  'run.collecting': 'secondary',
+  'run.done': 'secondary',
+  'run.failed': 'destructive',
+  'run.interrupted': 'warning',
+  'run.discarded': 'outline',
+  'run.landed': 'secondary',
+  'run.shipped': 'secondary',
 };
 
 const isLive = (run: RunInfo) =>
@@ -113,6 +116,7 @@ function useSystemTheme(): 'light' | 'dark' {
 
 function DiffView({ patch }: { patch: string }) {
   const themeType = useSystemTheme();
+  const t = useT();
   const files = useMemo<FileDiffMetadata[]>(() => {
     if (!patch.trim()) return [];
     try {
@@ -125,7 +129,7 @@ function DiffView({ patch }: { patch: string }) {
   if (files.length === 0) {
     return (
       <div className="px-3 py-8 text-center text-[11px] text-content-secondary">
-        No file changes in this run.
+        {t('context.noChanges')}
       </div>
     );
   }
@@ -154,12 +158,16 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
         ? { icon: XCircle, spin: false, tone: 'text-destructive-foreground' }
         : { icon: CircleDashed, spin: false, tone: 'text-content-disabled' };
   const RunIcon = meta.icon;
+  const t = useT();
   return (
     <motion.button
       layout
       type="button"
       onClick={onOpen}
-      aria-label={`Run ${run.id}: ${runLabel(run)}`}
+      aria-label={t('context.runLabel', {
+        id: run.id,
+        status: t(runLabel(run)),
+      })}
       whileTap={{ scale: 0.99 }}
       className="group flex w-full cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-secondary"
     >
@@ -188,6 +196,7 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
 function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
   const [report, setReport] = useState<string | null>(null);
   const [patch, setPatch] = useState<string | null>(null);
+  const t = useT();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const reduce = useReducedMotion();
@@ -198,12 +207,12 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
     void tian
       .runReport(run.id)
       .then(setReport)
-      .catch((e) => setReport(`Error: ${e}`));
+      .catch((e) => setReport(`${e}`));
     if (run.branch) {
       void tian
         .runDiff(run.id)
         .then(setPatch)
-        .catch((e) => setPatch(`Error: ${e}`));
+        .catch((e) => setPatch(`${e}`));
     }
   }, [run.id, run.branch, run.status]);
 
@@ -233,7 +242,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Back to runs"
+          aria-label={t('context.backToRuns')}
           className="text-content-secondary"
           onClick={onBack}
         >
@@ -247,7 +256,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
           size="sm"
           className="ml-auto font-mono"
         >
-          {runLabel(run)}
+          {t(runLabel(run))}
         </Badge>
       </div>
 
@@ -261,7 +270,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               void act('follow', () => actions.followUpRun(run.id, 'continue'))
             }
           >
-            Follow up
+            {t('context.followUp')}
           </Button>
         )}
         {run.branch && reviewable && (
@@ -273,7 +282,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               onClick={() => void act('land', () => actions.landRun(run.id))}
             >
               <GitMerge size={11} />
-              Land
+              {t('context.land')}
             </Button>
             <Button
               variant="ghost"
@@ -281,7 +290,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               loading={busy === 'ship'}
               onClick={() => void act('ship', () => actions.shipRun(run.id))}
             >
-              Ship
+              {t('context.ship')}
             </Button>
           </>
         )}
@@ -298,7 +307,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               })
             }
           >
-            Discard
+            {t('context.discard')}
           </Button>
         )}
       </div>
@@ -324,7 +333,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
           )
         ) : (
           <div className="px-3 py-8 text-center text-[11px] text-content-secondary">
-            No git branch for this run.
+            {t('context.noBranch')}
           </div>
         )}
         <details className="group border-border border-t">
@@ -333,7 +342,9 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               size={9}
               className="transition-transform duration-200 group-open:rotate-90"
             />
-            Skills ({run.injectedSkills?.length ?? 0})
+            {t('context.skills', {
+              count: run.injectedSkills?.length ?? 0,
+            })}
           </summary>
           <div className="flex flex-col gap-1 px-3 pb-3">
             {(run.injectedSkills ?? []).map((ref) => (
@@ -362,7 +373,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
                     }
                   >
                     <ArrowCounterClockwise size={10} />
-                    Roll back
+                    {t('common.rollback')}
                   </Button>
                 )}
               </div>
@@ -375,10 +386,10 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
               size={9}
               className="transition-transform duration-200 group-open:rotate-90"
             />
-            Report
+            {t('context.report')}
           </summary>
           <pre className="max-h-72 overflow-auto px-3 pb-3 whitespace-pre-wrap break-words font-mono text-[11px] text-content-secondary leading-relaxed">
-            {report ?? 'Loading…'}
+            {report ?? t('common.loading')}
           </pre>
         </details>
       </ScrollArea>
@@ -417,6 +428,7 @@ function TasksPanel() {
   const tasks = useStore((s) => s.tasks).filter((t) => t.scopeId === scope);
   const [draft, setDraft] = useState('');
   const reduce = useReducedMotion();
+  const t = useT();
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
@@ -424,16 +436,16 @@ function TasksPanel() {
           {tasks.length === 0 && (
             <EmptyPanel
               icon={ListChecks}
-              title="No tasks yet"
-              hint="Add one below or ask the chief to plan."
+              title={t('context.noTasks')}
+              hint={t('context.noTasksHint')}
             />
           )}
           <AnimatePresence initial={false}>
-            {tasks.map((t) => (
+            {tasks.map((task) => (
               <motion.label
                 layout={!reduce}
-                key={t.id}
-                aria-label={`Task: ${t.title}`}
+                key={task.id}
+                aria-label={t('context.taskLabel', { title: task.title })}
                 initial={reduce ? false : { opacity: 0, y: -3 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={reduce ? undefined : { opacity: 0, height: 0 }}
@@ -442,22 +454,22 @@ function TasksPanel() {
               >
                 <Checkbox
                   className="mt-0.5"
-                  checked={t.status === 'completed'}
+                  checked={task.status === 'completed'}
                   onCheckedChange={(checked) =>
-                    void actions.toggleTask(t.id, checked === true)
+                    void actions.toggleTask(task.id, checked === true)
                   }
                 />
                 <span
                   className={`min-w-0 text-[12px] leading-snug ${
-                    t.status === 'completed'
+                    task.status === 'completed'
                       ? 'text-content-disabled line-through'
                       : 'text-foreground'
                   }`}
                 >
-                  {t.title}
-                  {t.due && (
+                  {task.title}
+                  {task.due && (
                     <span className="ml-1.5 font-mono text-[9.5px] text-content-disabled">
-                      {t.due.slice(0, 10)}
+                      {task.due.slice(0, 10)}
                     </span>
                   )}
                 </span>
@@ -478,8 +490,8 @@ function TasksPanel() {
         <Input
           size="sm"
           className="text-[11px]"
-          aria-label="New task title"
-          placeholder="Add a task…"
+          aria-label={t('context.newTaskTitle')}
+          placeholder={t('context.addTask')}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
@@ -487,7 +499,7 @@ function TasksPanel() {
           type="submit"
           variant="ghost"
           size="icon-xs"
-          aria-label="Add task"
+          aria-label={t('context.addTaskAria')}
           className="shrink-0 text-content-secondary group-focus-within:text-brand"
           disabled={!draft.trim()}
         >
@@ -503,6 +515,7 @@ function RunsPanel() {
   const [selected, setSelected] = useState<string | null>(null);
   const run = runs.find((r) => r.id === selected) ?? null;
   const reduce = useReducedMotion();
+  const t = useT();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -520,13 +533,13 @@ function RunsPanel() {
           >
             <div className="flex shrink-0 items-center gap-1 border-border border-b px-2 py-1">
               <span className="font-mono text-[9.5px] text-content-disabled">
-                {runs.length} dispatched
+                {t('context.dispatched', { count: runs.length })}
               </span>
               <Button
                 variant="ghost"
                 size="icon-xs"
                 className="ml-auto text-content-secondary"
-                aria-label="Refresh runs"
+                aria-label={t('context.refreshRuns')}
                 onClick={() => void actions.refreshRuns()}
               >
                 <ArrowsClockwise size={12} />
@@ -537,8 +550,8 @@ function RunsPanel() {
                 {runs.length === 0 && (
                   <EmptyPanel
                     icon={GitMerge}
-                    title="No runs yet"
-                    hint="Runs dispatched to a worker will appear here."
+                    title={t('context.noRuns')}
+                    hint={t('context.noRunsHint')}
                   />
                 )}
                 {runs.map((r) => (
@@ -565,6 +578,7 @@ function MemoryPanel() {
   const [revising, setRevising] = useState<MemoryItem | null>(null);
   const [forgetting, setForgetting] = useState<MemoryItem | null>(null);
   const reduce = useReducedMotion();
+  const t = useT();
 
   const items = memory?.items ?? [];
   const candidates = items.filter((item) => item.status === 'candidate');
@@ -589,10 +603,16 @@ function MemoryPanel() {
       )}
       <div className="flex shrink-0 items-center gap-2 border-border border-b px-2 py-1">
         <span className="font-mono text-[9.5px] text-content-disabled">
-          {active.length} active
-          {candidates.length > 0 ? ` · ${candidates.length} candidates` : ''}
+          {t('memory.active', { count: active.length })}
+          {candidates.length > 0
+            ? ` · ${t('memory.candidates', { count: candidates.length })}`
+            : ''}
           {memory
-            ? ` · core ${memory.core.selected}/${memory.core.budget} tokens ${memory.core.tokens}`
+            ? ` · ${t('memory.coreStats', {
+                selected: memory.core.selected,
+                budget: memory.core.budget,
+                tokens: memory.core.tokens,
+              })}`
             : ''}
         </span>
         <label
@@ -604,7 +624,7 @@ function MemoryPanel() {
             checked={showHistory}
             onCheckedChange={(checked) => setShowHistory(checked === true)}
           />
-          History
+          {t('memory.history')}
         </label>
       </div>
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
@@ -612,13 +632,13 @@ function MemoryPanel() {
           {items.length === 0 && (
             <EmptyPanel
               icon={Stack}
-              title={showHistory ? 'No memories at all' : 'No memories yet'}
-              hint="Facts the chief keeps, plus candidates extracted from history, live here."
+              title={t(showHistory ? 'memory.emptyAll' : 'memory.empty')}
+              hint={t('memory.emptyHint')}
             />
           )}
           {candidates.length > 0 && (
             <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
-              Candidates — extracted from history
+              {t('memory.candidatesSection')}
             </div>
           )}
           <AnimatePresence initial={false}>
@@ -642,7 +662,7 @@ function MemoryPanel() {
           </AnimatePresence>
           {core.length > 0 && (
             <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
-              Core — injected every turn
+              {t('memory.coreSection')}
             </div>
           )}
           <AnimatePresence initial={false}>
@@ -667,7 +687,7 @@ function MemoryPanel() {
           </AnimatePresence>
           {searchable.length > 0 && (
             <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
-              Active — searchable, not resident
+              {t('memory.searchableSection')}
             </div>
           )}
           <AnimatePresence initial={false}>
@@ -692,7 +712,7 @@ function MemoryPanel() {
           </AnimatePresence>
           {historical.length > 0 && (
             <div className="px-2 pt-1.5 pb-0.5 font-mono text-[9.5px] tracking-[0.1em] text-content-secondary uppercase">
-              History
+              {t('memory.historySection')}
             </div>
           )}
           <AnimatePresence initial={false}>
@@ -744,12 +764,13 @@ function MemoryRow({
   onSelect?: () => void;
   onDeselect?: () => void;
 }) {
+  const t = useT();
   const candidate = item.status === 'candidate';
   const historical = item.status === 'superseded' || item.status === 'deleted';
   return (
     <div className="group flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-secondary">
       <span
-        aria-label={`Memory #${item.seq}`}
+        aria-label={t('memory.seqLabel', { seq: item.seq })}
         className={`mt-px shrink-0 font-mono text-[9.5px] tabular-nums ${
           historical ? 'text-content-disabled' : 'text-content-secondary'
         }`}
@@ -786,7 +807,7 @@ function MemoryRow({
           )}
           {item.supersedes !== null && item.supersedes !== undefined && (
             <Badge variant="warning" size="sm" className="font-mono">
-              replaces #{item.supersedes}
+              {t('memory.replaces', { seq: item.supersedes })}
             </Badge>
           )}
           {historical && (
@@ -795,7 +816,9 @@ function MemoryRow({
               size="sm"
               className="font-mono"
             >
-              {item.status}
+              {item.status === 'deleted'
+                ? t('memory.statusDeleted')
+                : t('memory.statusSuperseded')}
             </Badge>
           )}
           <span className="font-mono text-[9.5px] text-content-disabled">
@@ -808,7 +831,7 @@ function MemoryRow({
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Promote memory #${item.seq}`}
+            aria-label={t('memory.promote', { seq: item.seq })}
             onClick={onPromote}
           >
             <CheckCircle size={11} weight="fill" />
@@ -817,7 +840,7 @@ function MemoryRow({
             variant="ghost"
             size="icon-xs"
             className="text-destructive-foreground"
-            aria-label={`Dismiss candidate #${item.seq}`}
+            aria-label={t('memory.dismissCandidate', { seq: item.seq })}
             onClick={onDismiss}
           >
             <XCircle size={11} />
@@ -830,7 +853,7 @@ function MemoryRow({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={`Remove memory #${item.seq} from Core`}
+                aria-label={t('memory.removeCore', { seq: item.seq })}
                 onClick={onDeselect}
               >
                 <EyeSlash size={11} />
@@ -839,7 +862,7 @@ function MemoryRow({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={`Select memory #${item.seq} into Core`}
+                aria-label={t('memory.selectCore', { seq: item.seq })}
                 onClick={onSelect}
               >
                 <Eye size={11} />
@@ -848,7 +871,7 @@ function MemoryRow({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={`Revise memory #${item.seq}`}
+              aria-label={t('memory.revise', { seq: item.seq })}
               onClick={onRevise}
             >
               <PencilSimple size={11} />
@@ -857,7 +880,7 @@ function MemoryRow({
               variant="ghost"
               size="icon-xs"
               className="text-destructive-foreground"
-              aria-label={`Forget memory #${item.seq}`}
+              aria-label={t('memory.forget', { seq: item.seq })}
               onClick={onForget}
             >
               <Trash size={11} />
@@ -897,6 +920,7 @@ function ReviseMemoryForm({
   const [text, setText] = useState(item.content);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const t = useT();
   // The backend limit is 1000 Unicode code points; maxLength counts UTF-16
   // units, so it only guards the input and the error stays authoritative.
   const tooLong = [...text].length > 1000;
@@ -916,40 +940,38 @@ function ReviseMemoryForm({
     <>
       <DialogPopup className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Revise memory #{item.seq}</DialogTitle>
-          <DialogDescription>
-            The old memory is kept as history but leaves Core Memory.
-          </DialogDescription>
+          <DialogTitle>{t('memory.revise', { seq: item.seq })}</DialogTitle>
+          <DialogDescription>{t('memory.reviseDesc')}</DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-3">
           <Field>
-            <FieldLabel>Memory</FieldLabel>
+            <FieldLabel>{t('context.memory')}</FieldLabel>
             <Input
               value={text}
               onChange={(e) => setText(e.target.value)}
               maxLength={4000}
-              aria-label="Revised memory text"
+              aria-label={t('memory.revisedTextAria')}
               aria-invalid={tooLong}
             />
             <p
               className={`text-[10px] ${tooLong ? 'text-destructive-foreground' : 'text-content-disabled'}`}
             >
-              {[...text].length}/1000 characters
+              {t('memory.characters', { count: [...text].length })}
             </p>
           </Field>
           <Field>
-            <FieldLabel>Reason</FieldLabel>
+            <FieldLabel>{t('memory.reason')}</FieldLabel>
             <Input
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="Why is this being revised?"
-              aria-label="Revision reason"
+              placeholder={t('memory.reviseReasonPlaceholder')}
+              aria-label={t('memory.reviseReasonAria')}
             />
           </Field>
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" size="sm" />}>
-            Cancel
+            {t('common.cancel')}
           </DialogClose>
           <Button
             size="sm"
@@ -957,7 +979,7 @@ function ReviseMemoryForm({
             disabled={!text.trim() || !reason.trim() || tooLong}
             onClick={() => void submit()}
           >
-            Revise
+            {t('memory.reviseSubmit')}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -990,6 +1012,7 @@ function ForgetMemoryForm({
 }) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const t = useT();
 
   const submit = async () => {
     if (!reason.trim() || busy) return;
@@ -1005,26 +1028,23 @@ function ForgetMemoryForm({
   return (
     <DialogPopup className="sm:max-w-md">
       <DialogHeader>
-        <DialogTitle>Forget memory #{item.seq}</DialogTitle>
-        <DialogDescription>
-          It is marked deleted and leaves Core Memory; the record is kept in the
-          version history.
-        </DialogDescription>
+        <DialogTitle>{t('memory.forget', { seq: item.seq })}</DialogTitle>
+        <DialogDescription>{t('memory.forgetDesc')}</DialogDescription>
       </DialogHeader>
       <DialogPanel className="grid gap-3">
         <Field>
-          <FieldLabel>Reason</FieldLabel>
+          <FieldLabel>{t('memory.reason')}</FieldLabel>
           <Input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Why should this be forgotten?"
-            aria-label="Forget reason"
+            placeholder={t('memory.forgetReasonPlaceholder')}
+            aria-label={t('memory.forgetReasonAria')}
           />
         </Field>
       </DialogPanel>
       <DialogFooter>
         <DialogClose render={<Button variant="ghost" size="sm" />}>
-          Cancel
+          {t('common.cancel')}
         </DialogClose>
         <Button
           size="sm"
@@ -1033,7 +1053,7 @@ function ForgetMemoryForm({
           disabled={!reason.trim()}
           onClick={() => void submit()}
         >
-          Forget
+          {t('memory.forgetSubmit')}
         </Button>
       </DialogFooter>
     </DialogPopup>
@@ -1051,6 +1071,7 @@ export function ContextPane() {
   const runs = useStore((s) => s.runs);
   const [tab, setTab] = useState<PaneTab>('tasks');
   const reduce = useReducedMotion();
+  const t = useT();
 
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
   const memory = useStore((s) => s.memory);
@@ -1063,7 +1084,7 @@ export function ContextPane() {
 
   return (
     <aside
-      aria-label="Context"
+      aria-label={t('context.title')}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar"
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-border border-b px-3 [-webkit-app-region:drag]">
@@ -1073,7 +1094,9 @@ export function ContextPane() {
         >
           <FileCode size={12} />
         </span>
-        <span className="truncate font-medium text-[12px]">Context</span>
+        <span className="truncate font-medium text-[12px]">
+          {t('context.title')}
+        </span>
         <Badge
           variant="outline"
           size="sm"
@@ -1086,7 +1109,7 @@ export function ContextPane() {
 
       <div
         role="tablist"
-        aria-label="Context sections"
+        aria-label={t('context.sections')}
         tabIndex={-1}
         className="flex shrink-0 items-center gap-0.5 border-border border-b px-1.5 py-1"
         onKeyDown={(e) => {
@@ -1142,7 +1165,7 @@ export function ContextPane() {
                   active ? 'text-brand' : 'text-content-disabled'
                 }`}
               />
-              <span className="relative truncate">{label}</span>
+              <span className="relative truncate">{t(label)}</span>
               <span className="relative">
                 <CountPulse value={counts[id]} />
               </span>

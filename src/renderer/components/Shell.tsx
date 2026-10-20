@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar';
 import { PaneDivider } from './PaneDivider';
 import { EASE } from './motion-primitives';
 import { Button } from '@/components/ui/button';
+import { useT, type MessageKey } from '../i18n';
 
 const ChatView = lazy(() =>
   import('./ChatView').then((m) => ({ default: m.ChatView })),
@@ -60,23 +61,26 @@ function ConnectionBanner() {
   );
 }
 
-const BANNER_COPY = {
+const BANNER_COPY: Record<
+  'error' | 'disconnected' | 'starting',
+  { title: MessageKey; detail: MessageKey; tone: string }
+> = {
   error: {
-    title: '操作未完成',
-    detail: '请检查服务设置后重试。',
+    title: 'banner.error.title',
+    detail: 'banner.error.detail',
     tone: 'text-destructive-foreground',
   },
   disconnected: {
-    title: '后台服务已断开',
-    detail: '任务继续在后台运行。重新连接后可继续查看。',
+    title: 'banner.disconnected.title',
+    detail: 'banner.disconnected.detail',
     tone: 'text-content-secondary',
   },
   starting: {
-    title: '正在重新连接后台服务',
-    detail: '正在重新连接后台服务…',
+    title: 'banner.starting.title',
+    detail: 'banner.starting.detail',
     tone: 'text-content-secondary',
   },
-} as const;
+};
 
 function BannerBody({
   state,
@@ -85,8 +89,9 @@ function BannerBody({
   state: keyof typeof BANNER_COPY;
   operationError: string | null;
 }) {
+  const t = useT();
   const copy = BANNER_COPY[state];
-  const detail = operationError ?? copy.detail;
+  const detail = operationError ?? t(copy.detail);
   return (
     <div
       role={state === 'error' ? 'alert' : 'status'}
@@ -107,7 +112,7 @@ function BannerBody({
       </span>
       <div className="min-w-0 flex-1">
         <p className="font-medium text-[11.5px] text-foreground">
-          {copy.title}
+          {t(copy.title)}
         </p>
         <p
           className="mt-0.5 truncate font-mono text-[10px] text-content-secondary"
@@ -122,14 +127,14 @@ function BannerBody({
         className="shrink-0 text-content-secondary"
         onClick={() => actions.setNav('settings')}
       >
-        服务设置
+        {t('banner.serviceSettings')}
       </Button>
       {state === 'error' && (
         <Button
           size="icon-xs"
           variant="ghost"
           className="shrink-0 text-content-secondary"
-          aria-label="Dismiss error"
+          aria-label={t('banner.dismissError')}
           onClick={actions.clearError}
         >
           <X size={12} />
@@ -208,6 +213,7 @@ function ContextSide({
 }) {
   const contextOpen = useStore((s) => s.contextOpen);
   const reduce = useReducedMotion();
+  const t = useT();
   const transition =
     reduce || dragging ? { duration: 0 } : { duration: 0.24, ease: EASE };
   return (
@@ -224,7 +230,7 @@ function ContextSide({
         >
           <PaneDivider
             side="right"
-            label="Resize context pane"
+            label={t('shell.resizeContext')}
             width={width}
             min={280}
             max={640}
@@ -260,6 +266,7 @@ export function Shell({
 }) {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const reduce = useReducedMotion();
+  const t = useT();
   return (
     // No role="application": it would suppress the screen reader's own
     // navigation shortcuts for the whole app.
@@ -290,7 +297,7 @@ export function Shell({
             </div>
             <PaneDivider
               side="left"
-              label="Resize navigation"
+              label={t('shell.resizeNav')}
               width={navWidth}
               min={200}
               max={380}

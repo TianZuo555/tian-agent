@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { renderAsync, type RenderResult } from 'pele/lazy';
 import { WarningCircle } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
+import { useT } from '../i18n';
 
 /**
  * A fenced ```mermaid block rendered by Pele. While the source does not parse
@@ -16,6 +17,7 @@ export default function MermaidDiagram({
   className?: string;
 }) {
   const [rendered, setRendered] = useState<RenderResult | null>(null);
+  const t = useT();
 
   useEffect(() => {
     let alive = true;
@@ -54,7 +56,7 @@ export default function MermaidDiagram({
   return (
     <div
       role="img"
-      aria-label="Mermaid diagram"
+      aria-label={t('chat.mermaid')}
       className={cn(
         'pele-theme my-3 overflow-hidden rounded-md border border-border bg-code',
         className,

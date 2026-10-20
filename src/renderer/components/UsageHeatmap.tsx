@@ -8,6 +8,7 @@ import {
 import { cn } from '@/lib/utils';
 import type { UsageDay } from '@/shared/types';
 import { tian } from '../api';
+import { localeTag, useT } from '../i18n';
 
 const WEEKS = 26;
 const LEVELS = [
@@ -35,7 +36,7 @@ const formatCost = (value: number): string =>
   value > 0 && value < 0.01 ? '<$0.01' : `$${value.toFixed(2)}`;
 
 const formatDate = (date: Date): string =>
-  date.toLocaleDateString('en-US', {
+  date.toLocaleDateString(localeTag(), {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -51,6 +52,7 @@ interface Cell {
 /** GitHub-style calendar of model token usage over the last 26 weeks. */
 export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
   const [days, setDays] = useState<UsageDay[] | null>(null);
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -94,7 +96,7 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
         date.setDate(first.getDate() + week * 7 + weekday);
         if (date > today) break;
         if (date.getDate() === 1)
-          label = date.toLocaleDateString('en-US', { month: 'short' });
+          label = date.toLocaleDateString(localeTag(), { month: 'short' });
         const key = dayKey(date);
         const day = byDate.get(key);
         cells.push({ key, date, day, level: level(day?.totalTokens ?? 0) });
@@ -138,7 +140,7 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
         ))}
       </div>
       <ul
-        aria-label={`Model usage in the last ${WEEKS} weeks`}
+        aria-label={t('usage.aria', { weeks: WEEKS })}
         className="mx-auto grid w-full max-w-[440px] grid-flow-col grid-rows-7 gap-[3px]"
         style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }}
       >
@@ -147,11 +149,15 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
             <TooltipTrigger
               render={
                 <li
-                  aria-label={`${formatDate(cell.date)}: ${
+                  aria-label={
                     cell.day
-                      ? `${cell.day.totalTokens} tokens, ${formatCost(cell.day.cost)}`
-                      : 'no usage'
-                  }`}
+                      ? t('usage.cell', {
+                          date: formatDate(cell.date),
+                          tokens: cell.day.totalTokens,
+                          cost: formatCost(cell.day.cost),
+                        })
+                      : `${formatDate(cell.date)}: ${t('usage.none')}`
+                  }
                   className={cn(
                     'animate-cell-in aspect-square cursor-default rounded-[3px] transition-transform duration-150 hover:scale-125 hover:ring-1 hover:ring-brand/40',
                     LEVELS[cell.level],
@@ -167,11 +173,11 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
               {cell.day ? (
                 <div className="text-muted-foreground">
                   {formatTokens(cell.day.totalTokens)} tokens ·{' '}
-                  {formatCost(cell.day.cost)} · {cell.day.messages}{' '}
-                  {cell.day.messages === 1 ? 'message' : 'messages'}
+                  {formatCost(cell.day.cost)} ·{' '}
+                  {t('usage.messages', { count: cell.day.messages })}
                 </div>
               ) : (
-                <div className="text-muted-foreground">No usage</div>
+                <div className="text-muted-foreground">{t('usage.none')}</div>
               )}
             </TooltipPopup>
           </Tooltip>
@@ -180,14 +186,18 @@ export function UsageHeatmap({ scopeId = null }: { scopeId?: string | null }) {
       <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
         <span aria-live="polite" className="min-w-0 truncate">
           {error ??
-            `${formatTokens(totalTokens)} tokens · ${formatCost(totalCost)} in the last ${WEEKS} weeks`}
+            t('usage.total', {
+              tokens: formatTokens(totalTokens),
+              cost: formatCost(totalCost),
+              weeks: WEEKS,
+            })}
         </span>
         <span className="flex shrink-0 items-center gap-1">
-          Less
+          {t('usage.less')}
           {LEVELS.map((level) => (
             <span key={level} className={cn('size-2.5 rounded-[2px]', level)} />
           ))}
-          More
+          {t('usage.more')}
         </span>
       </div>
     </TooltipProvider>

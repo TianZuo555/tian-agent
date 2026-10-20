@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip';
 import { actions, useStore } from '../store';
+import { useT } from '../i18n';
 
 /**
  * The context pane's toggle, carried at the content header's right edge —
@@ -10,7 +11,8 @@ import { actions, useStore } from '../store';
  */
 export function ContextToggle() {
   const open = useStore((s) => s.contextOpen);
-  const label = open ? 'Hide context pane' : 'Show context pane';
+  const t = useT();
+  const label = t(open ? 'toggle.hideContext' : 'toggle.showContext');
   return (
     <Tooltip>
       <TooltipTrigger

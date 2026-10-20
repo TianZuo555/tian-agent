@@ -46,6 +46,7 @@ import type {
   TaskStatus,
 } from '@/shared/types';
 import { actions, useStore } from '../store';
+import { t, useT, type MessageKey } from '../i18n';
 import { EASE } from './motion-primitives';
 import { SidebarToggle } from './SidebarToggle';
 import { ContextToggle } from './ContextToggle';
@@ -127,12 +128,12 @@ const goalBadge: Record<GoalStatus, 'outline' | 'warning' | 'secondary'> = {
   cancelled: 'outline',
 };
 
-const goalStatusText: Record<GoalStatus, string> = {
-  active: 'Active',
-  paused: 'Paused',
-  blocked: 'Blocked',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
+const goalStatusText: Record<GoalStatus, MessageKey> = {
+  active: 'goal.status.active',
+  paused: 'goal.status.paused',
+  blocked: 'goal.status.blocked',
+  completed: 'goal.status.completed',
+  cancelled: 'goal.status.cancelled',
 };
 
 const goalDot: Record<GoalStatus, string> = {
@@ -143,15 +144,15 @@ const goalDot: Record<GoalStatus, string> = {
   cancelled: 'bg-content-disabled/60',
 };
 
-const taskStatusText: Record<TaskStatus, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  waiting_approval: 'Waiting approval',
-  blocked: 'Blocked',
-  failed: 'Failed',
-  paused: 'Paused',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
+const taskStatusText: Record<TaskStatus, MessageKey> = {
+  pending: 'task.status.pending',
+  running: 'task.status.running',
+  waiting_approval: 'task.status.waiting_approval',
+  blocked: 'task.status.blocked',
+  failed: 'task.status.failed',
+  paused: 'task.status.paused',
+  completed: 'task.status.completed',
+  cancelled: 'task.status.cancelled',
 };
 
 const taskStatusTone: Record<TaskStatus, string> = {
@@ -167,7 +168,9 @@ const taskStatusTone: Record<TaskStatus, string> = {
 
 function scheduleLine(nextFireAt: string | null): string {
   if (!nextFireAt) return '';
-  return `next ${nextFireAt.slice(5, 16).replace('T', ' ')}`;
+  return t('goal.nextRun', {
+    time: nextFireAt.slice(5, 16).replace('T', ' '),
+  });
 }
 
 function GoalForm(props: {
@@ -176,6 +179,7 @@ function GoalForm(props: {
   onOpenChange: (open: boolean) => void;
 }) {
   const { open, goal, onOpenChange } = props;
+  const t = useT();
   const budgetId = useId();
   const [objective, setObjective] = useState('');
   const [criteria, setCriteria] = useState('');
@@ -218,29 +222,26 @@ function GoalForm(props: {
             <span className="flex size-7 items-center justify-center rounded-lg bg-brand/12 text-brand">
               <Target size={15} />
             </span>
-            {goal ? 'Edit goal' : 'New goal'}
+            {goal ? t('goal.form.edit') : t('goals.new')}
           </DialogTitle>
-          <DialogDescription>
-            A goal is an outcome to reach or keep over time. The chief splits it
-            into tasks and reports progress.
-          </DialogDescription>
+          <DialogDescription>{t('goal.form.desc')}</DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-3">
           <Input
-            placeholder="Objective: e.g. check tian-agent CI every morning"
-            aria-label="Objective"
+            placeholder={t('goal.form.objectivePlaceholder')}
+            aria-label={t('goal.form.objective')}
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
           />
           <Input
-            placeholder="Success criteria (optional): e.g. green for 7 days"
-            aria-label="Success criteria"
+            placeholder={t('goal.form.criteriaPlaceholder')}
+            aria-label={t('goal.form.criteria')}
             value={criteria}
             onChange={(e) => setCriteria(e.target.value)}
           />
           <Input
-            placeholder="Constraints (optional): e.g. read-only, no issues"
-            aria-label="Constraints"
+            placeholder={t('goal.form.constraintsPlaceholder')}
+            aria-label={t('goal.form.constraints')}
             value={constraints}
             onChange={(e) => setConstraints(e.target.value)}
           />
@@ -248,7 +249,7 @@ function GoalForm(props: {
             className="flex items-center gap-2 font-mono text-[10px] text-content-secondary"
             htmlFor={budgetId}
           >
-            Daily run budget
+            {t('goal.form.budget')}
             <Input
               id={budgetId}
               type="number"
@@ -262,9 +263,11 @@ function GoalForm(props: {
           </label>
         </DialogPanel>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>
+            {t('common.cancel')}
+          </DialogClose>
           <Button onClick={submit} disabled={!objective.trim()}>
-            {goal ? 'Save' : 'Create goal'}
+            {goal ? t('common.save') : t('goal.form.create')}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -274,6 +277,7 @@ function GoalForm(props: {
 
 function ScheduleRow({ goal }: { goal: GoalItem }) {
   const [adding, setAdding] = useState(false);
+  const t = useT();
   const [cron, setCron] = useState('');
   const cronRef = useRef<HTMLInputElement>(null);
   // Move focus to the cron field once the inline form is inserted; unlike the
@@ -298,7 +302,7 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="Remove schedule"
+            aria-label={t('goal.removeSchedule')}
             className="size-5 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive-foreground"
             onClick={() => void actions.removeSchedule(s.id)}
           >
@@ -321,13 +325,13 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
             ref={cronRef}
             value={cron}
             onChange={(e) => setCron(e.target.value)}
-            placeholder="cron expression, e.g. 30 9 * * *"
-            aria-label="Cron expression"
+            placeholder={t('goal.cronPlaceholder')}
+            aria-label={t('goal.cronAria')}
             size="sm"
             className="font-mono text-[11px]"
           />
           <Button type="submit" size="sm" variant="outline">
-            Add
+            {t('common.add')}
           </Button>
           <Button
             type="button"
@@ -335,7 +339,7 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
             variant="ghost"
             onClick={() => setAdding(false)}
           >
-            Cancel
+            {t('common.cancel')}
           </Button>
         </form>
       ) : (
@@ -345,7 +349,7 @@ function ScheduleRow({ goal }: { goal: GoalItem }) {
           className="h-6 self-start gap-1 px-1.5 font-mono text-[10px] text-content-disabled hover:text-content-secondary"
           onClick={() => setAdding(true)}
         >
-          <Plus size={10} /> Schedule
+          <Plus size={10} /> {t('goal.schedule')}
         </Button>
       )}
     </div>
@@ -360,6 +364,7 @@ function GoalActions({
   goal: GoalItem;
   onEdit: (goal: GoalItem) => void;
 }) {
+  const t = useT();
   const paused = goal.status === 'paused';
   return (
     <div className="flex shrink-0 items-center gap-0.5 text-content-secondary opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -369,14 +374,14 @@ function GoalActions({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Run now"
+              aria-label={t('goal.runNow')}
               onClick={() => void actions.runGoalNow(goal.id)}
             />
           }
         >
           <Play size={13} weight="fill" className="text-brand" />
         </TooltipTrigger>
-        <TooltipPopup>Run now</TooltipPopup>
+        <TooltipPopup>{t('goal.runNow')}</TooltipPopup>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger
@@ -384,7 +389,7 @@ function GoalActions({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={paused ? 'Resume goal' : 'Pause goal'}
+              aria-label={t(paused ? 'goal.resumeAria' : 'goal.pauseAria')}
               onClick={() =>
                 void actions.setGoalStatus(
                   goal.id,
@@ -396,7 +401,7 @@ function GoalActions({
         >
           {paused ? <Play size={13} /> : <Pause size={13} weight="fill" />}
         </TooltipTrigger>
-        <TooltipPopup>{paused ? 'Resume' : 'Pause'}</TooltipPopup>
+        <TooltipPopup>{t(paused ? 'goals.resume' : 'goal.pause')}</TooltipPopup>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger
@@ -404,14 +409,14 @@ function GoalActions({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Edit goal"
+              aria-label={t('goal.editAria')}
               onClick={() => onEdit(goal)}
             />
           }
         >
           <PencilSimple size={13} />
         </TooltipTrigger>
-        <TooltipPopup>Edit</TooltipPopup>
+        <TooltipPopup>{t('goal.edit')}</TooltipPopup>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger
@@ -419,7 +424,7 @@ function GoalActions({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Cancel goal"
+              aria-label={t('goal.cancel')}
               className="hover:text-destructive-foreground"
               onClick={() => void actions.setGoalStatus(goal.id, 'cancelled')}
             />
@@ -427,7 +432,7 @@ function GoalActions({
         >
           <X size={13} />
         </TooltipTrigger>
-        <TooltipPopup>Cancel goal</TooltipPopup>
+        <TooltipPopup>{t('goal.cancel')}</TooltipPopup>
       </Tooltip>
     </div>
   );
@@ -449,6 +454,7 @@ function GoalCard({
   /** Scope display name; omitted when the app has a single scope. */
   scope?: string;
 }) {
+  const t = useT();
   const open = goal.status === 'active';
   const pct =
     progress && progress.total > 0
@@ -474,7 +480,7 @@ function GoalCard({
           className="mt-0.5 shrink-0 gap-1 font-mono"
         >
           <span className={`size-1 rounded-full ${goalDot[goal.status]}`} />
-          {goalStatusText[goal.status]}
+          {t(goalStatusText[goal.status])}
         </Badge>
         {scope && (
           <span className="mt-1 shrink-0 rounded-md border border-border px-1.5 py-px font-mono text-[9px] text-content-disabled">
@@ -505,7 +511,9 @@ function GoalCard({
           )}
           {goal.lastExecution && (
             <p className="mt-1 truncate font-mono text-[9.5px] text-content-disabled">
-              last run {goal.lastExecution.slice(0, 16).replace('T', ' ')}
+              {t('goal.lastRun', {
+                time: goal.lastExecution.slice(0, 16).replace('T', ' '),
+              })}
             </p>
           )}
         </div>
@@ -526,7 +534,10 @@ function GoalCard({
                 />
               </div>
               <span className="font-mono text-[9.5px] text-content-disabled tabular-nums">
-                {progress!.done}/{progress!.total} tasks
+                {t('goal.tasksProgress', {
+                  done: progress!.done,
+                  total: progress!.total,
+                })}
               </span>
             </div>
           )}
@@ -537,7 +548,7 @@ function GoalCard({
   );
 }
 
-const TASK_GROUPS: { key: TaskStatus; label: string }[] = (
+const TASK_GROUPS: { key: TaskStatus; label: MessageKey }[] = (
   [
     'pending',
     'running',
@@ -558,6 +569,7 @@ function TaskList({
   scopeLabel: (id: string) => string;
 }) {
   const reduce = useReducedMotion();
+  const t = useT();
   const groups = TASK_GROUPS.map((group) => ({
     ...group,
     items: tasks.filter((t) => t.status === group.key),
@@ -565,15 +577,15 @@ function TaskList({
   if (groups.length === 0)
     return (
       <p className="py-2 text-[12px] text-content-disabled">
-        No tasks yet. Add one above or let the chief create them.
+        {t('goals.noTasks')}
       </p>
     );
   return (
     <div className="flex flex-col gap-5">
       {groups.map((group) => (
-        <section key={group.key} aria-label={group.label}>
+        <section key={group.key} aria-label={t(group.label)}>
           <SectionLabel
-            label={group.label}
+            label={t(group.label)}
             count={group.items.length}
             tone={
               group.key === 'completed'
@@ -587,9 +599,9 @@ function TaskList({
           />
           <ul className="flex flex-col">
             <AnimatePresence initial={false}>
-              {group.items.map((t) => (
+              {group.items.map((task) => (
                 <motion.li
-                  key={t.id}
+                  key={task.id}
                   layout={!reduce}
                   initial={reduce ? false : { opacity: 0, y: -4 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -599,52 +611,54 @@ function TaskList({
                 >
                   <Checkbox
                     className="mt-0.5"
-                    checked={t.status === 'completed'}
+                    checked={task.status === 'completed'}
                     disabled={
-                      t.status !== 'pending' && t.status !== 'completed'
+                      task.status !== 'pending' && task.status !== 'completed'
                     }
                     onCheckedChange={(checked) =>
-                      void actions.toggleTask(t.id, checked === true)
+                      void actions.toggleTask(task.id, checked === true)
                     }
-                    aria-label={`Task: ${t.title}`}
+                    aria-label={t('context.taskLabel', { title: task.title })}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
                       <span
                         aria-hidden="true"
-                        className={`size-1.5 shrink-0 rounded-full ${taskStatusTone[t.status]}`}
+                        className={`size-1.5 shrink-0 rounded-full ${taskStatusTone[task.status]}`}
                       />
                       <span
                         className={`min-w-0 flex-1 truncate text-[13px] leading-snug transition-colors ${
-                          t.status === 'completed'
+                          task.status === 'completed'
                             ? 'text-content-disabled line-through'
                             : 'text-foreground'
                         }`}
                       >
-                        {t.title}
+                        {task.title}
                       </span>
-                      {t.goalId && (
+                      {task.goalId && (
                         <Badge
                           variant="outline"
                           size="sm"
                           className="shrink-0 gap-1 font-mono"
                         >
                           <Target size={9} />
-                          Goal
+                          {t('goal.badge')}
                         </Badge>
                       )}
                     </span>
                     <span className="mt-0.5 flex items-center gap-2 font-mono text-[9.5px] text-content-disabled">
-                      <span className="truncate">{scopeLabel(t.scopeId)}</span>
-                      {t.due && (
+                      <span className="truncate">
+                        {scopeLabel(task.scopeId)}
+                      </span>
+                      {task.due && (
                         <span className="ml-auto shrink-0">
-                          due {t.due.slice(0, 10)}
+                          {t('goal.due', { date: task.due.slice(0, 10) })}
                         </span>
                       )}
                     </span>
                   </span>
                   <AnimatePresence>
-                    {t.status === 'completed' && (
+                    {task.status === 'completed' && (
                       <motion.span
                         initial={reduce ? false : { scale: 0, rotate: -30 }}
                         animate={{ scale: 1, rotate: 0 }}
@@ -681,6 +695,7 @@ export function GoalsView() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<GoalItem | null>(null);
   const reduce = useReducedMotion();
+  const t = useT();
 
   const openGoals = useMemo(
     () => goals.filter((g) => !['completed', 'cancelled'].includes(g.status)),
@@ -709,19 +724,19 @@ export function GoalsView() {
 
   return (
     <main
-      aria-label="Goals"
+      aria-label={t('goals.aria')}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       <Header
         icon={Target}
-        title="Goals"
-        meta={`${openGoals.length} active · ${pending} pending`}
+        title={t('nav.goals')}
+        meta={t('goals.meta', { open: openGoals.length, pending })}
         action={
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="New goal"
+              aria-label={t('goals.new')}
               className="text-content-secondary"
               onClick={() => {
                 setEditing(null);
@@ -733,7 +748,7 @@ export function GoalsView() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="New conversation"
+              aria-label={t('common.newConversation')}
               className="text-content-secondary"
               onClick={() => {
                 actions.setNav('chat');
@@ -755,9 +770,11 @@ export function GoalsView() {
                 <Target size={19} weight="duotone" />
               </span>
               <div className="relative flex flex-col items-center gap-1">
-                <p className="text-[13px] text-foreground">No goals yet.</p>
+                <p className="text-[13px] text-foreground">
+                  {t('goals.empty.title')}
+                </p>
                 <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
-                  Give the chief something long-running to keep moving.
+                  {t('goals.empty.hint')}
                 </p>
               </div>
               <Button
@@ -769,13 +786,13 @@ export function GoalsView() {
                 }}
               >
                 <Plus size={13} />
-                New goal
+                {t('goals.new')}
               </Button>
             </div>
           ) : (
-            <section aria-label="Open goals" className="mb-8">
+            <section aria-label={t('goals.openSection')} className="mb-8">
               <SectionLabel
-                label="Goals"
+                label={t('nav.goals')}
                 count={openGoals.length}
                 tone="brand"
               />
@@ -804,7 +821,7 @@ export function GoalsView() {
                 </ul>
               ) : (
                 <p className="mb-2 py-1 text-[12px] text-content-disabled">
-                  Nothing active — the closed ones are below.
+                  {t('goals.noneActive')}
                 </p>
               )}
               {/* The in-list affordance: quiet until it earns a look. */}
@@ -817,15 +834,15 @@ export function GoalsView() {
                 className="mt-2 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-border px-3 py-2.5 text-[12px] text-content-disabled transition-colors hover:border-border-secondary hover:bg-card/50 hover:text-content-secondary"
               >
                 <Plus size={12} />
-                New goal
+                {t('goals.new')}
               </button>
             </section>
           )}
 
           {notices.length > 0 && (
-            <section aria-label="Notices" className="mb-8">
+            <section aria-label={t('goals.noticesSection')} className="mb-8">
               <SectionLabel
-                label="Notices"
+                label={t('goals.notices')}
                 count={notices.length}
                 tone="warning"
               />
@@ -856,7 +873,7 @@ export function GoalsView() {
                         </span>
                         {!n.deliveredAt && (
                           <Badge variant="info" size="sm" className="font-mono">
-                            new
+                            {t('common.new')}
                           </Badge>
                         )}
                         <span className="ml-auto shrink-0 font-mono text-[9.5px] text-content-disabled">
@@ -873,8 +890,8 @@ export function GoalsView() {
             </section>
           )}
 
-          <section aria-label="Tasks" className="mb-8">
-            <SectionLabel label="Tasks" count={tasks.length} />
+          <section aria-label={t('goals.tasksSection')} className="mb-8">
+            <SectionLabel label={t('context.tasks')} count={tasks.length} />
             {/* The add-row sits with its output: a dashed row on top of the
                 list, styled like the rows that land under it. */}
             <form
@@ -893,8 +910,8 @@ export function GoalsView() {
               <Input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Add a task…"
-                aria-label="New task"
+                placeholder={t('context.addTask')}
+                aria-label={t('context.newTaskTitle')}
                 unstyled
                 className="min-w-0 flex-1"
               />
@@ -902,7 +919,7 @@ export function GoalsView() {
                 type="submit"
                 variant="ghost"
                 size="icon-xs"
-                aria-label="Add task"
+                aria-label={t('context.addTaskAria')}
                 disabled={!draft.trim()}
                 className="shrink-0 text-content-secondary"
               >
@@ -913,8 +930,11 @@ export function GoalsView() {
           </section>
 
           {closedGoals.length > 0 && (
-            <section aria-label="Closed goals" className="mb-8">
-              <SectionLabel label="Closed" count={closedGoals.length} />
+            <section aria-label={t('goals.closedSection')} className="mb-8">
+              <SectionLabel
+                label={t('goals.closed')}
+                count={closedGoals.length}
+              />
               <ul className="flex flex-col gap-0.5">
                 {closedGoals.map((goal) => (
                   <li
@@ -926,7 +946,7 @@ export function GoalsView() {
                       size="sm"
                       className="shrink-0 font-mono"
                     >
-                      {goalStatusText[goal.status]}
+                      {t(goalStatusText[goal.status])}
                     </Badge>
                     {scopes.length > 1 && (
                       <span className="shrink-0 font-mono text-[9px] text-content-disabled">
@@ -939,8 +959,8 @@ export function GoalsView() {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Resume goal"
-                      title="Resume"
+                      aria-label={t('goals.resumeAria')}
+                      title={t('goals.resume')}
                       className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
                       onClick={() =>
                         void actions.setGoalStatus(goal.id, 'active')
@@ -971,6 +991,7 @@ function InboxList({
   reduce: boolean;
   scopeLabel: (id: string) => string;
 }) {
+  const t = useT();
   return (
     <ul className="flex flex-col gap-2">
       <AnimatePresence initial={false}>
@@ -1014,7 +1035,7 @@ function InboxList({
                 )}
                 {!m.read && (
                   <Badge variant="info" size="sm" className="font-mono">
-                    new
+                    {t('common.new')}
                   </Badge>
                 )}
                 {scopeLabel(m.scopeId) && (
@@ -1048,6 +1069,7 @@ export function InboxView() {
   const inbox = useStore((s) => s.inbox);
   const scopes = useStore((s) => s.scopes);
   const reduce = useReducedMotion();
+  const t = useT();
   const unread = inbox.filter((m) => !m.read).length;
   const scopeLabel = (id: string) =>
     scopes.length > 1
@@ -1056,13 +1078,13 @@ export function InboxView() {
 
   return (
     <main
-      aria-label="Inbox"
+      aria-label={t('inbox.aria')}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       <Header
         icon={Tray}
-        title="Inbox"
-        meta={`${unread} unread · ${inbox.length} total`}
+        title={t('nav.inbox')}
+        meta={t('inbox.meta', { unread, total: inbox.length })}
       />
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
         <div className="mx-auto w-full max-w-2xl px-5 py-6">
@@ -1073,9 +1095,11 @@ export function InboxView() {
                 <Tray size={19} weight="duotone" />
               </span>
               <div className="relative flex flex-col items-center gap-1">
-                <p className="text-[13px] text-foreground">Inbox zero.</p>
+                <p className="text-[13px] text-foreground">
+                  {t('inbox.empty.title')}
+                </p>
                 <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
-                  Messages from agents, runs, and other channels land here.
+                  {t('inbox.empty.hint')}
                 </p>
               </div>
             </div>
@@ -1092,11 +1116,11 @@ export function InboxView() {
   );
 }
 
-const skillStatusText: Record<SkillStatus, string> = {
-  candidate: 'Candidate',
-  approved: 'Approved',
-  retired: 'Retired',
-  superseded: 'Superseded',
+const skillStatusText: Record<SkillStatus, MessageKey> = {
+  candidate: 'skill.status.candidate',
+  approved: 'skill.status.approved',
+  retired: 'skill.status.retired',
+  superseded: 'skill.status.superseded',
 };
 
 const skillStatusBadge: Record<
@@ -1111,6 +1135,7 @@ const skillStatusBadge: Record<
 
 /** Experience ≠ Verified Skill: verification is execution evidence, shown as-is. */
 function VerificationBadge({ skill }: { skill: SkillItem }) {
+  const t = useT();
   if (skill.verification === 'unverified') return null;
   return (
     <Badge
@@ -1118,7 +1143,9 @@ function VerificationBadge({ skill }: { skill: SkillItem }) {
       size="sm"
       className="shrink-0 font-mono"
     >
-      {skill.verification === 'failed' ? 'failed run' : 'verified'}
+      {t(
+        skill.verification === 'failed' ? 'skill.failedRun' : 'skill.verified',
+      )}
     </Badge>
   );
 }
@@ -1148,6 +1175,7 @@ function groupSkills(skills: SkillItem[]): SkillGroup[] {
 }
 
 function SkillVersionRow({ skill }: { skill: SkillItem }) {
+  const t = useT();
   return (
     <div className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-secondary">
       <span className="shrink-0 font-mono text-[10px] text-content-disabled tabular-nums">
@@ -1158,7 +1186,7 @@ function SkillVersionRow({ skill }: { skill: SkillItem }) {
         size="sm"
         className="shrink-0 font-mono"
       >
-        {skillStatusText[skill.status]}
+        {t(skillStatusText[skill.status])}
       </Badge>
       <VerificationBadge skill={skill} />
       <span className="ml-auto shrink-0 truncate font-mono text-[9.5px] text-content-disabled">
@@ -1171,7 +1199,7 @@ function SkillVersionRow({ skill }: { skill: SkillItem }) {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={`Roll back ${skill.name} to the previous version`}
+                aria-label={t('skills.rollbackAria', { name: skill.name })}
                 className="text-content-secondary hover:text-destructive-foreground"
                 onClick={() => void actions.skillRollback(skill.id)}
               />
@@ -1179,7 +1207,7 @@ function SkillVersionRow({ skill }: { skill: SkillItem }) {
           >
             <ArrowCounterClockwise size={12} />
           </TooltipTrigger>
-          <TooltipPopup>Roll back</TooltipPopup>
+          <TooltipPopup>{t('common.rollback')}</TooltipPopup>
         </Tooltip>
       )}
     </div>
@@ -1198,6 +1226,7 @@ function SkillCard({
   reduce: boolean | null;
 }) {
   const [open, setOpen] = useState(false);
+  const t = useT();
   const latest = group.latest;
   return (
     <motion.li
@@ -1229,7 +1258,7 @@ function SkillCard({
               size="sm"
               className="shrink-0 font-mono"
             >
-              {skillStatusText[latest.status]}
+              {t(skillStatusText[latest.status])}
             </Badge>
             <VerificationBadge skill={latest} />
           </div>
@@ -1237,8 +1266,10 @@ function SkillCard({
             {latest.description}
           </p>
           <p className="mt-1 truncate font-mono text-[9.5px] text-content-disabled">
-            {scopeName} · updated{' '}
-            {latest.updatedAt.slice(0, 16).replace('T', ' ')}
+            {scopeName} ·{' '}
+            {t('skills.updated', {
+              time: latest.updatedAt.slice(0, 16).replace('T', ' '),
+            })}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -1250,7 +1281,9 @@ function SkillCard({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Approve ${group.name}`}
+                      aria-label={t('skills.approveAria', {
+                        name: group.name,
+                      })}
                       onClick={() => void actions.skillApprove(latest.id)}
                     />
                   }
@@ -1261,7 +1294,7 @@ function SkillCard({
                     className="text-content-secondary"
                   />
                 </TooltipTrigger>
-                <TooltipPopup>Approve</TooltipPopup>
+                <TooltipPopup>{t('skills.approve')}</TooltipPopup>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger
@@ -1269,7 +1302,9 @@ function SkillCard({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Dismiss ${group.name}`}
+                      aria-label={t('skills.dismissAria', {
+                        name: group.name,
+                      })}
                       className="hover:text-destructive-foreground"
                       onClick={() => void actions.skillRetire(latest.id)}
                     />
@@ -1277,7 +1312,7 @@ function SkillCard({
                 >
                   <X size={14} />
                 </TooltipTrigger>
-                <TooltipPopup>Dismiss</TooltipPopup>
+                <TooltipPopup>{t('skills.dismiss')}</TooltipPopup>
               </Tooltip>
             </>
           )}
@@ -1289,7 +1324,9 @@ function SkillCard({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Roll back ${group.name}`}
+                      aria-label={t('skills.rollbackAria', {
+                        name: group.name,
+                      })}
                       className="hover:text-destructive-foreground"
                       onClick={() => void actions.skillRollback(latest.id)}
                     />
@@ -1297,7 +1334,7 @@ function SkillCard({
                 >
                   <ArrowCounterClockwise size={14} />
                 </TooltipTrigger>
-                <TooltipPopup>Roll back to the previous version</TooltipPopup>
+                <TooltipPopup>{t('skills.rollbackFull')}</TooltipPopup>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger
@@ -1305,7 +1342,9 @@ function SkillCard({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Retire ${group.name}`}
+                      aria-label={t('skills.retireAria', {
+                        name: group.name,
+                      })}
                       className="hover:text-destructive-foreground"
                       onClick={() => void actions.skillRetire(latest.id)}
                     />
@@ -1313,7 +1352,7 @@ function SkillCard({
                 >
                   <X size={14} />
                 </TooltipTrigger>
-                <TooltipPopup>Retire</TooltipPopup>
+                <TooltipPopup>{t('skills.retire')}</TooltipPopup>
               </Tooltip>
             </>
           )}
@@ -1330,7 +1369,7 @@ function SkillCard({
           weight="bold"
           className={`transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
         />
-        History ({group.versions.length})
+        {t('skills.history', { count: group.versions.length })}
       </button>
       {open && (
         <div className="mt-1 flex flex-col border-border border-l pl-2">
@@ -1384,6 +1423,7 @@ export function SkillsView() {
   const skills = useStore((s) => s.skills);
   const scopes = useStore((s) => s.scopes);
   const reduce = useReducedMotion();
+  const t = useT();
   const scopeName = (id: string) =>
     scopes.find((scope) => scope.id === id)?.name ?? id;
   const groups = useMemo(() => groupSkills(skills), [skills]);
@@ -1395,13 +1435,16 @@ export function SkillsView() {
 
   return (
     <main
-      aria-label="Skills"
+      aria-label={t('skills.aria')}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       <Header
         icon={Lightning}
-        title="Skills"
-        meta={`${approved.length} approved · ${candidates.length} candidates`}
+        title={t('nav.skills')}
+        meta={t('skills.meta', {
+          approved: approved.length,
+          candidates: candidates.length,
+        })}
       />
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
         <div className="mx-auto w-full max-w-2xl px-5 py-6">
@@ -1412,38 +1455,38 @@ export function SkillsView() {
                 <Lightning size={19} weight="duotone" />
               </span>
               <div className="relative flex flex-col items-center gap-1">
-                <p className="text-[13px] text-foreground">No skills yet.</p>
+                <p className="text-[13px] text-foreground">
+                  {t('skills.empty.title')}
+                </p>
                 <p className="max-w-xs text-[12px] text-content-secondary leading-relaxed">
-                  When a run succeeds with clear steps, the procedure lands here
-                  as a candidate. Nothing reaches a worker before you approve
-                  it.
+                  {t('skills.empty.hint')}
                 </p>
               </div>
             </div>
           )}
           <SkillSection
-            label="Candidates"
+            label={t('skills.candidates')}
             tone="warning"
             groups={candidates}
             scopeName={scopeName}
             reduce={reduce}
-            hint="Extracted from successful runs. Approve to let workers load them, or dismiss."
+            hint={t('skills.candidatesHint')}
           />
           <SkillSection
-            label="Approved"
+            label={t('skills.approved')}
             tone="brand"
             groups={approved}
             scopeName={scopeName}
             reduce={reduce}
-            hint="Injected into matching worker briefs at dispatch. Roll back if a run using a version fails."
+            hint={t('skills.approvedHint')}
           />
           <SkillSection
-            label="Retired"
+            label={t('skills.retired')}
             tone="neutral"
             groups={inactive}
             scopeName={scopeName}
             reduce={reduce}
-            hint="Kept for the record; retired and superseded versions are never injected."
+            hint={t('skills.retiredHint')}
           />
         </div>
       </ScrollArea>

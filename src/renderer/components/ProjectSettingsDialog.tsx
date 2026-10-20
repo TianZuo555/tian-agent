@@ -16,6 +16,7 @@ import {
 import { Input } from '@/components/ui/input';
 import type { ScopeInfo } from '@/shared/types';
 import { actions } from '../store';
+import { useT } from '../i18n';
 
 export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
   const id = useId();
@@ -35,6 +36,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
   const [preamble, setPreamble] = useState(
     scope.settings?.promptPreamble ?? '',
   );
+  const t = useT();
 
   return (
     <Dialog
@@ -58,7 +60,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
             type="button"
             variant="ghost"
             size="icon-xs"
-            aria-label={`Settings for ${scope.name}`}
+            aria-label={t('project.settingsAria', { name: scope.name })}
           />
         }
       >
@@ -70,7 +72,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
             <span className="flex size-7 items-center justify-center rounded-lg bg-brand/12 text-brand">
               <Gear size={14} />
             </span>
-            {scope.name} settings
+            {t('project.settingsTitle', { name: scope.name })}
           </DialogTitle>
           <DialogDescription>{scope.rootPath}</DialogDescription>
         </DialogHeader>
@@ -106,7 +108,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 checked={autoLand}
                 onCheckedChange={(value) => setAutoLand(value === true)}
               />
-              Auto-land finished runs
+              {t('project.autoLand')}
             </label>
             <label
               className="flex items-center gap-2 text-sm"
@@ -117,13 +119,13 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 checked={allowInPlace}
                 onCheckedChange={(value) => setAllowInPlace(value === true)}
               />
-              Allow execution in the original directory for non-Git projects
+              {t('project.allowInPlace')}
             </label>
             <label
               className="grid gap-1.5 text-xs text-muted-foreground"
               htmlFor={`${id}-timeout`}
             >
-              Run timeout (minutes)
+              {t('project.timeout')}
               <Input
                 id={`${id}-timeout`}
                 type="number"
@@ -138,7 +140,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
               className="grid gap-1.5 text-xs text-muted-foreground"
               htmlFor={`${id}-base-branch`}
             >
-              Base branch
+              {t('project.baseBranch')}
               <Input
                 id={`${id}-base-branch`}
                 required
@@ -150,7 +152,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
               className="grid gap-1.5 text-xs text-muted-foreground"
               htmlFor={`${id}-preamble`}
             >
-              Worker instructions
+              {t('project.preamble')}
               <Input
                 id={`${id}-preamble`}
                 value={preamble}
@@ -167,14 +169,14 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
             <DialogClose
               render={<Button type="button" variant="ghost" disabled={busy} />}
             >
-              Cancel
+              {t('common.cancel')}
             </DialogClose>
             <Button
               type="submit"
               disabled={busy}
-              aria-label={`Save settings for ${scope.name}`}
+              aria-label={t('project.saveAria', { name: scope.name })}
             >
-              {busy ? 'Saving…' : 'Save'}
+              {busy ? t('common.saving') : t('common.save')}
             </Button>
           </DialogFooter>
         </form>

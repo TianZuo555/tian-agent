@@ -9,3 +9,4 @@
 - Only the resident service writes `tian.db`; schema lives in `src/worker/db.ts`. Feature stores may own their tables in a separate module using `Db.sqlite`, `Db.transaction`, and `Db.once`.
 - Chief tools live in `src/worker/tools.ts`; manager (project manager) tools in `src/worker/manager-tools.ts`; worker tools in `src/worker/worker-tools.ts`. Socket/IPC command contracts are in `src/shared/contracts.ts`.
 - Docs (README, PRD, decisions) are written in Chinese; UI copy, code identifiers, and comments are in English.
+- UI strings are never hardcoded: they live in `src/renderer/i18n/en.ts` (the key set and English default) with per-locale overrides like `zh.ts` (missing keys fall back to English). Components call `const t = useT()` (subscribes to locale changes); non-component code calls `t()` directly. The choice persists in `localStorage` (`tian.language`) and is switched under Settings → General → Language.

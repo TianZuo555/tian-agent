@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { WarningCircle } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
+import { useT } from '../i18n';
 import { reportClientError } from '../report-error';
 
 interface State {
@@ -8,6 +9,7 @@ interface State {
 }
 
 function CrashScreen({ message }: { message: string }) {
+  const t = useT();
   return (
     <div
       role="alert"
@@ -17,16 +19,16 @@ function CrashScreen({ message }: { message: string }) {
         <WarningCircle size={22} />
       </span>
       <div className="flex max-w-md flex-col gap-1.5">
-        <h1 className="font-medium text-[15px]">Something went wrong</h1>
+        <h1 className="font-medium text-[15px]">{t('error.title')}</h1>
         <p className="break-words text-[12px] text-content-secondary leading-relaxed">
           {message}
         </p>
         <p className="text-[11px] text-content-disabled">
-          The error was recorded in the Log. Reload to continue.
+          {t('error.recorded')}
         </p>
       </div>
       <Button size="sm" onClick={() => window.location.reload()}>
-        Reload
+        {t('error.reload')}
       </Button>
     </div>
   );

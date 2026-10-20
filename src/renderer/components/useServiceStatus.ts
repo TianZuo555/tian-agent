@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { tian } from '../api';
+import { t } from '../i18n';
 import type {
   AppCandidate,
   DesktopAction,
@@ -70,12 +71,14 @@ export function useServiceStatus(active: boolean) {
       confirm({
         action: 'apply-app',
         candidate,
-        title: `升级到 ${candidate.version}？`,
+        title: t('service.chooseAppTitle', { version: candidate.version }),
         description:
-          'App 将退出并重新启动。已安装的后台服务会一起升级；系统会先备份数据库，并在启动检查失败时恢复旧版。请先保存未发送的输入。' +
-          (candidate.signed
-            ? ' 新版签名已验证。'
-            : ' 这是本地未签名的开发版本。'),
+          t('service.chooseAppDesc') +
+          t(
+            candidate.signed
+              ? 'service.chooseAppSigned'
+              : 'service.chooseAppUnsigned',
+          ),
       });
     } catch (reason) {
       setError(String(reason));

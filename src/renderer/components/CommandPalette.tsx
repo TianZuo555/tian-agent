@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
 import { actions, useStore } from '../store';
+import { useLocale, useT } from '../i18n';
 import type { Nav } from '../state';
 
 interface PaletteItem {
@@ -46,6 +47,8 @@ export function CommandPalette() {
   const activeScopeId = useStore((s) => s.activeScopeId);
   const contextOpen = useStore((s) => s.contextOpen);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const t = useT();
+  const locale = useLocale();
 
   const items = useMemo<PaletteItem[]>(() => {
     const close = () => actions.setPaletteOpen(false);
@@ -56,8 +59,8 @@ export function CommandPalette() {
     const commands: PaletteItem[] = [
       {
         value: 'new conversation',
-        label: 'New conversation',
-        hint: 'in the active scope',
+        label: t('common.newConversation'),
+        hint: t('palette.newConversationHint'),
         shortcut: '⌘N',
         icon: ChatCircleDots,
         run: () => {
@@ -68,42 +71,42 @@ export function CommandPalette() {
       },
       {
         value: 'go chat',
-        label: 'Go to Chat',
+        label: t('palette.goChat'),
         shortcut: '⌘1',
         icon: ChatCircleDots,
         run: go('chat'),
       },
       {
         value: 'go goals',
-        label: 'Go to Goals',
+        label: t('palette.goGoals'),
         shortcut: '⌘2',
         icon: Target,
         run: go('goals'),
       },
       {
         value: 'go skills',
-        label: 'Go to Skills',
+        label: t('palette.goSkills'),
         shortcut: '⌘3',
         icon: Lightning,
         run: go('skills'),
       },
       {
         value: 'go inbox',
-        label: 'Go to Inbox',
+        label: t('palette.goInbox'),
         shortcut: '⌘4',
         icon: Tray,
         run: go('inbox'),
       },
       {
         value: 'go settings',
-        label: 'Go to Settings',
+        label: t('palette.goSettings'),
         shortcut: '⌘,',
         icon: Gear,
         run: go('settings'),
       },
       {
         value: 'toggle sidebar',
-        label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar',
+        label: t(sidebarOpen ? 'toggle.hideSidebar' : 'toggle.showSidebar'),
         shortcut: '⌃⌘S',
         icon: Sidebar,
         run: () => {
@@ -113,7 +116,7 @@ export function CommandPalette() {
       },
       {
         value: 'toggle context pane',
-        label: contextOpen ? 'Hide context pane' : 'Show context pane',
+        label: t(contextOpen ? 'toggle.hideContext' : 'toggle.showContext'),
         shortcut: '⌘B',
         icon: SidebarSimple,
         run: () => {
@@ -123,7 +126,7 @@ export function CommandPalette() {
       },
       {
         value: 'refresh models',
-        label: 'Refresh model catalog',
+        label: t('palette.refreshModels'),
         icon: ArrowsClockwise,
         run: () => {
           void actions.refreshModels();
@@ -138,7 +141,7 @@ export function CommandPalette() {
       .map((scope) => ({
         value: `scope ${scope.name}`,
         label: scope.name,
-        hint: 'switch scope',
+        hint: t('palette.switchScope'),
         icon: Folder,
         run: () => {
           void actions.selectScope(scope.id);
@@ -150,7 +153,7 @@ export function CommandPalette() {
       .slice(0, 40)
       .map((c) => ({
         value: `conversation ${c.conversationId}`,
-        label: c.title ?? 'New conversation',
+        label: c.title ?? t('common.newConversation'),
         hint: scopeName.get(c.scopeId),
         icon: ChatCircleDots,
         run: () => {
@@ -161,14 +164,22 @@ export function CommandPalette() {
       }));
 
     return [...commands, ...scopeItems, ...conversationItems];
-  }, [activeScopeId, contextOpen, sidebarOpen, conversations, scopes]);
+  }, [
+    activeScopeId,
+    contextOpen,
+    sidebarOpen,
+    conversations,
+    scopes,
+    t,
+    locale,
+  ]);
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={(next) => actions.setPaletteOpen(next)}
     >
-      <CommandDialogPopup aria-label="Command palette">
+      <CommandDialogPopup aria-label={t('palette.aria')}>
         <Command
           items={items}
           itemToStringValue={(item) => (item as PaletteItem).label}
@@ -182,10 +193,10 @@ export function CommandPalette() {
           }}
         >
           <CommandInput
-            placeholder="Jump to a conversation or run a command…"
-            aria-label="Search commands"
+            placeholder={t('palette.input')}
+            aria-label={t('palette.inputAria')}
           />
-          <CommandEmpty>Nothing matches that.</CommandEmpty>
+          <CommandEmpty>{t('palette.empty')}</CommandEmpty>
           <CommandList>
             {(item) => {
               const entry = item as PaletteItem;
@@ -220,16 +231,16 @@ export function CommandPalette() {
               <span className="flex items-center gap-1">
                 <Kbd className="h-4 min-w-4 bg-secondary px-0.5">↑</Kbd>
                 <Kbd className="h-4 min-w-4 bg-secondary px-0.5">↓</Kbd>
-                navigate
+                {t('palette.navigate')}
               </span>
               <span className="flex items-center gap-1">
                 <Kbd className="h-4 min-w-4 bg-secondary px-0.5">↵</Kbd>
-                open
+                {t('palette.open')}
               </span>
             </span>
             <span className="flex items-center gap-1 font-mono text-[10px] text-content-disabled">
               <Kbd className="h-4 min-w-4 bg-secondary px-0.5">esc</Kbd>
-              close
+              {t('palette.close')}
             </span>
           </CommandFooter>
         </Command>

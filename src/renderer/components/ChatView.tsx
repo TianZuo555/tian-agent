@@ -49,6 +49,7 @@ import { MessageIn, Reveal, TypingDots, EASE } from './motion-primitives';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
 import { actions, useStore } from '../store';
+import { useT, type MessageKey } from '../i18n';
 import { SidebarToggle } from './SidebarToggle';
 import { ContextToggle } from './ContextToggle';
 import { BrandMark, BrandOrb } from './BrandMark';
@@ -220,6 +221,7 @@ function ToolChip({ tool }: { tool: ToolCallRow }) {
 /** A round of tool calls, collapsed into a single summary line when long. */
 function ToolGroup({ tools }: { tools: ToolCallRow[] }) {
   const [open, setOpen] = useState(false);
+  const t = useT();
   const running = tools.filter((t) => t.status === 'running').length;
   const failed = tools.filter((t) => t.status === 'error').length;
   const reduce = useReducedMotion();
@@ -250,17 +252,19 @@ function ToolGroup({ tools }: { tools: ToolCallRow[] }) {
           }`}
         />
         <Wrench size={10} className="text-content-disabled" />
-        <span className="font-medium">{tools.length} tool calls</span>
+        <span className="font-medium">
+          {t('chat.toolCalls', { count: tools.length })}
+        </span>
         {running > 0 && (
           <span className="inline-flex items-center gap-1 font-mono text-[10px] text-info-foreground">
             <CircleNotch size={9} className="animate-spin" />
-            {running} running
+            {t('chat.running', { count: running })}
           </span>
         )}
         {failed > 0 && (
           <span className="inline-flex items-center gap-1 font-mono text-[10px] text-destructive-foreground">
             <WarningCircle size={9} weight="fill" />
-            {failed} failed
+            {t('chat.failed', { count: failed })}
           </span>
         )}
       </motion.button>
@@ -277,6 +281,7 @@ function ToolGroup({ tools }: { tools: ToolCallRow[] }) {
 
 function AssistantBubble({ row }: { row: MessageRow }) {
   const [copied, setCopied] = useState(false);
+  const t = useT();
   const copy = async () => {
     if (!row.text) return;
     try {
@@ -289,7 +294,7 @@ function AssistantBubble({ row }: { row: MessageRow }) {
   };
   return (
     <article
-      aria-label="Assistant message"
+      aria-label={t('chat.assistantMessage')}
       className="group/assistant flex w-full max-w-[52rem] flex-col gap-2"
     >
       <div className="flex items-center gap-2 opacity-75 transition-opacity group-hover/assistant:opacity-100">
@@ -304,14 +309,14 @@ function AssistantBubble({ row }: { row: MessageRow }) {
         </span>
         {row.streaming && (
           <span className="font-mono text-[9.5px] text-content-secondary">
-            writing…
+            {t('chat.writing')}
           </span>
         )}
         {row.text && !row.streaming && (
           <button
             type="button"
             onClick={() => void copy()}
-            aria-label={copied ? 'Copied' : 'Copy message'}
+            aria-label={t(copied ? 'chat.copied' : 'chat.copy')}
             className="ml-auto flex size-6 cursor-pointer items-center justify-center rounded-md text-content-disabled opacity-0 transition-[opacity,background-color,color] hover:bg-secondary hover:text-foreground group-hover/assistant:opacity-100 focus-visible:opacity-100"
           >
             {copied ? (
@@ -369,7 +374,7 @@ function AssistantBubble({ row }: { row: MessageRow }) {
       {row.streaming && !row.text && (
         <div className="flex items-center gap-2.5 font-mono text-[11px] text-content-secondary">
           <TypingDots className="text-content-secondary" />
-          <span className="shimmer-text">thinking…</span>
+          <span className="shimmer-text">{t('chat.thinking')}</span>
         </div>
       )}
     </article>
@@ -377,8 +382,12 @@ function AssistantBubble({ row }: { row: MessageRow }) {
 }
 
 function UserBubble({ row }: { row: MessageRow }) {
+  const t = useT();
   return (
-    <article aria-label="User message" className="flex w-full justify-end">
+    <article
+      aria-label={t('chat.userMessage')}
+      className="flex w-full justify-end"
+    >
       <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-xl rounded-br-md border border-border border-b-border-secondary/70 bg-secondary px-3.5 py-2 text-[13px] text-secondary-foreground leading-relaxed shadow-[0_1px_0_hsl(0_0%_100%/0.04)_inset]">
         {row.text}
       </div>
@@ -411,30 +420,27 @@ function Row({ row }: { row: MessageRow }) {
 
 const SUGGESTIONS: {
   icon: Icon;
-  title: string;
-  hint: string;
-  prompt: string;
+  title: MessageKey;
+  hint: MessageKey;
+  prompt: MessageKey;
 }[] = [
   {
     icon: CalendarCheck,
-    title: 'Plan my day',
-    hint: 'goals, tasks, and time',
-    prompt:
-      'Help me plan my day. Look at my active goals and tasks, then propose a short, realistic plan.',
+    title: 'chat.suggestion.plan.title',
+    hint: 'chat.suggestion.plan.hint',
+    prompt: 'chat.suggestion.plan.prompt',
   },
   {
     icon: Target,
-    title: 'Review goals',
-    hint: 'what needs attention',
-    prompt:
-      'Review my active goals and tell me what needs attention next, in priority order.',
+    title: 'chat.suggestion.goals.title',
+    hint: 'chat.suggestion.goals.hint',
+    prompt: 'chat.suggestion.goals.prompt',
   },
   {
     icon: Pulse,
-    title: 'Workspace check',
-    hint: 'runs and loose ends',
-    prompt:
-      'Check the workspace: summarize recent runs and anything that needs my attention.',
+    title: 'chat.suggestion.check.title',
+    hint: 'chat.suggestion.check.hint',
+    prompt: 'chat.suggestion.check.prompt',
   },
 ];
 
@@ -448,6 +454,7 @@ function WelcomePane({
   onPalette: () => void;
 }) {
   const reduce = useReducedMotion();
+  const t = useT();
   return (
     <div className="ambient-glow relative flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
       <motion.div
@@ -459,24 +466,25 @@ function WelcomePane({
       </motion.div>
       <div className="flex flex-col items-center gap-2">
         <span className="font-mono text-[9.5px] text-content-disabled uppercase tracking-[0.18em]">
-          {scopeName ? `Scope · ${scopeName}` : 'Personal steward'}
+          {scopeName
+            ? t('chat.scopeTag', { name: scopeName })
+            : t('chat.personalSteward')}
         </span>
         <h2 className="font-semibold text-[22px] text-foreground leading-tight tracking-[-0.02em]">
-          Pick up where you left off.
+          {t('chat.welcomeTitle')}
         </h2>
         <p className="max-w-sm text-[12.5px] text-content-secondary leading-relaxed">
-          Choose a conversation on the left, or start something new. Tian keeps
-          the context so you do not have to.
+          {t('chat.welcomeBody')}
         </p>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2">
         <Button size="sm" onClick={onNew}>
           <ChatCircleDots size={13} />
-          New conversation
+          {t('common.newConversation')}
         </Button>
         <Button variant="outline" size="sm" onClick={onPalette}>
           <MagnifyingGlass size={13} />
-          Browse
+          {t('chat.browse')}
           <Kbd className="ml-0.5 h-4 bg-secondary px-1 text-[9px]">⌘K</Kbd>
         </Button>
       </div>
@@ -492,6 +500,7 @@ function EmptyConversation({
   onPick: (prompt: string) => void;
 }) {
   const reduce = useReducedMotion();
+  const t = useT();
   return (
     <div className="ambient-glow relative mx-auto flex min-h-full max-w-2xl flex-col items-center justify-center gap-7 px-6 py-16 text-center">
       <motion.div
@@ -505,14 +514,15 @@ function EmptyConversation({
       </motion.div>
       <div className="flex flex-col items-center gap-2">
         <span className="font-mono text-[9.5px] text-content-disabled uppercase tracking-[0.18em]">
-          {scopeName ? `Scope · ${scopeName}` : 'Personal steward'}
+          {scopeName
+            ? t('chat.scopeTag', { name: scopeName })
+            : t('chat.personalSteward')}
         </span>
         <h2 className="font-semibold text-[22px] text-foreground leading-tight tracking-[-0.02em]">
-          大内总管待命
+          {t('chat.emptyTitle')}
         </h2>
         <p className="max-w-sm text-[12.5px] text-content-secondary leading-relaxed">
-          Ask for a plan, a status check, or hand off a task. Tian remembers
-          what matters across conversations.
+          {t('chat.emptyBody')}
         </p>
       </div>
       <div className="grid w-full max-w-lg gap-2 sm:grid-cols-3">
@@ -527,17 +537,17 @@ function EmptyConversation({
               transition={{ delay: 0.18 + i * 0.06, duration: 0.3, ease: EASE }}
               whileHover={reduce ? undefined : { y: -2 }}
               whileTap={reduce ? undefined : { scale: 0.985 }}
-              onClick={() => onPick(s.prompt)}
+              onClick={() => onPick(t(s.prompt))}
               className="group flex cursor-pointer flex-col items-start gap-2 rounded-xl border border-border bg-card/60 p-3 text-left transition-colors hover:border-border-secondary hover:bg-card"
             >
               <span className="flex size-6 items-center justify-center rounded-md bg-brand/10 text-brand">
                 <SuggestionIcon size={12} weight="bold" />
               </span>
               <span className="text-[12px] text-foreground leading-tight">
-                {s.title}
+                {t(s.title)}
               </span>
               <span className="font-mono text-[9.5px] text-content-disabled">
-                {s.hint}
+                {t(s.hint)}
               </span>
             </motion.button>
           );
@@ -545,7 +555,7 @@ function EmptyConversation({
       </div>
       <div className="flex items-center gap-1.5 font-mono text-[9.5px] text-content-disabled">
         <Sparkle size={10} weight="fill" className="text-brand/60" />
-        press ⌘K for everything
+        {t('chat.pressK')}
       </div>
     </div>
   );
@@ -559,6 +569,7 @@ function WorkingIndicator({
   working: boolean;
   reduce: boolean;
 }) {
+  const t = useT();
   return (
     <AnimatePresence>
       {working && (
@@ -573,7 +584,9 @@ function WorkingIndicator({
         >
           <BrandMark size="sm" />
           <TypingDots className="text-content-secondary" />
-          <span className="shimmer-text font-mono text-[11px]">working…</span>
+          <span className="shimmer-text font-mono text-[11px]">
+            {t('chat.working')}
+          </span>
         </motion.div>
       )}
     </AnimatePresence>
@@ -590,6 +603,7 @@ function JumpToLatest({
   reduce: boolean;
   onClick: () => void;
 }) {
+  const t = useT();
   return (
     <AnimatePresence>
       {show && (
@@ -605,7 +619,7 @@ function JumpToLatest({
             className="pointer-events-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card/95 px-2.5 py-1 font-mono text-[10px] text-content-secondary shadow-lg/5 backdrop-blur transition-colors hover:border-border-secondary hover:text-foreground"
           >
             <ArrowDown size={11} />
-            latest
+            {t('chat.latest')}
           </motion.button>
         </div>
       )}
@@ -643,6 +657,7 @@ function Transcript({
   onPick: (prompt: string) => void;
   onScrollToLatest: () => void;
 }) {
+  const t = useT();
   const working =
     busy && rows.every((r) => r.role !== 'assistant' || !r.streaming);
   const showJump = !atBottom && rows.length > 0;
@@ -659,7 +674,7 @@ function Transcript({
         ) : (
           <div
             role="log"
-            aria-label="Messages"
+            aria-label={t('chat.messages')}
             aria-live="polite"
             className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-5 py-7"
           >
@@ -711,6 +726,7 @@ export function ChatView() {
   const stickRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const [draft, setDraft] = useState('');
+  const t = useT();
 
   const conv = conversations.find((c) => c.conversationId === activeId) ?? null;
   const scope = conv ? scopes.find((s) => s.id === conv.scopeId) : null;
@@ -788,7 +804,7 @@ export function ChatView() {
 
   return (
     <main
-      aria-label="Conversation"
+      aria-label={t('chat.conversation')}
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       {/* A folded sidebar leaves the traffic lights over this row's left. */}
@@ -807,7 +823,7 @@ export function ChatView() {
               <ChatCircleText size={12} />
             </span>
             <h1 className="min-w-0 truncate font-medium text-[13px]">
-              {conv.title ?? 'New conversation'}
+              {conv.title ?? t('common.newConversation')}
             </h1>
             {scope && (
               <Badge

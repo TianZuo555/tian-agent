@@ -20,17 +20,18 @@ import {
 } from '@/components/ui/alert-dialog';
 import type { DesktopStatus } from '../../shared/desktop';
 import { useServiceStatus } from './useServiceStatus';
+import { t, useT, type MessageKey } from '../i18n';
 
-const UPDATE_PHASES: Record<string, string> = {
-  preparing: '准备中',
-  'backed-up': '备份完成',
-  starting: '检查新版',
-  committed: '已完成',
-  'rolled-back': '已恢复旧版',
-  failed: '升级失败',
-  'waiting-for-exit': '等待 App 退出',
-  installing: '安装中',
-  'recovery-failed': '恢复失败',
+const UPDATE_PHASES: Record<string, MessageKey> = {
+  preparing: 'update.preparing',
+  'backed-up': 'update.backed-up',
+  starting: 'update.starting',
+  committed: 'update.committed',
+  'rolled-back': 'update.rolled-back',
+  failed: 'update.failed',
+  'waiting-for-exit': 'update.waiting-for-exit',
+  installing: 'update.installing',
+  'recovery-failed': 'update.recovery-failed',
 };
 
 function StatusRow({
@@ -66,25 +67,27 @@ function StatusRow({
 export function ServiceSettings({ active }: { active: boolean }) {
   const service = useServiceStatus(active);
   const { status, error } = service;
+  const t = useT();
   return (
-    <section className="grid gap-3" aria-label="服务与升级">
+    <section className="grid gap-3" aria-label={t('service.aria')}>
       <StatusCard status={status} />
       {status?.legacyService && (
         <p className="rounded-lg border border-border-warning/40 bg-warning/8 px-2.5 py-2 text-[11px] text-muted-foreground leading-relaxed">
-          旧版服务需要一次迁移：先停止旧版，再安装此 App
-          携带的配套服务。升级不会删除数据。
+          {t('service.legacyNote')}
         </p>
       )}
       <ConnectionActions service={service} />
       <p className="text-[10.5px] leading-relaxed text-muted-foreground">
-        断开连接后，后台任务继续执行；本窗口不会自动重连。停止服务会释放进程和数据库连接。
+        {t('service.disconnectNote')}
       </p>
       <LoginToggle service={service} />
       <UpdateActions service={service} />
       {status?.lastUpdate && (
         <p className="text-[10.5px] text-muted-foreground">
-          最近升级：
-          {UPDATE_PHASES[status.lastUpdate.phase] ?? status.lastUpdate.phase}
+          {t('service.lastUpdate')}
+          {UPDATE_PHASES[status.lastUpdate.phase]
+            ? t(UPDATE_PHASES[status.lastUpdate.phase])
+            : status.lastUpdate.phase}
           {status.lastUpdate.message ? ` · ${status.lastUpdate.message}` : ''}
         </p>
       )}
@@ -101,16 +104,17 @@ export function ServiceSettings({ active }: { active: boolean }) {
 type Service = ReturnType<typeof useServiceStatus>;
 
 function StatusCard({ status }: { status: DesktopStatus | null }) {
+  const t = useT();
   return (
     <div className="rounded-xl border border-border bg-secondary/25 px-3 py-2.5">
       <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5">
         <StatusRow
-          label="App 版本"
+          label={t('service.appVersion')}
           value={status?.appVersion ?? '—'}
           tone="neutral"
         />
         <StatusRow
-          label="后台服务"
+          label={t('service.background')}
           value={serviceLabel(status)}
           tone={
             status?.service
@@ -121,12 +125,16 @@ function StatusCard({ status }: { status: DesktopStatus | null }) {
           }
         />
         <StatusRow
-          label="本窗口连接"
-          value={status?.connected ? '已连接' : '已断开'}
+          label={t('service.window')}
+          value={
+            status?.connected
+              ? t('service.windowConnected')
+              : t('service.windowDisconnected')
+          }
           tone={status?.connected ? 'strong' : 'warning'}
         />
         <StatusRow
-          label="配套服务版本"
+          label={t('service.bundled')}
           value={status?.bundledServiceVersion ?? '—'}
           tone="neutral"
         />
@@ -134,15 +142,15 @@ function StatusCard({ status }: { status: DesktopStatus | null }) {
       {status?.activity && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 border-border/60 border-t pt-2">
           <Badge variant="outline" size="sm" className="font-mono">
-            活动任务 {status.activity.tasks}
+            {t('service.activityTasks', { count: status.activity.tasks })}
           </Badge>
           <Badge variant="outline" size="sm" className="font-mono">
-            工兵 {status.activity.runs}
+            {t('service.activityRuns', { count: status.activity.runs })}
           </Badge>
           {status.activity.maintenance && (
             <Badge variant="warning" size="sm" className="gap-1 font-mono">
               <span className="size-1 animate-pulse rounded-full bg-warning" />
-              维护中
+              {t('service.maintenance')}
             </Badge>
           )}
         </div>
@@ -154,12 +162,18 @@ function StatusCard({ status }: { status: DesktopStatus | null }) {
 function serviceLabel(status: DesktopStatus | null): string {
   if (!status) return '—';
   if (status.legacyService)
-    return status.legacyRunning ? '旧版运行中 · 待迁移' : '旧版已停止 · 待迁移';
-  if (status.service) return `运行中 · ${status.service.serviceVersion}`;
-  return status.installed ? '已停止' : '尚未安装';
+    return t(
+      status.legacyRunning ? 'service.legacyRunning' : 'service.legacyStopped',
+    );
+  if (status.service)
+    return t('service.running', {
+      version: status.service.serviceVersion,
+    });
+  return t(status.installed ? 'service.stopped' : 'service.notInstalled');
 }
 
 function ConnectionActions({ service }: { service: Service }) {
+  const t = useT();
   const { status, busy } = service;
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -175,7 +189,7 @@ function ConnectionActions({ service }: { service: Service }) {
           size={12}
           className={busy ? 'animate-spin' : undefined}
         />
-        刷新状态
+        {t('service.refresh')}
       </Button>
       <Button
         type="button"
@@ -187,7 +201,7 @@ function ConnectionActions({ service }: { service: Service }) {
         }
       >
         {status?.connected ? <Plugs size={12} /> : <PlugsConnected size={12} />}
-        {status?.connected ? '断开本窗口连接' : '连接服务'}
+        {t(status?.connected ? 'service.disconnectWindow' : 'service.connect')}
       </Button>
       <Button
         type="button"
@@ -199,7 +213,7 @@ function ConnectionActions({ service }: { service: Service }) {
         onClick={() => void service.run('start')}
       >
         <Power size={12} />
-        启动服务并连接
+        {t('service.start')}
       </Button>
       <Button
         type="button"
@@ -209,21 +223,24 @@ function ConnectionActions({ service }: { service: Service }) {
         onClick={() =>
           service.confirm({
             action: 'stop',
-            title: '停止后台服务？',
-            description: status?.legacyService
-              ? '旧版服务没有任务空闲检查。请先确认当前工作可以暂停；停止会通过正常退出流程保存可恢复的状态，随后可安装新版配套服务。会话与 Memory 保留。'
-              : '所有渠道将暂时无法使用总管。会话、任务和 Memory 会保留；重新打开 App 不会自动启动服务。正在执行的任务需要先完成。',
+            title: t('service.stopTitle'),
+            description: t(
+              status?.legacyService
+                ? 'service.stopDescLegacy'
+                : 'service.stopDesc',
+            ),
           })
         }
       >
         <Stop size={12} weight="fill" />
-        停止服务
+        {t('service.stop')}
       </Button>
     </div>
   );
 }
 
 function LoginToggle({ service }: { service: Service }) {
+  const t = useT();
   const { status, busy } = service;
   return (
     <Button
@@ -240,12 +257,15 @@ function LoginToggle({ service }: { service: Service }) {
       }
     >
       <ShieldCheck size={12} />
-      登录自启动：{status?.loginEnabled ? '已开启' : '已关闭'}
+      {t('service.loginToggle', {
+        state: t(status?.loginEnabled ? 'service.on' : 'service.off'),
+      })}
     </Button>
   );
 }
 
 function UpdateActions({ service }: { service: Service }) {
+  const t = useT();
   const { status, busy } = service;
   const recoverable =
     status?.lastUpdate &&
@@ -262,16 +282,17 @@ function UpdateActions({ service }: { service: Service }) {
           onClick={() =>
             service.confirm({
               action: 'install',
-              title: status?.installed
-                ? '升级配套后台服务？'
-                : '安装并启动后台服务？',
-              description:
-                '使用此 App 携带的服务和运行时。保留现有数据；升级时短暂断开连接，数据库会先备份。正在执行的任务需要先完成。',
+              title: t(
+                status?.installed
+                  ? 'service.installTitleUpgrade'
+                  : 'service.installTitle',
+              ),
+              description: t('service.installDesc'),
             })
           }
         >
           <DownloadSimple size={12} />
-          {status?.installed ? '升级配套服务' : '安装并启动服务'}
+          {t(status?.installed ? 'service.upgrade' : 'service.install')}
         </Button>
         <Button
           type="button"
@@ -280,7 +301,7 @@ function UpdateActions({ service }: { service: Service }) {
           disabled={busy || !status?.canUpdateApp}
           onClick={() => void service.chooseApp()}
         >
-          导入新版 App…
+          {t('service.importApp')}
         </Button>
         {recoverable && (
           <Button
@@ -290,13 +311,13 @@ function UpdateActions({ service }: { service: Service }) {
             disabled={busy}
             onClick={() => void service.run('recover')}
           >
-            恢复未完成升级
+            {t('service.recover')}
           </Button>
         )}
       </div>
       {!status?.canUpdateApp && (
         <p className="text-[10.5px] text-muted-foreground">
-          已打包的 macOS App 支持导入并安装新版 .app。
+          {t('service.packagedNote')}
         </p>
       )}
     </>
@@ -305,12 +326,14 @@ function UpdateActions({ service }: { service: Service }) {
 
 function ConfirmUpdate({ service }: { service: Service }) {
   const { confirmation, confirmOpen, busy, error } = service;
-  const verb =
+  const t = useT();
+  const verb = t(
     confirmation?.action === 'stop'
-      ? '停止'
+      ? 'service.confirmStop'
       : confirmation?.action === 'install'
-        ? '安装 / 升级'
-        : '升级并重启';
+        ? 'service.confirmInstall'
+        : 'service.confirmApply',
+  );
   return (
     <AlertDialog
       open={confirmOpen}
@@ -332,7 +355,7 @@ function ConfirmUpdate({ service }: { service: Service }) {
           <AlertDialogClose
             render={<Button type="button" variant="ghost" disabled={busy} />}
           >
-            取消
+            {t('common.cancel')}
           </AlertDialogClose>
           <Button
             type="button"
@@ -342,7 +365,7 @@ function ConfirmUpdate({ service }: { service: Service }) {
             }
             onClick={() => void service.apply()}
           >
-            确认{verb}
+            {verb}
           </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>

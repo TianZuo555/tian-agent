@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   ArrowLeft,
   ArrowsClockwise,
@@ -8,6 +8,7 @@ import {
   Gear,
   Notebook,
   Pulse,
+  Translate,
   X,
 } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
@@ -25,17 +26,26 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { actions, useStore } from '../store';
+import {
+  LOCALES,
+  setLocale,
+  useLocale,
+  useT,
+  type Locale,
+  type MessageKey,
+} from '../i18n';
 import { SidebarToggle } from './SidebarToggle';
 import { ContextToggle } from './ContextToggle';
 import { UsageHeatmap } from './UsageHeatmap';
 import { ServiceSettings } from './ServiceSettings';
 import { ImprovementLog } from './ImprovementLog';
 
-const SECTIONS: { id: string; label: string; icon: Icon }[] = [
-  { id: 'model', label: 'Model', icon: Cpu },
-  { id: 'usage', label: 'Usage', icon: ChartBar },
-  { id: 'log', label: 'Log', icon: Notebook },
-  { id: 'service', label: 'Service', icon: Pulse },
+const SECTIONS: { id: string; label: MessageKey; icon: Icon }[] = [
+  { id: 'general', label: 'settings.section.general', icon: Translate },
+  { id: 'model', label: 'settings.section.model', icon: Cpu },
+  { id: 'usage', label: 'settings.section.usage', icon: ChartBar },
+  { id: 'log', label: 'settings.section.log', icon: Notebook },
+  { id: 'service', label: 'settings.section.service', icon: Pulse },
 ];
 
 function SectionTitle({
@@ -83,7 +93,48 @@ function Section({
   );
 }
 
+function GeneralSection() {
+  const t = useT();
+  const locale = useLocale();
+  const items = LOCALES.map((l) => ({ label: l.label, value: l.id }));
+  const current = items.find((item) => item.value === locale) ?? items[0];
+  return (
+    <Section
+      id="general"
+      title={t('settings.section.general')}
+      icon={Translate}
+    >
+      <Field>
+        <FieldLabel htmlFor="settings-language">
+          {t('settings.language')}
+        </FieldLabel>
+        <Select
+          items={items}
+          value={current}
+          onValueChange={(v) => {
+            const next = v as { value: string } | null;
+            if (next) setLocale(next.value as Locale);
+          }}
+        >
+          <SelectTrigger id="settings-language">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {items.map((item) => (
+              <SelectItem key={item.value} value={item}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <FieldDescription>{t('settings.languageDesc')}</FieldDescription>
+      </Field>
+    </Section>
+  );
+}
+
 function ModelSection() {
+  const t = useT();
   const settings = useStore((s) => s.settings);
   const catalog = useStore((s) => s.catalog);
   const savedId = settings?.model.modelId ?? '';
@@ -104,11 +155,11 @@ function ModelSection() {
   return (
     <Section
       id="model"
-      title="Model"
+      title={t('settings.section.model')}
       icon={Cpu}
       trailing={
         <span className="font-mono text-[9.5px] text-content-disabled">
-          {models.length} available
+          {t('model.available', { count: models.length })}
         </span>
       }
     >
@@ -125,7 +176,7 @@ function ModelSection() {
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-[12px]">
-              {catalog?.ok ? 'Magpie connected' : 'Magpie unreachable'}
+              {t(catalog?.ok ? 'model.connected' : 'model.unreachable')}
             </div>
             <div className="truncate font-mono text-[10px] text-content-secondary">
               {catalog?.baseUrl}
@@ -149,12 +200,12 @@ function ModelSection() {
               size={12}
               className={refreshing ? 'animate-spin' : undefined}
             />
-            Refresh
+            {t('model.refresh')}
           </Button>
         </div>
 
         <Field>
-          <FieldLabel htmlFor="settings-model">Default model</FieldLabel>
+          <FieldLabel htmlFor="settings-model">{t('model.default')}</FieldLabel>
           <Select
             items={items}
             value={current}
@@ -164,7 +215,7 @@ function ModelSection() {
             }}
           >
             <SelectTrigger id="settings-model">
-              <SelectValue placeholder="Choose a model" />
+              <SelectValue placeholder={t('model.choose')} />
             </SelectTrigger>
             <SelectPopup>
               {items.map((m) => (
@@ -177,10 +228,7 @@ function ModelSection() {
               ))}
             </SelectPopup>
           </Select>
-          <FieldDescription>
-            New conversations use the selected model; existing ones keep the
-            model they started with.
-          </FieldDescription>
+          <FieldDescription>{t('model.desc')}</FieldDescription>
         </Field>
 
         <div className="flex items-center gap-2">
@@ -199,29 +247,34 @@ function ModelSection() {
             }}
           >
             <Check size={13} weight="bold" />
-            Save model
+            {t('model.save')}
           </Button>
           <span role="status" className="text-[11px] text-content-secondary">
             {dirty
-              ? 'Unsaved change'
+              ? t('model.unsaved')
               : settings
-                ? `Using ${settings.model.modelId}`
+                ? t('model.using', { id: settings.model.modelId })
                 : ''}
           </span>
         </div>
 
         <div className="rounded-xl border border-border px-3 py-2.5">
           <div className="mb-1 flex items-center gap-2">
-            <span className="font-medium text-[12px]">Gateway override</span>
+            <span className="font-medium text-[12px]">
+              {t('model.gatewayTitle')}
+            </span>
             <Badge variant="outline" size="sm" className="font-mono">
               MAGPIE_BASE_URL
             </Badge>
           </div>
           <p className="text-[11px] text-content-secondary leading-relaxed">
-            Set <code className="font-mono">MAGPIE_BASE_URL</code> and{' '}
-            <code className="font-mono">MAGPIE_API_KEY</code> to point at a
-            different gateway. Defaults to{' '}
-            <code className="font-mono">http://127.0.0.1:3425/v1</code>.
+            {t('model.gatewayDesc.pre')}
+            <code className="font-mono">MAGPIE_BASE_URL</code>
+            {t('model.gatewayDesc.mid')}
+            <code className="font-mono">MAGPIE_API_KEY</code>
+            {t('model.gatewayDesc.post')}
+            <code className="font-mono">http://127.0.0.1:3425/v1</code>
+            {t('model.gatewayDesc.tail')}
           </p>
         </div>
       </div>
@@ -230,6 +283,7 @@ function ModelSection() {
 }
 
 function UsageSection() {
+  const t = useT();
   const scopeId = useStore((s) => s.activeScopeId);
   const scopes = useStore((s) => s.scopes);
   const [allScopes, setAllScopes] = useState(false);
@@ -237,7 +291,7 @@ function UsageSection() {
   return (
     <Section
       id="usage"
-      title="Usage"
+      title={t('settings.section.usage')}
       icon={ChartBar}
       trailing={
         <div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
@@ -263,7 +317,7 @@ function UsageSection() {
                 : 'text-content-secondary hover:text-foreground'
             }`}
           >
-            All scopes
+            {t('common.allScopes')}
           </button>
         </div>
       }
@@ -276,16 +330,17 @@ function UsageSection() {
 }
 
 function LogSection() {
+  const t = useT();
   const improvements = useStore((s) => s.improvements);
   const open = improvements.filter((entry) => entry.status === 'open').length;
   return (
     <Section
       id="log"
-      title="Log"
+      title={t('settings.section.log')}
       icon={Notebook}
       trailing={
         <span className="font-mono text-[9.5px] text-content-disabled">
-          {open} open · {improvements.length} total
+          {t('log.sectionMeta', { open, total: improvements.length })}
         </span>
       }
     >
@@ -295,8 +350,9 @@ function LogSection() {
 }
 
 function ServiceSection() {
+  const t = useT();
   return (
-    <Section id="service" title="Service" icon={Pulse}>
+    <Section id="service" title={t('settings.section.service')} icon={Pulse}>
       <ServiceSettings active />
     </Section>
   );
@@ -313,17 +369,18 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
   const catalog = useStore((s) => s.catalog);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const reduce = useReducedMotion();
-  const meta = useMemo(
-    () =>
-      `magpie ${catalog?.ok ? 'online' : 'offline'}${
-        openImprovements ? ` · ${openImprovements} open` : ''
-      }`,
-    [catalog?.ok, openImprovements],
-  );
+  const t = useT();
+  const meta = `${t(
+    catalog?.ok ? 'settings.magpieOnline' : 'settings.magpieOffline',
+  )}${
+    openImprovements
+      ? ` · ${t('settings.openCount', { count: openImprovements })}`
+      : ''
+  }`;
 
   return (
     <main
-      aria-label="Settings"
+      aria-label={t('settings.aria')}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       {/* The traffic lights always cover this row's left in the boot view,
@@ -340,7 +397,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
         >
           <Gear size={12} />
         </span>
-        <h1 className="font-medium text-[13px]">Settings</h1>
+        <h1 className="font-medium text-[13px]">{t('nav.settings')}</h1>
         <span className="truncate font-mono text-[9.5px] text-content-disabled">
           {meta}
         </span>
@@ -352,7 +409,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
             onClick={onBack}
           >
             <ArrowLeft size={13} />
-            Back
+            {t('common.back')}
           </Button>
         ) : (
           <div className="ml-auto flex items-center gap-1 [-webkit-app-region:no-drag]">
@@ -363,7 +420,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label="Close settings"
+                    aria-label={t('settings.closeAria')}
                     className="text-content-secondary"
                     onClick={() => actions.toggleSettings()}
                   />
@@ -371,7 +428,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
               >
                 <X size={15} />
               </TooltipTrigger>
-              <TooltipPopup>Close</TooltipPopup>
+              <TooltipPopup>{t('common.close')}</TooltipPopup>
             </Tooltip>
           </div>
         )}
@@ -379,7 +436,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
 
       <div className="@container flex min-h-0 flex-1">
         <nav
-          aria-label="Settings sections"
+          aria-label={t('settings.sectionsNav')}
           className="hidden w-40 shrink-0 flex-col gap-0.5 border-border border-r px-2 py-3 @[44rem]:flex"
         >
           {SECTIONS.map(({ id, label, icon: SectionIcon }) => (
@@ -395,7 +452,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
               className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-content-secondary transition-colors hover:bg-secondary/60 hover:text-foreground"
             >
               <SectionIcon size={13} className="shrink-0" />
-              {label}
+              {t(label)}
             </button>
           ))}
         </nav>
@@ -406,6 +463,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
           scrollFade
         >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-7 px-5 py-6">
+            <GeneralSection />
             <ModelSection />
             <UsageSection />
             <LogSection />

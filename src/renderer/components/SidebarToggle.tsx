@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip';
 import { actions, useStore } from '../store';
+import { useT } from '../i18n';
 
 /**
  * The navigation sidebar's toggle, carried at the head of the content pane
@@ -11,7 +12,8 @@ import { actions, useStore } from '../store';
  */
 export function SidebarToggle() {
   const open = useStore((s) => s.sidebarOpen);
-  const label = open ? 'Hide sidebar' : 'Show sidebar';
+  const t = useT();
+  const label = t(open ? 'toggle.hideSidebar' : 'toggle.showSidebar');
   return (
     <Tooltip>
       <TooltipTrigger

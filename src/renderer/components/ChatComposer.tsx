@@ -3,6 +3,7 @@ import { ArrowUp, Stop } from '@phosphor-icons/react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { useT } from '../i18n';
 import { EASE } from './motion-primitives';
 
 /** Send ⇄ stop button pair that cross-fades as the run starts and ends. */
@@ -21,6 +22,7 @@ function SendOrStop({
   onSend: () => void;
   onStop: () => void;
 }) {
+  const t = useT();
   const transition = { duration: 0.16, ease: EASE };
   return (
     <div className="relative flex size-8 shrink-0 items-center justify-center">
@@ -36,7 +38,7 @@ function SendOrStop({
             <Button
               variant="secondary"
               size="icon-sm"
-              aria-label="Stop"
+              aria-label={t('composer.stop')}
               disabled={disabled}
               className="relative overflow-visible"
               onClick={onStop}
@@ -55,7 +57,7 @@ function SendOrStop({
           >
             <Button
               size="icon-sm"
-              aria-label="Send"
+              aria-label={t('composer.send')}
               disabled={!canSend}
               className={`transition-[opacity,filter] ${
                 canSend
@@ -84,7 +86,7 @@ export function ChatComposer({
   onValueChange,
   onSend,
   onStop,
-  placeholder = 'Message the steward…',
+  placeholder,
   textareaRef,
 }: {
   busy: boolean;
@@ -100,6 +102,7 @@ export function ChatComposer({
   const ref = textareaRef ?? localRef;
   const [focused, setFocused] = useState(false);
   const reduce = useReducedMotion();
+  const t = useT();
 
   // Grow with content up to ~8 lines, then scroll.
   useLayoutEffect(() => {
@@ -155,8 +158,12 @@ export function ChatComposer({
                 submit();
               }
             }}
-            placeholder={disabled ? 'Waiting for the service…' : placeholder}
-            aria-label="Message"
+            placeholder={
+              disabled
+                ? t('composer.waiting')
+                : (placeholder ?? t('composer.placeholder'))
+            }
+            aria-label={t('composer.message')}
             rows={1}
             className="max-h-[200px] min-h-[34px] flex-1 resize-none bg-transparent px-2.5 py-1.5 text-[13.5px] leading-relaxed outline-none placeholder:text-content-disabled disabled:cursor-not-allowed"
           />
@@ -185,15 +192,15 @@ export function ChatComposer({
                 <div className="flex items-center gap-3 border-border border-t px-3.5 py-1.5 font-mono text-[10px] text-content-disabled">
                   <span className="flex items-center gap-1">
                     <Kbd className="h-4 min-w-4 px-1 text-[9px]">↵</Kbd>
-                    send
+                    {t('composer.sendHint')}
                   </span>
                   <span className="flex items-center gap-1">
                     <Kbd className="h-4 min-w-4 px-1 text-[9px]">⇧↵</Kbd>
-                    new line
+                    {t('composer.newLineHint')}
                   </span>
                   <span className="ml-auto hidden items-center gap-1 sm:flex">
                     <span className="size-1.5 rounded-full bg-content-secondary" />
-                    {busy ? 'working' : 'ready'}
+                    {busy ? t('composer.working') : t('composer.ready')}
                   </span>
                 </div>
               </motion.div>

@@ -1,4 +1,5 @@
 import type { TianApi } from '../shared/contracts';
+import { t } from './i18n';
 import type {
   ChatSnapshot,
   ConversationInfo,
@@ -451,7 +452,7 @@ export function createAppStore(api: TianApi) {
         // outside Core when the rendered budget cannot fit it.
         set({
           memoryNotice: result.coreDropped
-            ? `Saved #${result.seq}, but it no longer fits Core Memory and is only searchable. Free Core budget and select it to make it resident again.`
+            ? t('memory.savedDropped', { seq: result.seq })
             : null,
         });
       } catch (reason) {
