@@ -333,6 +333,7 @@ function NoticeCard({ row }: { row: MessageRow }) {
           size={10}
           weight="fill"
           className="shrink-0 text-content-disabled"
+          aria-hidden="true"
         />
         <span className="min-w-0 truncate font-mono text-[9.5px] text-content-disabled tracking-[0.1em]">
           {head.label ?? t('chat.notification')}
