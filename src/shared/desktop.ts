@@ -42,7 +42,15 @@ export const desktopActions = [
   'ready',
 ] as const;
 export type DesktopAction = (typeof desktopActions)[number];
+export const themeNames = ['system', 'light', 'dark'] as const;
+export type ThemeName = (typeof themeNames)[number];
 export interface DesktopApi {
+  /**
+   * The renderer's appearance choice. Kept on `nativeTheme.themeSource` so the
+   * window's vibrancy material and background follow the app theme rather than
+   * only the OS appearance.
+   */
+  setTheme(theme: ThemeName): void;
   desktop(action: 'choose-app'): Promise<AppCandidate | null>;
   desktop(
     action: Exclude<DesktopAction, 'choose-app' | 'apply-app' | 'cancel-app'>,

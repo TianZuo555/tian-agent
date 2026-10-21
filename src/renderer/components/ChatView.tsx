@@ -864,10 +864,7 @@ export function ChatView() {
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
     >
       {/* A folded sidebar leaves the traffic lights over this row's left. */}
-      <PaneHeader
-        clearance={!sidebarOpen}
-        className="bg-background/80 backdrop-blur-md"
-      >
+      <PaneHeader clearance={!sidebarOpen}>
         <SidebarToggle />
         {conv ? (
           <>

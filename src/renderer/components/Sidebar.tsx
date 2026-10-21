@@ -377,7 +377,7 @@ function ScopeSection(props: {
 function SidebarBrand() {
   return (
     <div className="flex h-11 shrink-0 items-center gap-1.5 pr-1 pl-20 [-webkit-app-region:drag]">
-      <div className="flex h-7 items-center gap-1.5 rounded-lg border border-border bg-card px-2 shadow-sm/5">
+      <div className="flex h-7 items-center gap-1.5 rounded-lg border border-border/60 bg-card/80 px-2 shadow-sm/5 backdrop-blur-md dark:border-white/[0.08] dark:bg-card/50">
         <BrandMark size="sm" />
         <span className="font-semibold text-[12.5px] text-foreground tracking-tight">
           Tian
@@ -676,7 +676,7 @@ export function Sidebar() {
   return (
     <aside
       aria-label={t('sidebar.navigation')}
-      className="flex min-h-0 w-full flex-col bg-window text-sidebar-foreground dark:bg-white/[0.045] dark:backdrop-blur-2xl"
+      className="flex min-h-0 w-full flex-col bg-white/20 text-sidebar-foreground shadow-[inset_0_1px_0_0_rgba(255,255,255,0.2)] backdrop-blur-2xl dark:bg-white/[0.035] dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]"
     >
       <SidebarBrand />
 

@@ -43,6 +43,7 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     desktop: (async () => {
       throw new Error('Unused desktop operation');
     }) as TianApi['desktop'],
+    setTheme: () => {},
     getActivity: async () => ({
       tasks: 0,
       submissions: 0,

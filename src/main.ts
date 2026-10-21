@@ -2,7 +2,12 @@ import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { DesktopController } from './desktop/controller.js';
-import { desktopActions, type DesktopAction } from './shared/desktop.js';
+import {
+  desktopActions,
+  themeNames,
+  type DesktopAction,
+  type ThemeName,
+} from './shared/desktop.js';
 import { servicePaths } from './shared/service-paths.js';
 import { validateCommand } from './shared/contracts.js';
 import { mkdirSync } from 'node:fs';
@@ -32,6 +37,7 @@ const broadcast: Emit = (channel, payload, clientId) => {
 };
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin';
   const window = new BrowserWindow({
     show: process.env.TIAN_AGENT_SHOW_WINDOW !== '0',
     width: 1280,
@@ -41,7 +47,13 @@ function createWindow(): void {
     title: 'Tian Agent',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 14, y: 15 },
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#171719' : '#fbfbfc',
+    backgroundColor: isMac
+      ? '#00000000'
+      : nativeTheme.shouldUseDarkColors
+        ? '#171719'
+        : '#fbfbfc',
+    vibrancy: isMac ? 'under-window' : undefined,
+    visualEffectState: isMac ? 'active' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -133,6 +145,17 @@ if (primaryInstance)
             });
         },
       );
+      // The renderer's theme choice steers the native appearance so vibrancy
+      // and the window backing match the app's surfaces, not just the OS.
+      ipcMain.on('tian:theme', (event, theme: unknown) => {
+        if (
+          event.senderFrame !== event.sender.mainFrame ||
+          !BrowserWindow.fromWebContents(event.sender) ||
+          !themeNames.includes(theme as ThemeName)
+        )
+          return;
+        nativeTheme.themeSource = theme as ThemeName;
+      });
       ipcMain.handle(
         'tian:invoke',
         async (event, command: unknown, args: unknown) => {
