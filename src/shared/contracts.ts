@@ -35,8 +35,9 @@ export interface Commands {
   beginMaintenance: Command<[], ServiceActivity>;
   finishMaintenance: Command<[], void>;
   listScopes: Command<[], ScopeInfo[]>;
+  /** Register a project with its required, named manager (D18). */
   addProject: Command<
-    [name: string, rootPath: string, managerName?: string | null],
+    [name: string, rootPath: string, managerName: string],
     ScopeInfo[]
   >;
   updateProject: Command<[id: string, patch: ProjectPatch], ScopeInfo[]>;
@@ -147,7 +148,7 @@ const patch = Type.Partial(
     runTimeoutMin: Type.Integer({ minimum: 0, maximum: 1440 }),
     baseBranch: Type.String({ minLength: 1, maxLength: 256 }),
     promptPreamble: Type.String({ maxLength: 100_000 }),
-    managerName: Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),
+    managerName: Type.String({ minLength: 1, maxLength: 200 }),
   }),
   { additionalProperties: false },
 );
@@ -174,18 +175,11 @@ export const commandArgs = {
   beginMaintenance: Type.Tuple([]),
   finishMaintenance: Type.Tuple([]),
   listScopes: Type.Tuple([]),
-  // The manager name is optional, so adding a project stays a two-argument
-  // call for clients that do not name one yet.
-  addProject: Type.Union([
-    Type.Tuple([
-      Type.String({ minLength: 1, maxLength: 200 }),
-      Type.String({ minLength: 1, maxLength: 4096 }),
-    ]),
-    Type.Tuple([
-      Type.String({ minLength: 1, maxLength: 200 }),
-      Type.String({ minLength: 1, maxLength: 4096 }),
-      Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),
-    ]),
+  // Every project comes with its named manager (D18).
+  addProject: Type.Tuple([
+    Type.String({ minLength: 1, maxLength: 200 }),
+    Type.String({ minLength: 1, maxLength: 4096 }),
+    Type.String({ minLength: 1, maxLength: 200 }),
   ]),
   updateProject: Type.Tuple([id, patch]),
   removeProject: Type.Tuple([id]),

@@ -101,7 +101,7 @@ export const zh: Partial<Messages> = {
   'sidebar.restoreAction': '恢复会话：{title}',
   'sidebar.openSettings': '打开设置',
   'sidebar.addProjectTitle': '新建项目',
-  'sidebar.addProjectDesc': '将一个目录注册为总管的项目 Scope。',
+  'sidebar.addProjectDesc': '将一个目录注册为项目，并为它指定一位管理者。',
   'sidebar.projectName': '名称',
   'sidebar.projectNameAria': '项目名称',
   'sidebar.projectPath': '/path/to/project',
@@ -563,6 +563,6 @@ export const zh: Partial<Messages> = {
   'project.managerName': 'Manager 名称',
   'project.managerNamePlaceholder': '例如：阿七',
   'project.managerNameHint':
-    '总管用这个名字称呼项目管理者。可以留空（未命名）；填名字不会创建管理者——需要先打开该项目的管理者。',
+    '必填。每个项目都有一位管理者，负责本项目的记忆与笔记；你和总管都用这个名字称呼它。',
   'project.saveAria': '保存 {name} 的设置',
 };

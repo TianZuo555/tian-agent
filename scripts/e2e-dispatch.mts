@@ -48,9 +48,9 @@ async function until(predicate: () => boolean): Promise<void> {
 
 try {
   await service.init();
-  const project = service
-    .addProject('temporary', projectPath)
-    .find((scope) => scope.kind === 'project')!;
+  const project = (
+    await service.addProject('temporary', projectPath, 'Manager')
+  ).find((scope) => scope.kind === 'project')!;
   const conversation = await service.createConversation(project.id);
   await service.watch(conversation.conversationId);
   const run = await service.dispatchRun({

@@ -14,6 +14,7 @@ import type {
 } from './db.js';
 import type { DataService } from './data.js';
 import {
+  ReadScopeParam,
   ScopeParam,
   coreMemorySection,
   memoryTools,
@@ -27,12 +28,7 @@ import type { ImprovementStore } from './improvements.js';
 import type { GoalStore } from './goals.js';
 import { goalsTools } from './tools-goals.js';
 import { workerModelLine, type WorkerModelChoice } from './run-model.js';
-import {
-  managerClause,
-  managerLabel,
-  managerName,
-  noManagerError,
-} from './manager-label.js';
+import { managerClause, managerName } from './manager-label.js';
 import { describeRunProgress, type RunProgress } from './run-progress.js';
 
 export interface ChiefDeps {
@@ -151,12 +147,13 @@ export function chiefExtension(deps: ChiefDeps) {
 
 The user is Tian. Answer in the language they use (Chinese by default). Be direct, brief, and concrete.
 
-MEMORY. Your memory outlives every session — without it you do not know who Tian is or what was decided. It is already loaded into context (see <memory>), do not re-read it.
-- remember "<one line>" whenever you learn something lasting: a fact about Tian, a project decision, an outcome, a preference. Judge what is worth keeping; never record trivia. Set source "user" when Tian states it explicitly, target "global" for facts about Tian, "project" for facts about the project.
+MEMORY. Your memory outlives every session — without it you do not know who Tian is or what was decided. Yours is the General memory: who Tian is, his preferences, people, cross-project decisions and outcomes. It is already loaded into context (see <memory>), do not re-read it.
+- remember "<one line>" whenever you learn something lasting about Tian or across projects. Judge what is worth keeping; never record trivia. Set source "user" when Tian states it explicitly.
 - When Tian corrects something, call revise on that memory's #seq — never append a contradicting line. forget #seq removes a memory that should not exist at all.
-- recall "<query>" keyword search over memory (Chinese included; all words must appear, words under 3 characters use substring matching); results carry #seq, kind, trust, date and source. Pass include_history to see superseded or deleted memories.
+- recall "<query>" keyword search over General memory (Chinese included; all words must appear, words under 3 characters use substring matching); results carry #seq, kind, trust, date and source. Pass include_history to see superseded or deleted memories.
 - Core Memory is a small explicit selection, not everything you know. New memories are searchable but NOT resident: call select #seq when a fact must be visible every turn, and deselect #seq to free budget without forgetting. Over-budget selections are rejected with current usage — nothing is silently dropped or evicted. A memory leaving Core is still active and searchable.
-- You are the only writer of memory. Dispatched workers read only the exported memory/MEMORY.md and never write memory.
+- Project detail is not yours. Each project's manager keeps that project's memory and notes (conventions, architecture, project decisions and outcomes); they are not in your context and you cannot write them. When you learn something about a project, hand it to its manager (send_manager_msg, or the delegate briefing) so it records it. For a quick answer, recall / list_notes / read_note / search_notes with scope set to the project read its memory and notes — read only. Its #seq numbers belong to that project: revise, forget, select and deselect always act on General memory.
+- Dispatched workers read only the project's exported memory/MEMORY.md and never write memory.
 
 WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each belongs to a scope with success criteria, constraints, a current state and a next action, and gets its own conversation (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. dispatch(project, prompt, task) records code work on a task id from <state>.
 
@@ -164,9 +161,9 @@ DISPATCH. You command, others execute. You have no shell and cannot edit code �
 
 WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
-MANAGERS. Each project can have a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. <state> and list_scopes show every project with its manager (for example '- tian-agent (/path) — manager: 阿七'), and 'manager: 无' when the project has no manager yet (Tian opens one from the project's manager button in the sidebar). A manager name is only what Tian calls it; it does not exist until that conversation is opened, and delegate/send_manager_msg tell you so instead of creating one. Address the manager by its name when you talk about it. delegate(project, title, briefing, goal?) hands it a management task: the task is assigned to the manager and you are woken when it closes with the outcome. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Delegated tasks are the manager's — do not start_task/complete_task/fail_task or send_run_msg its runs yourself; steer with send_manager_msg. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate substantial multi-step project work; keep one-off questions and quick code changes on dispatch yourself.
+MANAGERS. Every project has a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. <state> and list_scopes show every project with its manager's name (for example '- tian-agent (/path) — manager: 阿七'). Address the manager by its name when you talk about it. delegate(project, title, briefing, goal?) hands it a management task: the task is assigned to the manager and you are woken when it closes with the outcome. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Delegated tasks are the manager's — do not start_task/complete_task/fail_task or send_run_msg its runs yourself; steer with send_manager_msg. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate substantial multi-step project work; keep one-off questions and quick code changes on dispatch yourself.
 
-SCOPES. This conversation is bound to one scope. Tools take an optional scope parameter to read or write across scopes — to answer "how are my projects" from General, query them. To write memory about another scope, pass its scope to remember.
+SCOPES. This conversation is bound to one scope. Task, inbox, goal and history tools take an optional scope parameter to work across scopes — to answer "how are my projects" from General, query them. Memory and notes follow ownership instead: your memory and notes tools default to General and write only General; a scope parameter on recall and the note readers reads a project read-only.
 
 HISTORY. Everything said or done stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. The scope defaults to this conversation's scope; pass scope "all" to search everything. If nothing matches, say plainly that no record was found — never invent history.
 
@@ -174,7 +171,18 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     { tag: false },
   );
 
-  const memorySection = coreMemorySection(deps);
+  // The chief's Core is General only (D18): project detail stays with that
+  // project's manager and is read on demand with recall(scope).
+  const memorySection = coreMemorySection(deps, { withProject: false });
+  /** Memory and notes reads default to General; a scope reads a project. */
+  const readScope = (conversationId: string, param?: string): string =>
+    param ? resolveScope(deps, conversationId, param) : GLOBAL_SCOPE;
+  /** Header that marks another scope's memory or notes as read-only. */
+  const readOnlyNote = (scope: string): string => {
+    if (scope === GLOBAL_SCOPE) return '';
+    const project = db.getProject(scope);
+    return `[${project?.name ?? scope} — read-only; owned by ${project ? managerName(project) : 'its manager'}. To change it, tell the manager with send_manager_msg.]\n`;
+  };
 
   const stateSection = section('state', (input) => {
     const scope = db.conversationScope(String(input.conversationId));
@@ -231,12 +239,12 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     if (projects.length > 0) {
       lines.push(`projects (${projects.length}):`);
       for (const p of projects.slice(0, 20))
-        lines.push(`- ${p.name} (${p.rootPath})${managerClause(db, p)}`);
+        lines.push(`- ${p.name} (${p.rootPath})${managerClause(p)}`);
       if (projects.length > 20)
         lines.push(`… and ${projects.length - 20} more projects`);
     }
     const header = [
-      `scope: ${project ? `${project.name} (${project.rootPath})${managerClause(db, project)}` : 'General'}`,
+      `scope: ${project ? `${project.name} (${project.rootPath})${managerClause(project)}` : 'General'}`,
       `now: ${new Date().toISOString().slice(0, 16)}`,
     ];
     return lines.length > 0
@@ -247,7 +255,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   const recall = defineTool({
     name: 'recall',
     description:
-      "Keyword search over a scope's memories (Chinese included; every word must appear, words under 3 characters fall back to substring matching). Active memories by default; each hit shows #seq, kind, trust, date and source. Results are relevance-ranked and bounded by limit and a token budget.",
+      "Keyword search over General memory, or a project's memory read-only (Chinese included; every word must appear, words under 3 characters fall back to substring matching). Active memories by default; each hit shows #seq, kind, trust, date and source. Results are relevance-ranked and bounded by limit and a token budget.",
     parameters: Type.Object({
       query: Type.String({
         description:
@@ -262,16 +270,17 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       limit: Type.Optional(
         Type.Integer({ minimum: 1, maximum: 100, description: 'Default 20.' }),
       ),
-      scope: ScopeParam,
+      scope: ReadScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
+        const scope = readScope(String(api.conversationId), args.scope);
         return text(
-          scopes.memory(scope).recall(args.query, {
-            includeHistory: args.include_history ?? false,
-            limit: args.limit,
-          }),
+          readOnlyNote(scope) +
+            scopes.memory(scope).recall(args.query, {
+              includeHistory: args.include_history ?? false,
+              limit: args.limit,
+            }),
         );
       } catch (e) {
         return err(String(e));
@@ -282,14 +291,14 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   const listScopes = defineTool({
     name: 'list_scopes',
     description:
-      "List all scopes: General plus every registered project (id, name, path, and the manager's name — `manager: 无` means no manager is configured).",
+      "List all scopes: General plus every registered project (id, name, path, and its manager's name).",
     parameters: Type.Object({}),
     execute: async () => {
       const projects = db.listProjects();
       const lines = [
         `global — General`,
         ...projects.map(
-          (p) => `${p.id} — ${p.name} (${p.rootPath})${managerClause(db, p)}`,
+          (p) => `${p.id} — ${p.name} (${p.rootPath})${managerClause(p)}`,
         ),
       ];
       return text(lines.join('\n'));
@@ -408,29 +417,39 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
 
   const listNotes = defineTool({
     name: 'list_notes',
-    description: 'List markdown notes of a scope.',
-    parameters: Type.Object({ scope: ScopeParam }),
+    description:
+      "List the General markdown notes, or a project's notes read-only.",
+    parameters: Type.Object({ scope: ReadScopeParam }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      const names = scopes.listNotes(scope);
-      return text(names.length === 0 ? '(no notes)' : names.join('\n'));
+      try {
+        const scope = readScope(String(api.conversationId), args.scope);
+        const names = scopes.listNotes(scope);
+        return text(
+          readOnlyNote(scope) +
+            (names.length === 0 ? '(no notes)' : names.join('\n')),
+        );
+      } catch (e) {
+        return err(String(e));
+      }
     },
   });
 
   const readNote = defineTool({
     name: 'read_note',
     description:
-      'Read a markdown note of a scope. Pass a search_notes hit like "plan.md:42" to open a bounded window around that line.',
+      'Read a General note, or a project\'s note read-only. Pass a search_notes hit like "plan.md:42" to open a bounded window around that line.',
     parameters: Type.Object({
       name: Type.String({
         description: 'Note name, optionally with ":<line>" from search_notes.',
       }),
-      scope: ScopeParam,
+      scope: ReadScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        return text(scopes.readNoteWindow(scope, args.name));
+        const scope = readScope(String(api.conversationId), args.scope);
+        return text(
+          readOnlyNote(scope) + scopes.readNoteWindow(scope, args.name),
+        );
       } catch (e) {
         return err(String(e));
       }
@@ -439,42 +458,36 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
 
   const writeNote = defineTool({
     name: 'write_note',
-    description: 'Create or overwrite a markdown note of a scope.',
+    description:
+      "Create or overwrite a General note. Project notes are the manager's.",
     parameters: Type.Object({
       name: Type.String(),
       content: Type.String(),
-      scope: ScopeParam,
     }),
-    execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      scopes.writeNote(scope, args.name, args.content);
-      return text(
-        `note "${args.name}" written in [${scope === GLOBAL_SCOPE ? 'global' : scope}].`,
-      );
+    execute: async (args) => {
+      scopes.writeNote(GLOBAL_SCOPE, args.name, args.content);
+      return text(`note "${args.name}" written in [global].`);
     },
   });
 
   const appendNote = defineTool({
     name: 'append_note',
-    description: 'Append text to a markdown note of a scope.',
+    description:
+      "Append text to a General note. Project notes are the manager's.",
     parameters: Type.Object({
       name: Type.String(),
       content: Type.String(),
-      scope: ScopeParam,
     }),
-    execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      scopes.appendNote(scope, args.name, args.content);
-      return text(
-        `appended to "${args.name}" in [${scope === GLOBAL_SCOPE ? 'global' : scope}].`,
-      );
+    execute: async (args) => {
+      scopes.appendNote(GLOBAL_SCOPE, args.name, args.content);
+      return text(`appended to "${args.name}" in [global].`);
     },
   });
 
   const searchNotes = defineTool({
     name: 'search_notes',
     description:
-      'Keyword search over the notes of a scope: every word must appear on the line (case-insensitive). Returns bounded file:line hits that read_note can open.',
+      "Keyword search over the General notes, or a project's notes read-only: every word must appear on the line (case-insensitive). Returns bounded file:line hits that read_note can open (pass the same scope).",
     parameters: Type.Object({
       query: Type.String({
         description: 'One or more words; all must appear.',
@@ -482,12 +495,15 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       limit: Type.Optional(
         Type.Integer({ minimum: 1, maximum: 100, description: 'Default 40.' }),
       ),
-      scope: ScopeParam,
+      scope: ReadScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       try {
-        return text(scopes.searchNotes(scope, args.query, args.limit));
+        const scope = readScope(String(api.conversationId), args.scope);
+        return text(
+          readOnlyNote(scope) +
+            scopes.searchNotes(scope, args.query, args.limit),
+        );
       } catch (e) {
         return err(String(e));
       }
@@ -727,11 +743,8 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       );
       if (scope === GLOBAL_SCOPE)
         return err('delegate needs a project scope — pass a project name.');
-      // The manager is the bound conversation, not the name: a project that
-      // was only named has nobody to hand work to.
       const project = db.getProject(scope);
       if (!project) return err(`Unknown project: ${scope}`);
-      if (!db.hasManager(scope)) return err(noManagerError(project));
       const goal = args.goal ? deps.goals.getGoal(args.goal) : null;
       if (args.goal && !goal) return err(`Unknown goal: ${args.goal}`);
       if (goal && goal.scopeId !== scope)
@@ -748,7 +761,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
           operationId: `delegate:${api.taskId}:${api.callId}`,
         });
         return text(
-          `delegated as task #${task.id} to ${managerLabel(project, true)}, the ${project.name} manager. You'll be woken when it closes.`,
+          `delegated as task #${task.id} to ${managerName(project)}, the ${project.name} manager. You'll be woken when it closes.`,
         );
       } catch (e) {
         return err(String(e));
@@ -790,7 +803,6 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         );
       const project = db.getProject(scope);
       if (!project) return err(`Unknown project: ${scope}`);
-      if (!db.hasManager(scope)) return err(noManagerError(project));
       try {
         const result = await deps.sendManagerMessage({
           projectId: scope,
@@ -827,14 +839,8 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       if (!project) return err(`Unknown project: ${scope}`);
       try {
         const messages = deps.managerMessages(scope);
-        // An empty thread means different things: name the manager (or say
-        // there is none) instead of leaving the chief to guess.
         if (messages.length === 0)
-          return text(
-            db.hasManager(scope)
-              ? `(no messages with ${managerName(project) ?? `the ${project.name} manager`} yet)`
-              : `(${noManagerError(project)})`,
-          );
+          return text(`(no messages with ${managerName(project)} yet)`);
         return text(
           messages
             .map(
@@ -853,7 +859,11 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     name: 'chief',
     sections: [preamble, memorySection, stateSection],
     tools: [
-      ...memoryTools(deps),
+      ...memoryTools(deps, {
+        actor: 'chief',
+        ownScope: () => GLOBAL_SCOPE,
+        owner: 'General memory',
+      }),
       recall,
       listScopes,
       addTask,

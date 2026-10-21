@@ -147,6 +147,7 @@ async function fixture(
     runTimeoutMin: 30,
     baseBranch: options.base ?? 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   const scopes = new Scopes(join(userData, 'global'), db);
   const runtime = new FakeRuntime();

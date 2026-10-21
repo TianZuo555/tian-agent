@@ -101,7 +101,8 @@ export const en = {
   'sidebar.restoreAction': 'Restore conversation: {title}',
   'sidebar.openSettings': 'Open settings',
   'sidebar.addProjectTitle': 'New project',
-  'sidebar.addProjectDesc': 'Register a directory as a scope for the chief.',
+  'sidebar.addProjectDesc':
+    'Register a directory as a project and give it a manager.',
   'sidebar.projectName': 'Name',
   'sidebar.projectNameAria': 'Project name',
   'sidebar.projectPath': '/path/to/project',
@@ -579,7 +580,7 @@ export const en = {
   'project.managerName': 'Manager name',
   'project.managerNamePlaceholder': 'e.g. 阿七',
   'project.managerNameHint':
-    "What the chief calls this project's manager. Leave empty to keep it unnamed; naming does not create a manager — open the project manager first.",
+    "Required. Every project gets a manager that keeps the project's memory and notes; this is what you and the chief call it.",
   'project.saveAria': 'Save settings for {name}',
 } as const;
 

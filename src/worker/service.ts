@@ -33,7 +33,6 @@ import { GoalScheduler, parseCron } from './scheduler.js';
 import { MemoryWorker } from './memory-worker.js';
 import { chiefExtension } from './tools.js';
 import { managerExtension } from './manager-tools.js';
-import { noManagerError } from './manager-label.js';
 import { workerExtension } from './worker-tools.js';
 import {
   TelegramAdapter,
@@ -305,6 +304,7 @@ export class Service {
       .syncAll()
       .catch((error) => this.reportIssue('history.backfill', error));
     this.scheduler.start();
+    await this.ensureManagers();
     for (const scope of this.listScopes()) {
       this.watchInbox(scope.id);
       this.scanInbox(scope.id);
@@ -482,7 +482,7 @@ export class Service {
           kind: 'project',
           name: project.name,
           rootPath: project.rootPath,
-          managerName: project.managerName ?? null,
+          managerName: project.managerName,
           settings: {
             autoLand: project.autoLand === 1,
             allowInPlace: project.allowInPlace === 1,
@@ -502,11 +502,16 @@ export class Service {
       throw new Error('Project path must be a directory');
     return root;
   }
-  addProject(
+  /**
+   * Register a project together with its manager (D18): the manager name is
+   * required and the bound manager conversation is created right away, so a
+   * project never exists without the agent that owns its memory.
+   */
+  async addProject(
     name: string,
     rootPath: string,
-    managerName?: string | null,
-  ): ScopeInfo[] {
+    managerName: string,
+  ): Promise<ScopeInfo[]> {
     const root = this.projectRoot(rootPath);
     if (
       !name.trim() ||
@@ -514,6 +519,7 @@ export class Service {
       this.db.listProjects().some((project) => project.rootPath === root)
     )
       throw new Error('Project name and directory must be unique');
+    if (!managerName.trim()) throw new Error('A project needs a manager name');
     const id = `p-${randomUUID()}`;
     this.db.addProject({
       id,
@@ -525,9 +531,10 @@ export class Service {
       runTimeoutMin: 0,
       baseBranch: 'main',
       promptPreamble: '',
-      managerName: managerName?.trim() || null,
+      managerName: managerName.trim(),
     });
     this.scopes.ensureDirs(id);
+    await this.ensureManagerConversation(id);
     this.watchInbox(id);
     this.scanInbox(id);
     const scopes = this.listScopes();
@@ -566,12 +573,8 @@ export class Service {
       ...patch,
       name,
       rootPath,
-      // A blank name and an explicit null both mean "unnamed"; the name never
-      // creates a manager (see noManagerError).
-      managerName:
-        patch.managerName === undefined
-          ? existing.managerName
-          : patch.managerName?.trim() || null,
+      // A manager is always named (D18): a blank rename keeps the old name.
+      managerName: patch.managerName?.trim() || existing.managerName,
       autoLand:
         patch.autoLand === undefined
           ? existing.autoLand
@@ -598,20 +601,34 @@ export class Service {
     this.emit('scopes', scopes);
     return scopes;
   }
-  removeProject(id: string): ScopeInfo[] {
+  async removeProject(id: string): Promise<ScopeInfo[]> {
     if (this.db.projectHasRuns(id))
       throw new Error(
         'Finish and clean up project runs before removing this project',
       );
+    // The manager conversation comes with the project (D18); an untouched one
+    // goes with it, anything with a transcript keeps the project.
+    const manager = this.db.managerConversation(id)?.conversationId;
+    const conversations = this.db
+      .listConversations()
+      .filter((conversation) => conversation.scopeId === id);
+    const untouched =
+      manager !== undefined &&
+      (
+        await (
+          await this.agents.conversation(manager)
+        ).entries({ order: 'ascending' }, 1, undefined, BACKGROUND_CONTEXT)
+      ).items.length === 0;
     if (
-      this.db
-        .listConversations()
-        .some((conversation) => conversation.scopeId === id)
+      conversations.some(
+        (conversation) => conversation.conversationId !== manager || !untouched,
+      )
     )
       throw new Error('A project with conversations cannot be removed');
     this.stopInbox(id);
     this.scopes.forget(id);
     this.db.removeProject(id);
+    this.emit('conversations', this.listConversations());
     const scopes = this.listScopes();
     this.emit('scopes', scopes);
     return scopes;
@@ -1064,8 +1081,9 @@ export class Service {
   }
 
   /**
-   * The project's persistent manager conversation, created on first
-   * delegation. The manager channel is reserved — this is its only caller.
+   * The project's persistent manager conversation, created with the project
+   * (or on service start for older projects) and reused afterwards. The
+   * manager channel is reserved — this is its only caller.
    */
   private async ensureManagerConversation(
     projectId: string,
@@ -1086,6 +1104,18 @@ export class Service {
     return conversation.title == null
       ? { ...conversation, title }
       : conversation;
+  }
+
+  /**
+   * D18: every project has its manager. Projects added before that rule get
+   * theirs on service start; for the rest this is a no-op.
+   */
+  private async ensureManagers(): Promise<void> {
+    await Promise.all(
+      this.db
+        .listProjects()
+        .map((project) => this.ensureManagerConversation(project.id)),
+    );
   }
 
   /** Wake the manager conversation through the notification pipeline. */
@@ -1119,10 +1149,6 @@ export class Service {
   }): Promise<{ task: TaskRow; message: ManagerMessageRow }> {
     const project = this.db.getProject(input.projectId);
     if (!project) throw new Error(`Unknown project: ${input.projectId}`);
-    // A name is not a manager: delegation needs the bound manager conversation,
-    // which only openManager creates. Never fabricate one here.
-    if (!this.db.hasManager(input.projectId))
-      throw new Error(noManagerError(project));
     const conversation = await this.ensureManagerConversation(input.projectId);
     const { task, message } = this.db.once(input.operationId, () => {
       const task = this.db.insertTask({
@@ -1172,8 +1198,6 @@ export class Service {
   }> {
     const project = this.db.getProject(input.projectId);
     if (!project) throw new Error(`Unknown project: ${input.projectId}`);
-    if (!this.db.hasManager(input.projectId))
-      throw new Error(noManagerError(project));
     if (input.taskId != null) {
       const task = this.db.getTask(input.taskId);
       if (!task) throw new Error(`Unknown task: ${input.taskId}`);

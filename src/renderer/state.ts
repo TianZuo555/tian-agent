@@ -386,9 +386,14 @@ export function createAppStore(api: TianApi) {
       safe(async () => {
         await api.archiveConversation(id, archived);
       }),
-    addProject: (name: string, rootPath: string, managerName?: string) =>
+    /** Register a project with its manager, then open that manager (D18). */
+    addProject: (name: string, rootPath: string, managerName: string) =>
       safe(async () => {
-        await api.addProject(name, rootPath, managerName?.trim() || null);
+        const scopes = await api.addProject(name, rootPath, managerName.trim());
+        const project = scopes.find(
+          (scope) => scope.kind === 'project' && scope.name === name.trim(),
+        );
+        if (project) await actions.openManager(project.id);
       }),
     removeProject: (id: string) =>
       safe(async () => {

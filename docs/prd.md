@@ -120,11 +120,11 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.2 F01 — Core Memory　P0　【已有】
 
-现状：每次请求注入 Global 与当前 Project 的 `wake()` 视图。Core 是由用户或 Chief **明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 用 `remember` / `revise` / `forget` / `recall` / `select` / `deselect` 读写，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、选入/移出、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
+现状：记忆按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）——总管会话只注入 Global 的 `wake()` 视图，项目管理者会话注入 Global 与本项目。Core 是由用户或该 scope 的所有者（Global 为 Chief，Project 为其 Manager）**明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 与 Manager 用 `remember` / `revise` / `forget` / `recall` / `select` / `deselect` 读写各自那份，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、选入/移出、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
 
 需求：
 
-- 保存用户偏好、长期事实、项目约定；Chief 可新增、取代、删除 Memory；用户可明确要求记住或纠正。
+- 保存用户偏好、长期事实、项目约定；Chief 维护 Global（关于用户与跨项目），每个项目的 Manager 维护本项目；用户可明确要求记住或纠正。
 - 作用域：Global、Project；Memory 可选关联到某个 Goal，只在该 Goal 的 Conversation 中优先加载。
 - Token 预算可配置。默认：Global 1,500 tokens + Project 1,500 tokens；预算覆盖最终渲染文本（含元数据与用量页脚），超限时拒绝选入而不是静默截断。
 - 同一 Conversation 内使用稳定的记忆快照，避免 Prompt 前缀缓存失效。
@@ -138,7 +138,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 验收：
 
 - 重启后记忆不变；新 Conversation 加载相关 Core Memory。
-- 项目私有 Memory 不出现在其他项目的 Conversation 中。
+- 项目私有 Memory 不出现在其他项目的 Conversation 中，也不进入总管的 Core；总管只能按需只读查询。
 - 用户纠正后，新 Conversation 使用修订后的事实，被取代的内容不再出现在 Core Memory。
 
 ### 4.3 F02 — History 与检索　P0　【已有】

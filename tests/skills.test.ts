@@ -118,6 +118,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   const events = new EventLog(db);
   const skills = new SkillRegistry(db, events);
@@ -299,6 +300,7 @@ test('approval is user-only, recorded, and turns on injection with provenance', 
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   assert.deepEqual(
     f.skills.matchApproved('p2', 'fix the flaky login test'),
@@ -389,6 +391,7 @@ test('a failing extractor damages nothing', async (t) => {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   const events = new EventLog(db);
   let extractions = 0;

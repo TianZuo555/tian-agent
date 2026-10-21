@@ -186,8 +186,11 @@ async function reply(
 /** Send one inbound message and resolve with the conversation it created. */
 async function bindChat(f: Fixture, service: Service): Promise<string> {
   f.api.push(message(1, 11, CHAT, '你好'));
-  await until(() => service.listConversations().length === 1);
-  return service.listConversations()[0].conversationId;
+  // Project managers come with their projects (D18); count chat conversations.
+  const chats = () =>
+    service.listConversations().filter((row) => row.role !== 'manager');
+  await until(() => chats().length === 1);
+  return chats()[0].conversationId;
 }
 
 test('updates from chats outside the allow-list are ignored', async (t) => {
@@ -284,9 +287,9 @@ test('/scope switches to a separate project conversation and persists', async (t
   let service = await f.start();
   const project = join(f.root, 'project');
   mkdirSync(project);
-  const projectId = service
-    .addProject('demo', project)
-    .find((scope) => scope.kind === 'project')!.id;
+  const projectId = (await service.addProject('demo', project, '阿七')).find(
+    (scope) => scope.kind === 'project',
+  )!.id;
   const globalConversation = await bindChat(f, service);
   f.api.push(message(2, 21, CHAT, '/scope demo'));
   await until(() => f.api.sent.some((sent) => sent.text.includes('demo')));
@@ -295,7 +298,8 @@ test('/scope switches to a separate project conversation and persists', async (t
   await until(async () => {
     const scoped = service
       .listConversations()
-      .find((row) => row.scopeId === projectId);
+      // The project's manager conversation exists from the start (D18).
+      .find((row) => row.scopeId === projectId && row.role !== 'manager');
     if (!scoped) return false;
     projectConversation = scoped.conversationId;
     return (await userEntries(service, projectConversation)) === 1;

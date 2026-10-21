@@ -2,7 +2,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D16，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 8`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D18，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 10`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -239,6 +239,8 @@ Improvement Log 是 `tian.db` 中一张独立的 `improvements` 表，记录值�
 
 Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：每个项目一条持久会话，总管以 Task 为单位委派项目管理，管理者执行、收口并回报。
 
+> 记忆归属与管理者创建方式已由 [D18](#d18--记忆按角色归属总管管-global管理者管项目) 修订：管理者随项目创建，记忆写入目标由角色固定。
+
 **背景**：总管直接管理所有项目的 Task 与 Run 时，每个项目的执行细节都挤在同一条会话里；而且「委派」如果只是消息就没有 id / 状态 / 结果——总管看不到哪些事项还挂在外面，管理者的汇报也无法对应到具体委派。需要一个项目级的管理者承接「本项目日常管理」，并让委派本身成为可追踪的工作项。
 
 **决定**：
@@ -272,6 +274,8 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 ## D14 · 管理者命名：名字只是称呼，绑定会话才是管理者
 
 项目可以给管理者起一个名字（如「阿七」），总管在 `<state>` 与 `list_scopes` 里按名字称呼它；但名字纯粹是展示标签，**不**决定管理者是否存在。
+
+> 已被 [D18](#d18--记忆按角色归属总管管-global管理者管项目) 取代：名字必填，管理者随项目创建，「未配置 / 未命名」状态不再存在。
 
 **背景**：总管面对一串项目时只能看到项目名，「该项目的管理者」是个匿名角色，汇报与委派都难以指认。给管理者一个名字能让上下文更易读，但名字本身极易被误解成「已配置管理者」——必须由真实的绑定会话来裁决。
 
@@ -330,3 +334,21 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - **配置边界不变**：只在 `service/entry.ts` 读 `WECHAT_*` 后显式传入；`Service` 不读 `process.env`，测试不触网。`SERVICE_PROTOCOL` 升到 9（新增 `wechatStatus` / `wechatRelogin` 命令）。
 
 **后果**：微信成为与 App、Telegram、Inbox 并列的角色入口，共享同一份 Scope Memory；保活策略在「窗口开着」与「不烧额度」之间取平衡，代价是最坏情况下仍有约一小时的空窗（11 小时心跳 + 30 分钟余量），且两条心跳后若用户仍沉默则窗口必然关闭，需用户先说一句话。局限：不支持群聊与斜杠命令菜单；保活是否真能延长窗口取决于腾讯服务端行为（社区仅确认「机器人自己发消息不刷新 token」，反向未经验证），因此保活失败被当作正常分支处理而不是错误。
+
+## D18 · 记忆按角色归属：总管管 Global，管理者管项目
+
+总管只拥有 Global 记忆（关于 Tian 与跨项目的事实）；每个项目的详细记忆与 Notes 由该项目的管理者独占维护。每个项目都必须有管理者，名字在注册项目时必填。
+
+**背景**：D12 只把管理者的写入锁在本项目，总管却仍可写任意 scope、并在项目会话里注入项目 Core——同一份项目记忆有两个 Agent 写入者，总管的 Prompt 也随项目数量变重。`remember` 的默认目标是「当前会话的 scope」，总管在项目会话里记下的关于 Tian 的偏好会落进项目、换个项目就看不到；而有的项目没有管理者，项目记忆无人负责。
+
+**决定**：
+
+- **写入目标由角色决定**：`memoryTools` 的 `ownScope` 固定写入目标——总管恒为 Global，管理者恒为本项目；`remember` / `revise` / `forget` / `select` / `deselect` 不再接受 `scope` / `target` 参数，`#seq` 永远指向自己那份记忆。Notes 同理：总管 `write_note` / `append_note` 只写 Global。
+- **Core 按角色注入**：`coreMemorySection(deps, { withProject })`——总管只渲染 Global Core（即使在项目会话里），管理者渲染 Global + 本项目 Core。快照版本只追踪被渲染的 scope。
+- **跨界只读**：总管的 `recall` / `list_notes` / `read_note` / `search_notes` 默认 Global，带 `scope` 可只读查询某个项目，结果带 `read-only; owned by <管理者>` 头；管理者 `recall scope=global` 同样带只读头。总管在项目会话里学到的项目事实交给管理者（`send_manager_msg` / `delegate` 简报）去记。
+- **管理者内容边界**：Tian 在管理者会话里说的与本项目无关的个人信息，管理者不记、也不代写 Global——由 Tian 直接告诉总管；总管转来的项目事实由管理者记录。
+- **每个项目恰好一位、必须命名的管理者**：`addProject(name, rootPath, managerName)` 第三个参数必填（空白拒绝），同一调用里创建绑定的管理者会话；App 新建项目对话框的「Manager 名称」为必填项，创建后直接打开管理者。服务启动时为旧项目补建管理者会话；数据库迁移把空的 `manager_name` 回填为项目名。`updateProject` 的空白改名保留原名。D14 的「名字不创造管理者 / 未配置」三态随之取消，`hasManager` 守卫删除。
+- **删除项目**：管理者会话随项目创建，因此 `removeProject` 只在管理者会话没有任何 entry 且没有其他会话时连同绑定一并删除；有内容就拒绝，保护 transcript 与记忆。
+- `SERVICE_PROTOCOL` 升至 10（`addProject` 参数与 `ScopeInfo.managerName` 变为必填）。
+
+**后果**：记忆有清晰的单一 Agent 所有者，总管 Prompt 不随项目数量增长，项目细节集中在管理者的上下文里；Tian 的偏好不会再被困在某个项目 scope。代价：总管回答项目细节时要么按需只读查询、要么问管理者，多一跳；总管不能再直接修正项目记忆，只能转告管理者。Memory Worker 的候选提取与 Memory 面板仍按 scope 工作，不受角色限制。

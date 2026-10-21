@@ -112,6 +112,7 @@ async function harness(t: TestContext): Promise<Harness> {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   scopes.ensureDirs('p1');
   const events = new EventLog(db);
@@ -781,6 +782,7 @@ function runsFixture(t: TestContext) {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   const scopes = new Scopes(join(userData, 'global'), db);
   const events = new EventLog(db);
