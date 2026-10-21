@@ -109,6 +109,8 @@ async function harness(t: TestContext): Promise<Harness> {
     workerModels: () => [],
     runReport: () => '',
     runDiff: () => Promise.resolve(''),
+    runProgress: () => Promise.reject(new Error('unused')),
+    stopRun: () => Promise.reject(new Error('unused')),
     sendRunMessage: () => {
       throw new Error('not used here');
     },

@@ -2,7 +2,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D15，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 7`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D16，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 8`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -298,3 +298,18 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - **UI**：Runs 列表里 queued/running 的 Run 行尾挂红色实心 stop 图标（icon-only 带 `stopRun` aria-label），Run 详情动作条加红色 Stop 按钮；collecting 与已完结 Run 不显示。`interrupted` 且 reviewStatus=pending 的 Run 照常出现在评审区（Land/Ship/Discard 可用）。
 
 **后果**：管理者一轮误发两次相同派单不再产生孪生 Run；Tian 获得「暂停但不销毁」的中间态——比 discard 轻、比干等快，半成品以一次快照提交留在 Run 分支上。局限：去重按 (project, prompt, dispatcher) 完全匹配，换措辞的相似派单仍会并行——这是有意的（不同 briefing 视为不同工作）；停止不收集报告（reportPath 留空），但快照提交使 diff/land/ship 照常可见。
+
+## D16 · Run 进度可见、attempt 可中止：`run_progress` 只读、`stop_run` 保留 worktree
+
+总管与项目管理者此前只能看 Run 的静态状态，无法回答「它现在在干什么」，也没有温和中止的手段（只有用户侧 discard，会删 worktree）。长任务（`runTimeoutMin = 0` 之后可能跑数小时）让这两个缺口更明显。
+
+**决定**：
+
+- **进度是会话读取，不是新表**：`run_progress(id)` 把 `runs` 行的状态/attempt/起止时间/`deadline_at` 与工兵会话的最近条目组合成快照——最后一段 assistant 文本（≤1200 字符）、最近 5 次工具调用（名字 + ≤160 字符参数）。`WorkerConversation` 增加 `recentToolCalls(limit)`，`AgentRuntime` 用 `conversation.entries({ order: 'descending' })` 实现，不新增持久化结构；单测里的 FakeRuntime 返回空数组即可。
+- **`stop_run` 是中断而非丢弃**：复用 D15 的 `runs.stop`——Run 锁内清超时计时器、abort 会话、`commitAll` 快照 worktree（半成品留在 Run 分支上）、`finishRun` 落 `interrupted` + 原因、排队完成通知、记录 `run.stopped` 事件（actor 为 chief/manager），最后带 `stopped` 标记做经验审查。与用户侧 stopRun 同一闸门：queued/running 且 reviewStatus=pending；agent 调用走 strict，不可停时抛错给用户可读信息。`reviewStatus` 保持 `pending`，worktree 与分支不动，因此还能 `read_run_diff`、land、或 follow-up 开下一 attempt。
+- **collector 不覆盖中止结果**：`stop()` 先改库再 abort，被 abort 的 `submission.wait()` 返回后，collector 在锁内看到 `status === 'interrupted'` 直接返回；`execute()` 也只在 `reviewStatus === 'pending'` 时重启，所以恢复流程不会把中断的 attempt 续跑。这一点与 discard 的既有不变量一致（先停工兵、collector 不覆盖）。
+- **边界沿用既有规则**：总管对 Manager 名下的 Run 只读（与 `send_run_msg` 同一守卫）；管理者 `stop_run` 必须落在本项目，越界报 `belongs to another project`。discard 仍只属于用户。
+
+**后果**：两个编排者都能在派发重复任务前核实「是不是还活着」，并能止损而不用丢掉已经产出的工作。局限：进度来自 transcript，不解析工兵的内部计划。
+
+**后续（经验审查）**：`stop()` 在 abort 之后读该 attempt 留下的报告（worktree 里的 `TIAN_REPORT.md`，否则上一次收集的报告文件），以 `stopped` 标记调用 `reviewExperience`。语义与失败区分开：中止是主动收回，不是「注入的 skill 失败」的证据，所以 `verification` 不动；但报告里的明确步骤段落仍可作为候选（`RuleBasedExtractor` 接受 `done` 或 `stopped`，描述写成「stopped early」并带上原因），候选依旧只能由用户批准。

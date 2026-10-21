@@ -539,6 +539,7 @@ export const zh: Partial<Messages> = {
   'project.autoLand': '自动合入已完成的 Run',
   'project.allowInPlace': '允许非 Git 项目在原目录中执行',
   'project.timeout': 'Run 超时（分钟）',
+  'project.timeoutHint': '单次尝试允许运行多久，超时会被中止。0 = 不限制。',
   'project.baseBranch': '基础分支',
   'project.preamble': '工兵预设指令',
   'project.managerName': 'Manager 名称',

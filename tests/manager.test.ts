@@ -166,6 +166,23 @@ function fixture(t: TestContext): Fixture {
     workerModels: () => [],
     runReport: () => 'the report',
     runDiff: async () => 'the diff',
+    runProgress: async () => ({
+      id: 'r1',
+      projectId: 'p1',
+      status: 'running',
+      reviewStatus: 'pending',
+      attempt: 1,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      deadlineAt: '',
+      error: null,
+      lastText: 'working',
+      toolCalls: [],
+    }),
+    stopRun: async (id) => ({
+      ...db.getRun(id)!,
+      status: 'interrupted',
+    }),
     sendRunMessage: (runId, body, operationId) =>
       data.sendRunMessage(runId, body, operationId),
     runMessages: (runId) => data.runMessages(runId),
@@ -218,6 +235,12 @@ function fixture(t: TestContext): Fixture {
         workerModels: () => [],
         runReport: () => '',
         runDiff: async () => '',
+        runProgress: async () => {
+          throw new Error('unused');
+        },
+        stopRun: async () => {
+          throw new Error('unused');
+        },
         sendRunMessage: () => {
           throw new Error('not used');
         },
@@ -517,6 +540,30 @@ test('closing a question returns an answer that beat the timeout', (t) => {
   assert.notEqual(f.db.managerMessage(question.id)!.closedAt, null);
 });
 
+test('manager progress and stop stay inside its own project', async (t) => {
+  const f = fixture(t);
+  const own = addRun(f.db, { projectId: 'p-1' });
+  const foreign = addRun(f.db, { projectId: 'p-2' });
+  const seen = await f
+    .tool('run_progress')
+    .execute({ id: own.id }, api(f.managerConv));
+  assert.match(toolText(seen), /\[running\]/);
+  assert.match(toolText(seen), /last output:\nworking/);
+  const refused = await f
+    .tool('run_progress')
+    .execute({ id: foreign.id }, api(f.managerConv));
+  assert.match(toolText(refused), /another project/);
+  const stopped = await f
+    .tool('stop_run')
+    .execute({ id: own.id, reason: 'wrong branch' }, api(f.managerConv, 'c2'));
+  assert.match(toolText(stopped), /stopped \[interrupted\]/);
+  assert.match(toolText(stopped), /worktree.*is kept|is kept/);
+  const foreignStop = await f
+    .tool('stop_run')
+    .execute({ id: foreign.id }, api(f.managerConv, 'c3'));
+  assert.match(toolText(foreignStop), /another project/);
+});
+
 test('a run cannot cross projects: foreign task dispatch and chief steering are refused', async (t) => {
   const f = fixture(t);
   const runtime: WorkerRuntime = {
@@ -643,6 +690,12 @@ function chiefSurface(f: Fixture) {
     dispatch: () => Promise.reject(new Error('not used')),
     runReport: () => '',
     runDiff: async () => '',
+    runProgress: async () => {
+      throw new Error('not used');
+    },
+    stopRun: async () => {
+      throw new Error('not used');
+    },
     sendRunMessage: () => {
       throw new Error('not used');
     },

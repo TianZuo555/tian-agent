@@ -192,6 +192,9 @@ export class Service {
         dispatch: (input) => this.dispatchRun(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
+        runProgress: (id) => this.runs.progress(id),
+        stopRun: (id, reason) =>
+          this.runs.stop(id, { reason, actor: 'chief', strict: true }),
         sendRunMessage: (runId, body, operationId) =>
           this.data.sendRunMessage(runId, body, operationId),
         runMessages: (runId) => this.data.runMessages(runId),
@@ -233,6 +236,9 @@ export class Service {
         dispatch: (input) => this.dispatchRun(input),
         runReport: (id) => this.runs.report(id),
         runDiff: (id) => this.runs.diff(id),
+        runProgress: (id) => this.runs.progress(id),
+        stopRun: (id, reason) =>
+          this.runs.stop(id, { reason, actor: 'manager', strict: true }),
         sendRunMessage: (runId, body, operationId) =>
           this.data.sendRunMessage(runId, body, operationId),
         runMessages: (runId) => this.data.runMessages(runId),
@@ -458,7 +464,7 @@ export class Service {
       autoLand: 0,
       allowInPlace: 0,
       agentKind: 'durable-worker',
-      runTimeoutMin: 30,
+      runTimeoutMin: 0,
       baseBranch: 'main',
       promptPreamble: '',
       managerName: managerName?.trim() || null,

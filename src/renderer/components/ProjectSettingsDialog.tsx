@@ -28,7 +28,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
     scope.settings?.allowInPlace ?? false,
   );
   const [timeoutMin, setTimeoutMin] = useState(
-    String(scope.settings?.runTimeoutMin ?? 30),
+    String(scope.settings?.runTimeoutMin ?? 0),
   );
   const [baseBranch, setBaseBranch] = useState(
     scope.settings?.baseBranch ?? 'main',
@@ -47,7 +47,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
         if (next) {
           setAutoLand(scope.settings?.autoLand ?? false);
           setAllowInPlace(scope.settings?.allowInPlace ?? false);
-          setTimeoutMin(String(scope.settings?.runTimeoutMin ?? 30));
+          setTimeoutMin(String(scope.settings?.runTimeoutMin ?? 0));
           setBaseBranch(scope.settings?.baseBranch ?? 'main');
           setPreamble(scope.settings?.promptPreamble ?? '');
           setManagerName(scope.managerName ?? '');
@@ -132,12 +132,15 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
               <Input
                 id={`${id}-timeout`}
                 type="number"
-                min={1}
+                min={0}
                 max={1440}
                 required
                 value={timeoutMin}
                 onChange={(event) => setTimeoutMin(event.target.value)}
               />
+              <span className="text-[11px] text-muted-foreground">
+                {t('project.timeoutHint')}
+              </span>
             </label>
             <label
               className="grid gap-1.5 text-xs text-muted-foreground"

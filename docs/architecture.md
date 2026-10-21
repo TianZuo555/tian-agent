@@ -74,4 +74,4 @@ Tian 可直接在管理者会话里对话派活：本轮输入的 `currentInput`
 
 工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可执行中用 `ask_chief` 提问并阻塞等待答复，用 `tell_chief` 发进度通知，用 `check_msgs` 接收总管指令。工兵被要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，不提供操作系统文件访问沙箱。
 
-Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。
+Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。`runTimeoutMin = 0`（默认）表示单次尝试不限时，`deadline_at` 留空；正整数则作为该 attempt 的硬超时，到点 abort 并进入 collecting。

@@ -141,6 +141,8 @@ async function harness(t: TestContext): Promise<Harness> {
     workerModels: () => [],
     runReport: () => '',
     runDiff: () => Promise.resolve(''),
+    runProgress: () => Promise.reject(new Error('unused')),
+    stopRun: () => Promise.reject(new Error('unused')),
     sendRunMessage: () => {
       throw new Error('not used here');
     },
@@ -727,6 +729,7 @@ class FakeRuntime implements WorkerRuntime {
           submission.resolve({ status: 'unanswered', reason: 'aborted' });
       },
       lastText: async () => 'Worker report',
+      recentToolCalls: async () => [],
     };
   }
   private deferred(): Submission {

@@ -32,6 +32,7 @@ import {
   type WorkerRuntime,
 } from '../src/worker/runs';
 import { validateCommand } from '../src/shared/contracts';
+import { describeRunProgress } from '../src/worker/run-progress';
 
 function temporary(t: TestContext): string {
   const path = mkdtempSync(join(tmpdir(), 'tian-architecture-'));
@@ -59,13 +60,22 @@ interface FakeRecord {
   run: RunRow;
   submissions: Map<string, ReturnType<typeof deferred<Outcome>>>;
   aborted: boolean;
+  /** What progress() reports; tests set these to model a live worker. */
+  lastText: string;
+  toolCalls: { name: string; args: string }[];
 }
 class FakeRuntime implements WorkerRuntime {
   readonly closed = deferred<Outcome>();
   constructor(readonly records = new Map<string, FakeRecord>()) {}
   async create(run: RunRow): Promise<WorkerConversation> {
     const id = `worker-${this.records.size + 1}`;
-    this.records.set(id, { run, submissions: new Map(), aborted: false });
+    this.records.set(id, {
+      run,
+      submissions: new Map(),
+      aborted: false,
+      lastText: 'Worker report',
+      toolCalls: [],
+    });
     return this.get(id);
   }
   async get(id: string): Promise<WorkerConversation> {
@@ -88,7 +98,8 @@ class FakeRuntime implements WorkerRuntime {
         for (const submission of record.submissions.values())
           submission.resolve({ status: 'unanswered', reason: 'aborted' });
       },
-      lastText: async () => 'Worker report',
+      lastText: async () => record.lastText,
+      recentToolCalls: async (limit) => record.toolCalls.slice(-limit),
     };
   }
   complete(id: string, outcome: Outcome = { status: 'done' }): void {
@@ -184,7 +195,7 @@ test('IPC rejects unknown fields, unsupported workers, and invalid settings', ()
     validateCommand('updateProject', ['p1', { agentKind: 'arbitrary-shell' }]),
   );
   assert.throws(() =>
-    validateCommand('updateProject', ['p1', { runTimeoutMin: 0 }]),
+    validateCommand('updateProject', ['p1', { runTimeoutMin: -1 }]),
   );
   assert.throws(() =>
     validateCommand('updateProject', ['p1', { unexpected: true }]),
@@ -310,6 +321,9 @@ test('chief and worker capabilities remain separate, including previously contam
     workerModels: () => [],
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),
+    runProgress: (id) => f.runs.progress(id),
+    stopRun: (id, reason) =>
+      f.runs.stop(id, { reason, actor: 'manager', strict: true }),
     sendRunMessage: (runId, body, operationId) =>
       data.sendRunMessage(runId, body, operationId),
     runMessages: (runId) => data.runMessages(runId),
@@ -325,6 +339,8 @@ test('chief and worker capabilities remain separate, including previously contam
     (tool) => tool.name,
   );
   assert.ok(names.includes('read_run_report'));
+  assert.ok(names.includes('run_progress'));
+  assert.ok(names.includes('stop_run'));
   assert.ok(names.includes('remember'));
   assert.ok(names.includes('revise'));
   assert.ok(names.includes('forget'));
@@ -737,6 +753,120 @@ test('restart restores collection and reuses the durable submission key', async 
   } finally {
     resumed.pause();
     resumedRuntime.stopWaits();
+    await resumed.join();
+  }
+});
+
+test('a zero timeout dispatches a run with no deadline and never aborts it', async (t) => {
+  const f = await fixture(t);
+  f.db.updateProject('p1', { runTimeoutMin: 0 });
+  const run = await start(f);
+  assert.equal(run.deadlineAt, '');
+  // Give the orchestrator a beat: a deadline timer would abort the conversation.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(f.db.getRun(run.id)?.status, 'running');
+  assert.equal(f.runtime.records.get(run.conversationId!)!.aborted, false);
+});
+
+test('stop aborts the attempt, keeps the worktree, and the collector never overwrites it', async (t) => {
+  const f = await fixture(t);
+  const run = await start(f);
+  writeFileSync(join(run.worktreePath!, 'partial.txt'), 'work in progress');
+  const stopped = await f.runs.stop(run.id, {
+    reason: 'wrong approach',
+    actor: 'chief',
+  });
+  assert.equal(stopped.status, 'interrupted');
+  // Review stays open so the work can be landed, followed up, or discarded.
+  assert.equal(stopped.reviewStatus, 'pending');
+  assert.match(stopped.error!, /wrong approach/);
+  assert.ok(existsSync(run.worktreePath!));
+  // The aborted submission settles the collector, which must not record a result.
+  await f.runs.join();
+  const current = f.db.getRun(run.id)!;
+  assert.equal(current.status, 'interrupted');
+  assert.equal(current.reviewStatus, 'pending');
+  assert.match(current.error!, /wrong approach/);
+  assert.equal(f.runtime.records.get(run.conversationId!)!.aborted, true);
+  // The stop queues one completion notice like any settled run.
+  assert.equal(f.db.pendingNotifications().length, 1);
+  // The kept worktree is still reviewable and can take a follow-up attempt.
+  const next = await f.runs.followUp(run.id, 'try the other approach');
+  assert.equal(next.attempt, 2);
+  assert.equal(next.status, 'queued');
+  assert.equal(next.error, null);
+});
+
+test('stop refuses a run that finished or is already under review', async (t) => {
+  const f = await fixture(t);
+  const run = await start(f);
+  f.runtime.complete(run.conversationId!);
+  await until(() => f.db.getRun(run.id)?.status === 'done');
+  await assert.rejects(f.runs.stop(run.id, { strict: true }), /not running/);
+});
+
+test('progress reports timing, last output and recent tool calls of a live run', async (t) => {
+  const f = await fixture(t);
+  const run = await start(f);
+  const record = f.runtime.records.get(run.conversationId!)!;
+  record.lastText = 'Refactoring the parser now.';
+  record.toolCalls = [
+    { name: 'read', args: '{"path":"src/parser.ts"}' },
+    { name: 'edit', args: '{"path":"src/parser.ts"}' },
+  ];
+  const progress = await f.runs.progress(run.id);
+  assert.equal(progress.status, 'running');
+  assert.equal(progress.deadlineAt, run.deadlineAt);
+  assert.equal(progress.lastText, 'Refactoring the parser now.');
+  assert.deepEqual(
+    progress.toolCalls.map((call) => call.name),
+    ['read', 'edit'],
+  );
+  const described = describeRunProgress(progress);
+  assert.match(described, /\[running\]/);
+  assert.match(described, /deadline in/);
+  assert.match(described, /Refactoring the parser now\./);
+  assert.match(described, /edit\(/);
+});
+
+test('progress of an unbounded run says so instead of inventing a deadline', async (t) => {
+  const f = await fixture(t);
+  f.db.updateProject('p1', { runTimeoutMin: 0 });
+  const run = await start(f);
+  f.runtime.records.get(run.conversationId!)!.lastText = '';
+  const described = describeRunProgress(await f.runs.progress(run.id));
+  assert.match(described, /no deadline/);
+  assert.match(described, /has not written anything yet/);
+});
+
+test('a stopped run is not relaunched by restart recovery', async (t) => {
+  const f = await fixture(t);
+  const run = await start(f);
+  await f.runs.stop(run.id, { reason: 'wrong approach' });
+  await f.runs.join();
+  const runtime = new FakeRuntime(f.runtime.records);
+  const resumed = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    runtime,
+    f.userData,
+    () => {},
+    async () => {},
+  );
+  try {
+    await resumed.recover();
+    await resumed.join();
+    const current = f.db.getRun(run.id)!;
+    assert.equal(current.status, 'interrupted');
+    assert.equal(current.reviewStatus, 'pending');
+    // No new attempt was submitted after the restart.
+    assert.equal(
+      f.runtime.records.get(run.conversationId!)!.submissions.size,
+      runtime.records.get(run.conversationId!)!.submissions.size,
+    );
+  } finally {
+    resumed.pause();
+    runtime.stopWaits();
     await resumed.join();
   }
 });
