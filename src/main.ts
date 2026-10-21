@@ -10,6 +10,8 @@ import {
 } from './shared/desktop.js';
 import { servicePaths } from './shared/service-paths.js';
 import { validateCommand } from './shared/contracts.js';
+import { readJsonFile } from './shared/json-file.js';
+import { atomicWrite } from './worker/files.js';
 import { mkdirSync } from 'node:fs';
 import type { Emit } from './shared/types.js';
 
@@ -36,7 +38,19 @@ const broadcast: Emit = (channel, payload, clientId) => {
   }
 };
 
+const themeFile = () => path.join(app.getPath('userData'), 'theme.json');
+
+// The renderer pushes its theme over tian:theme; persisting it lets the
+// window material match the app theme from the first frame, not after load.
+function applyPersistedTheme(): void {
+  const theme = readJsonFile(themeFile(), (value): value is ThemeName =>
+    themeNames.includes(value as ThemeName),
+  );
+  if (theme) nativeTheme.themeSource = theme;
+}
+
 function createWindow(): void {
+  applyPersistedTheme();
   const isMac = process.platform === 'darwin';
   const window = new BrowserWindow({
     show: process.env.TIAN_AGENT_SHOW_WINDOW !== '0',
@@ -155,6 +169,7 @@ if (primaryInstance)
         )
           return;
         nativeTheme.themeSource = theme as ThemeName;
+        atomicWrite(themeFile(), JSON.stringify(theme));
       });
       ipcMain.handle(
         'tian:invoke',
