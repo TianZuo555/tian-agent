@@ -771,7 +771,7 @@ function extractRows(
       }
       return;
     }
-    if (entry.kind === 'pi.toolResult' && message.role === 'toolResult') {
+    if (entry.kind === 'pi.tool-result' && message.role === 'toolResult') {
       const text = messageText(message.content);
       if (!text) return;
       rows.push({
