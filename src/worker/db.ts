@@ -22,6 +22,12 @@ export interface ProjectRow {
   runTimeoutMin: number;
   baseBranch: string;
   promptPreamble: string;
+  /**
+   * What Tian calls this project's manager ("阿七"). Display only: the manager
+   * exists iff a `channel_sessions` row with channel 'manager' is bound, so a
+   * name never implies a manager. NULL = not named yet.
+   */
+  managerName: string | null;
   createdAt: string;
 }
 export type ConversationRow = ConversationInfo;
@@ -113,7 +119,8 @@ export class Db {
         id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL,
         auto_land INTEGER NOT NULL DEFAULT 0, allow_in_place INTEGER NOT NULL DEFAULT 0,
         agent_kind TEXT NOT NULL DEFAULT 'durable-worker', run_timeout_min INTEGER NOT NULL DEFAULT 30,
-        base_branch TEXT NOT NULL DEFAULT 'main', prompt_preamble TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+        base_branch TEXT NOT NULL DEFAULT 'main', prompt_preamble TEXT NOT NULL DEFAULT '', manager_name TEXT,
+        created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS conversations (
         conversation_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, title TEXT,
@@ -171,6 +178,10 @@ export class Db {
     `);
       this.ensureColumns('projects', {
         allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
+        // D14: the chief addresses a project's manager by this name. Optional
+        // and display-only — the manager's existence is still the channel
+        // binding below, never this column.
+        manager_name: 'TEXT',
       });
       this.ensureColumns('conversations', {
         archived_at: 'TEXT',
@@ -411,8 +422,17 @@ export class Db {
   close(): void {
     this.db.close();
   }
-  addProject(project: Omit<ProjectRow, 'createdAt'>): void {
+  /**
+   * `managerName` is optional at the call sites (internal fixtures, older
+   * callers); an absent name is stored as NULL, meaning "not named yet".
+   */
+  addProject(
+    project: Omit<ProjectRow, 'createdAt' | 'managerName'> & {
+      managerName?: string | null;
+    },
+  ): void {
     this.insert('projects', {
+      managerName: null,
       ...project,
       createdAt: new Date().toISOString(),
     });
@@ -547,6 +567,16 @@ export class Db {
       externalId: projectId,
       scopeId: projectId,
     });
+  }
+  /**
+   * Whether this project has a manager at all — the real criterion behind
+   * delegate / send_manager_msg and the state block. A manager exists only
+   * once a `channel_sessions` row with channel 'manager' is bound (created by
+   * openManager); `projects.manager_name` is a display label and never
+   * substitutes for this check.
+   */
+  hasManager(projectId: string): boolean {
+    return this.managerConversation(projectId) !== undefined;
   }
   isManagerConversation(conversationId: string): boolean {
     return Boolean(

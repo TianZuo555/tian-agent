@@ -8,7 +8,8 @@ export const commandHandlers = (service: Service, clientId: number) =>
     beginMaintenance: () => service.beginMaintenance(),
     finishMaintenance: () => service.finishMaintenance(),
     listScopes: () => service.listScopes(),
-    addProject: (name, rootPath) => service.addProject(name, rootPath),
+    addProject: (name, rootPath, managerName) =>
+      service.addProject(name, rootPath, managerName),
     updateProject: (id, patch) => service.updateProject(id, patch),
     removeProject: (id) => service.removeProject(id),
     listConversations: () => service.listConversations(),

@@ -554,6 +554,10 @@ export const en = {
   'project.timeout': 'Run timeout (minutes)',
   'project.baseBranch': 'Base branch',
   'project.preamble': 'Worker instructions',
+  'project.managerName': 'Manager name',
+  'project.managerNamePlaceholder': 'e.g. 阿七',
+  'project.managerNameHint':
+    "What the chief calls this project's manager. Leave empty to keep it unnamed; naming does not create a manager — open the project manager first.",
   'project.saveAria': 'Save settings for {name}',
 } as const;
 

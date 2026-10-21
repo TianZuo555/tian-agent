@@ -386,9 +386,9 @@ export function createAppStore(api: TianApi) {
       safe(async () => {
         await api.archiveConversation(id, archived);
       }),
-    addProject: (name: string, rootPath: string) =>
+    addProject: (name: string, rootPath: string, managerName?: string) =>
       safe(async () => {
-        await api.addProject(name, rootPath);
+        await api.addProject(name, rootPath, managerName?.trim() || null);
       }),
     removeProject: (id: string) =>
       safe(async () => {

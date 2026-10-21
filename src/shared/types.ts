@@ -5,6 +5,8 @@ export interface ScopeInfo {
   kind: 'global' | 'project';
   name: string;
   rootPath: string;
+  /** Tian's name for this project's manager; null/absent = unnamed. */
+  managerName?: string | null;
   settings?: ProjectSettings | null;
 }
 
@@ -18,7 +20,12 @@ export interface ProjectSettings {
 }
 
 export type ProjectPatch = Partial<
-  ProjectSettings & { name: string; rootPath: string }
+  ProjectSettings & {
+    name: string;
+    rootPath: string;
+    /** Trimmed by the service; null or blank clears the name. */
+    managerName: string | null;
+  }
 >;
 
 export interface SessionBinding {

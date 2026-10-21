@@ -36,6 +36,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
   const [preamble, setPreamble] = useState(
     scope.settings?.promptPreamble ?? '',
   );
+  const [managerName, setManagerName] = useState(scope.managerName ?? '');
   const t = useT();
 
   return (
@@ -49,6 +50,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
           setTimeoutMin(String(scope.settings?.runTimeoutMin ?? 30));
           setBaseBranch(scope.settings?.baseBranch ?? 'main');
           setPreamble(scope.settings?.promptPreamble ?? '');
+          setManagerName(scope.managerName ?? '');
           setError(null);
         }
         setOpen(next);
@@ -89,6 +91,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 runTimeoutMin: Number(timeoutMin),
                 baseBranch: baseBranch.trim(),
                 promptPreamble: preamble,
+                managerName: managerName.trim() || null,
               });
               setOpen(false);
             } catch (reason) {
@@ -158,6 +161,23 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 value={preamble}
                 onChange={(event) => setPreamble(event.target.value)}
               />
+            </label>
+            <label
+              className="grid gap-1.5 text-xs text-muted-foreground"
+              htmlFor={`${id}-manager-name`}
+            >
+              {t('project.managerName')}
+              <Input
+                id={`${id}-manager-name`}
+                value={managerName}
+                maxLength={200}
+                placeholder={t('project.managerNamePlaceholder')}
+                aria-describedby={`${id}-manager-name-hint`}
+                onChange={(event) => setManagerName(event.target.value)}
+              />
+              <span id={`${id}-manager-name-hint`}>
+                {t('project.managerNameHint')}
+              </span>
             </label>
             {error && (
               <div role="alert" className="text-destructive text-xs">
