@@ -118,6 +118,26 @@ export function toRows(view: ConversationView | undefined): {
   if (!view) return { rows: [], busy: false };
   const rows: MessageRow[] = [];
   const resultByCallId = new Map<string, { text: string; isError: boolean }>();
+  const live = view.docs['pi.live'] as LiveState | undefined;
+  const busy = Boolean(live?.run);
+  // A running round publishes the same calls the committed tool-calling answer
+  // already lists, so prefer the live status and never render a call twice.
+  const liveByCallId = new Map<string, ToolSlot>();
+  for (const slot of live?.tools ?? []) liveByCallId.set(slot.callId, slot);
+  const committedCalls = new Set<string>();
+
+  // Tool-only rounds are activity, not messages: every contiguous block of
+  // them (a run's rounds, tool results are not rows) collapses into one row so
+  // a chief or manager that never writes prose still reads as one activity log.
+  const appendToolCalls = (id: string, calls: ToolCallRow[]) => {
+    if (calls.length === 0) return;
+    const last = rows.at(-1);
+    if (last?.role === 'tool') {
+      last.toolCalls = [...(last.toolCalls ?? []), ...calls];
+      return;
+    }
+    rows.push({ id, role: 'tool', text: '', toolCalls: calls });
+  };
 
   // First pass: collect tool results by call id.
   for (const e of view.entries) {
@@ -141,23 +161,31 @@ export function toRows(view: ConversationView | undefined): {
       }
       case 'pi.assistant': {
         const calls = toolCallsOf(msg?.content).map((c) => {
+          committedCalls.add(c.callId);
           const r = resultByCallId.get(c.callId);
+          const slot = r ? undefined : liveByCallId.get(c.callId);
           return {
             ...c,
-            status: r ? (r.isError ? 'error' : 'done') : c.status,
-            output: r?.text,
+            status: r
+              ? r.isError
+                ? 'error'
+                : 'done'
+              : (slot?.status ?? c.status),
+            output: r?.text ?? slot?.output,
           } as ToolCallRow;
         });
         const text = textOf(msg?.content);
         const error = (msg as { errorMessage?: string } | undefined)
           ?.errorMessage;
-        if (text || calls.length > 0) {
+        if (text) {
           rows.push({
             id: `e${e.id}`,
             role: 'assistant',
             text,
-            toolCalls: calls,
+            toolCalls: calls.length > 0 ? calls : undefined,
           });
+        } else if (calls.length > 0) {
+          appendToolCalls(`e${e.id}`, calls);
         }
         if (error) {
           rows.push({
@@ -200,25 +228,24 @@ export function toRows(view: ConversationView | undefined): {
     }
   }
 
-  const live = view.docs['pi.live'] as LiveState | undefined;
-  const busy = Boolean(live?.run);
-
-  // Running tool round as its own rows.
-  for (const slot of live?.tools ?? []) {
-    rows.push({
-      id: `slot-${slot.callId}`,
-      role: 'tool',
-      text: '',
-      toolCalls: [
-        {
+  // Calls running before their answer is committed. Calls the transcript
+  // already lists are updated in place instead of shown a second time.
+  const liveOnly = (live?.tools ?? []).filter(
+    (slot) => !committedCalls.has(slot.callId),
+  );
+  if (liveOnly.length > 0) {
+    appendToolCalls(
+      'live-tools',
+      liveOnly.map(
+        (slot): ToolCallRow => ({
           callId: slot.callId,
           name: slot.name,
           args: '',
-          status: slot.status === 'done' ? 'done' : 'running',
+          status: slot.status,
           output: slot.output,
-        },
-      ],
-    });
+        }),
+      ),
+    );
   }
 
   // Streaming partial generation.

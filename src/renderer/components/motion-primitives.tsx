@@ -10,32 +10,7 @@ export const DURATION = 0.22;
 /** Slightly longer, used for larger surfaces entering or leaving. */
 export const SLOW = 0.34;
 
-/**
- * Message entrance: fades and lifts a few pixels. Skipped entirely when the
- * user asks for reduced motion, or when the row is streaming (its text is
- * already animating through Streamdown).
- */
-export function MessageIn({
-  children,
-  animate,
-}: {
-  children: ReactNode;
-  animate: boolean;
-}) {
-  const reduce = useReducedMotion();
-  if (!animate || reduce) return <>{children}</>;
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8, filter: 'blur(2px)' }}
-      animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-      transition={{ duration: 0.3, ease: EASE }}
-    >
-      {children}
-    </motion.div>
-  );
-}
-
-/** Collapsible body used by tool chips and the run report. */
+/** Collapsible body used by the sidebar sections. */
 export function Reveal({
   open,
   children,

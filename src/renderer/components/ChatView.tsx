@@ -15,6 +15,7 @@ import {
   ChatCircleText,
   Check,
   CheckCircle,
+  Circle,
   CircleNotch,
   Copy,
   FileText,
@@ -33,10 +34,16 @@ import type { Icon } from '@phosphor-icons/react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsiblePanel,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { Kbd } from '@/components/ui/kbd';
+import { cn } from '@/lib/utils';
 import { ChatComposer } from './ChatComposer';
 import { Markdown } from './Markdown';
-import { MessageIn, Reveal, TypingDots, EASE } from './motion-primitives';
+import { TypingDots, EASE } from './motion-primitives';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
 import { noticeParts } from '@/shared/messages';
@@ -61,22 +68,96 @@ function toolIcon(name: string): Icon {
 function ToolStatus({ status }: { status: ToolCallRow['status'] }) {
   if (status === 'running')
     return (
-      <CircleNotch size={11} className="animate-spin text-info-foreground" />
+      <CircleNotch
+        size={11}
+        aria-hidden="true"
+        className="animate-spin text-info-foreground"
+      />
     );
   if (status === 'error')
     return (
       <WarningCircle
         size={11}
         weight="fill"
+        aria-hidden="true"
         className="text-destructive-foreground"
       />
     );
+  if (status === 'pending')
+    return (
+      <Circle
+        size={7}
+        weight="fill"
+        aria-hidden="true"
+        className="text-content-disabled"
+      />
+    );
   return (
-    <CheckCircle size={11} weight="fill" className="text-content-secondary" />
+    <CheckCircle
+      size={11}
+      weight="fill"
+      aria-hidden="true"
+      className="text-content-secondary"
+    />
   );
 }
 
-/** Expanded args/output body of a tool chip. */
+const TOOL_STATUS_LABEL = {
+  pending: 'run.queued',
+  running: 'run.running',
+  done: 'run.done',
+  error: 'run.failed',
+} as const satisfies Record<ToolCallRow['status'], MessageKey>;
+
+const TOOL_HINT_KEYS = [
+  'title',
+  'query',
+  'project',
+  'scope',
+  'name',
+  'path',
+  'note',
+  'task',
+  'goal',
+  'run',
+  'id',
+  'body',
+  'text',
+];
+
+/** One short line of a tool's arguments, shown after its name. */
+function toolHint(args: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(args);
+  } catch {
+    return '';
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+  const read = (value: unknown): string => {
+    if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim();
+    if (typeof value === 'number') return String(value);
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const text = read(item);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+  const record = parsed as Record<string, unknown>;
+  for (const key of TOOL_HINT_KEYS) {
+    const hint = read(record[key]);
+    if (hint) return hint;
+  }
+  for (const value of Object.values(record)) {
+    const hint = read(value);
+    if (hint) return hint;
+  }
+  return '';
+}
+
+/** Expanded args/output body of a tool row. */
 function ToolBody({ tool, failed }: { tool: ToolCallRow; failed: boolean }) {
   if (!tool.args && !tool.output) return null;
   return (
@@ -99,126 +180,132 @@ function ToolBody({ tool, failed }: { tool: ToolCallRow; failed: boolean }) {
   );
 }
 
-/** One tool call as a compact chip; expand for args and output. */
-function ToolChip({ tool }: { tool: ToolCallRow }) {
+/**
+ * One tool call as a quiet log row. The leading icon and name keep the same
+ * place while args/output expand, so streaming text below is never dragged.
+ */
+function ToolRow({ tool }: { tool: ToolCallRow }) {
   const [open, setOpen] = useState(false);
+  const t = useT();
   const failed = tool.status === 'error';
-  const running = tool.status === 'running';
   const expandable = Boolean(tool.args || tool.output);
+  const hint = toolHint(tool.args);
   const IconComponent = toolIcon(tool.name);
-  const reduce = useReducedMotion();
-  const tone = failed
-    ? 'border-border-destructive/40'
-    : running
-      ? 'border-border-sky/40'
-      : 'border-border';
-  const iconTone = failed
-    ? 'bg-destructive/10 text-destructive-foreground'
-    : running
-      ? 'bg-info/10 text-info-foreground'
-      : 'bg-surface-tertiary/60 text-content-secondary';
   return (
-    <motion.div
-      layout={!reduce}
-      initial={reduce ? false : { opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.18, ease: EASE }}
-      className={`inline-flex max-w-full flex-col overflow-hidden rounded-lg border bg-secondary/50 align-top transition-colors ${tone}`}
-    >
-      <button
-        type="button"
-        aria-expanded={open}
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger
         disabled={!expandable}
-        onClick={() => setOpen((v) => !v)}
-        className={`group flex items-center gap-1.5 px-2 py-1.5 ${
-          expandable ? 'cursor-pointer hover:bg-secondary/80' : 'cursor-default'
-        }`}
+        aria-label={`${tool.name}${hint ? ` ${hint.slice(0, 120)}` : ''}, ${t(TOOL_STATUS_LABEL[tool.status])}`}
+        className={cn(
+          'flex min-h-6 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 text-left',
+          expandable
+            ? 'cursor-pointer transition-colors hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none'
+            : 'cursor-default',
+        )}
       >
         <span
-          className={`flex size-4.5 shrink-0 items-center justify-center rounded-[4px] ${iconTone}`}
+          className={cn(
+            'flex size-4 shrink-0 items-center justify-center',
+            failed ? 'text-destructive-foreground' : 'text-content-disabled',
+          )}
         >
-          <IconComponent size={10} weight="bold" />
+          <IconComponent size={11} weight="bold" aria-hidden="true" />
         </span>
-        <span className="truncate font-mono font-medium text-[10.5px] text-foreground">
+        <span className="shrink-0 font-mono text-[11px] text-content-secondary">
           {tool.name}
         </span>
-        <span className="ms-0.5 flex size-3.5 shrink-0 items-center justify-center">
+        {hint && (
+          <span className="min-w-0 truncate text-[11px] text-content-disabled">
+            {hint}
+          </span>
+        )}
+        <span className="ms-auto flex shrink-0 items-center gap-1.5 ps-1.5">
           <ToolStatus status={tool.status} />
-        </span>
-        {expandable && (
           <CaretRight
             size={9}
-            className={`shrink-0 text-content-disabled transition-transform duration-200 ${
-              open ? 'rotate-90' : ''
-            }`}
+            aria-hidden="true"
+            className={cn(
+              'text-content-disabled transition-transform duration-150',
+              open && 'rotate-90',
+              !expandable && 'invisible',
+            )}
           />
-        )}
-      </button>
-      <Reveal open={open}>
-        <ToolBody tool={tool} failed={failed} />
-      </Reveal>
-    </motion.div>
+        </span>
+      </CollapsibleTrigger>
+      <CollapsiblePanel className="ms-[22px] transition-none">
+        {open && <ToolBody tool={tool} failed={failed} />}
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
-/** A round of tool calls, collapsed into a single summary line when long. */
+/**
+ * A round's tool calls behind one dropdown. Collapsed rows keep the
+ * transcript readable while a chief or manager makes many calls; expanding
+ * never animates layout, so it cannot drift against the text stream.
+ */
 function ToolGroup({ tools }: { tools: ToolCallRow[] }) {
   const [open, setOpen] = useState(false);
   const t = useT();
-  const running = tools.filter((t) => t.status === 'running').length;
-  const failed = tools.filter((t) => t.status === 'error').length;
-  const reduce = useReducedMotion();
-  if (tools.length <= 2) {
-    return (
-      <div className="flex flex-wrap items-start gap-1.5">
-        <AnimatePresence initial={false}>
-          {tools.map((t) => (
-            <ToolChip key={t.callId} tool={t} />
-          ))}
-        </AnimatePresence>
-      </div>
-    );
-  }
+  if (tools.length === 0) return null;
+  if (tools.length === 1) return <ToolRow tool={tools[0]} />;
+  const running = tools.filter((tool) => tool.status === 'running').length;
+  const failed = tools.filter((tool) => tool.status === 'error').length;
   return (
-    <div className="w-full">
-      <motion.button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        whileTap={reduce ? undefined : { scale: 0.99 }}
-        className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-secondary/50 px-2 py-1.5 text-[11px] text-content-secondary transition-colors hover:border-border-secondary hover:text-foreground"
-      >
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex min-h-6 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-left transition-colors hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none">
         <CaretRight
           size={9}
-          className={`shrink-0 text-content-disabled transition-transform duration-200 ${
-            open ? 'rotate-90' : ''
-          }`}
+          aria-hidden="true"
+          className={cn(
+            'shrink-0 text-content-disabled transition-transform duration-150',
+            open && 'rotate-90',
+          )}
         />
-        <Wrench size={10} className="text-content-disabled" />
-        <span className="font-medium">
+        <Wrench
+          size={11}
+          aria-hidden="true"
+          className="shrink-0 text-content-disabled"
+        />
+        <span
+          className={cn(
+            'min-w-0 truncate font-medium text-[11.5px]',
+            running > 0 ? 'shimmer-text' : 'text-content-secondary',
+          )}
+        >
           {t('chat.toolCalls', { count: tools.length })}
         </span>
         {running > 0 && (
-          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-info-foreground">
-            <CircleNotch size={9} className="animate-spin" />
+          <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-info-foreground">
+            <CircleNotch size={9} aria-hidden="true" className="animate-spin" />
             {t('chat.running', { count: running })}
           </span>
         )}
         {failed > 0 && (
-          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-destructive-foreground">
-            <WarningCircle size={9} weight="fill" />
+          <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-destructive-foreground">
+            <WarningCircle size={9} weight="fill" aria-hidden="true" />
             {t('chat.failed', { count: failed })}
           </span>
         )}
-      </motion.button>
-      <Reveal open={open}>
-        <div className="mt-1.5 flex flex-wrap items-start gap-1.5">
-          {tools.map((t) => (
-            <ToolChip key={t.callId} tool={t} />
-          ))}
-        </div>
-      </Reveal>
-    </div>
+      </CollapsibleTrigger>
+      <CollapsiblePanel className="transition-none">
+        {open && (
+          <div
+            role="region"
+            aria-label={t('chat.toolCalls', { count: tools.length })}
+            // A capped scroller must accept focus so keyboard users can reach
+            // the rows scrolled out of view.
+            // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
+            className="mt-0.5 ms-[10px] flex max-h-[min(18rem,50dvh)] flex-col overflow-y-auto overscroll-contain rounded-md border-s border-border/70 pe-1 ps-1 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 focus-visible:outline-none"
+          >
+            {tools.map((tool) => (
+              <ToolRow key={tool.callId} tool={tool} />
+            ))}
+          </div>
+        )}
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
@@ -274,11 +361,11 @@ function AssistantBubble({ row }: { row: MessageRow }) {
           </button>
         )}
       </div>
-      {row.toolCalls && row.toolCalls.length > 0 && (
-        <ToolGroup tools={row.toolCalls} />
-      )}
       {row.text && (
         <Markdown text={row.text} animated streaming={Boolean(row.streaming)} />
+      )}
+      {row.toolCalls && row.toolCalls.length > 0 && (
+        <ToolGroup tools={row.toolCalls} />
       )}
       {row.streaming && !row.text && (
         <div className="flex items-center gap-2.5 font-mono text-[11px] text-content-secondary">
@@ -541,8 +628,8 @@ function WorkingIndicator({
       {working && (
         <motion.div
           key="working"
-          initial={reduce ? false : { opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
+          initial={reduce ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
           exit={reduce ? undefined : { opacity: 0 }}
           transition={{ duration: 0.2, ease: EASE }}
           role="status"
@@ -647,9 +734,7 @@ function Transcript({
             className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-5 py-7"
           >
             {rows.map((r) => (
-              <MessageIn key={r.id} animate={!r.streaming}>
-                <Row row={r} />
-              </MessageIn>
+              <Row key={r.id} row={r} />
             ))}
             <WorkingIndicator working={working} reduce={reduce} />
             <div className="h-px" />
