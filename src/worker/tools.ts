@@ -33,6 +33,7 @@ import {
   managerName,
   noManagerError,
 } from './manager-label.js';
+import { describeRunProgress, type RunProgress } from './run-progress.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
@@ -52,6 +53,10 @@ export interface ChiefDeps {
   onTaskCompleted?: (scopeId: string) => void;
   runReport: (id: string) => string;
   runDiff: (id: string) => Promise<string>;
+  /** Live progress snapshot of a run (state, timing, last output, tool calls). */
+  runProgress: (id: string) => Promise<RunProgress>;
+  /** Stop a run's current attempt; the worktree stays for review or follow-up. */
+  stopRun: (id: string, reason?: string) => Promise<RunRow>;
   /** Dispatch a headless worker run; resolves once the run is queued. */
   dispatch: (input: {
     projectRef: string;
@@ -155,7 +160,7 @@ MEMORY. Your memory outlives every session — without it you do not know who Ti
 
 WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each belongs to a scope with success criteria, constraints, a current state and a next action, and gets its own conversation (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. dispatch(project, prompt, task) records code work on a task id from <state>.
 
-DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. dispatch(project, prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state> when a task needs a stronger or cheaper worker. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to check progress; Tian can also follow up, land, ship or discard a run from the UI.
+DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. dispatch(project, prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state> when a task needs a stronger or cheaper worker. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to see what is live and run_progress(run) to read its state, elapsed time, last words and recent tool calls — that is how you answer "how is it going" instead of guessing. If a run is going the wrong way, stop_run(run, reason) ends the current attempt and keeps its worktree: its work stays reviewable, landable, and open to a follow-up. Stopping is not discarding — only Tian discards. Tian can also follow up, land, ship or discard a run from the UI.
 
 WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
 
@@ -568,9 +573,52 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     execute: async (args) => text(await deps.runDiff(args.id)),
   });
 
+  const runProgress = defineTool({
+    name: 'run_progress',
+    description:
+      'Check on a live run: how long it has been running, when its deadline is, what it last said, and the last few tool calls it made. Use it when Tian asks how a run is going or when a run went quiet — do not guess.',
+    parameters: Type.Object({
+      id: Type.String({ description: 'Run id from list_runs or a question.' }),
+    }),
+    execute: async (args) => {
+      try {
+        return text(describeRunProgress(await deps.runProgress(args.id)));
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const stopRun = defineTool({
+    name: 'stop_run',
+    replay: 'safe',
+    description:
+      'Stop a run whose current attempt is going the wrong way. The worker is aborted and the run ends interrupted, but its worktree and branch stay: review, land, or follow up afterwards. Not a discard — nothing is deleted.',
+    parameters: Type.Object({
+      id: Type.String({ description: 'Run id from list_runs.' }),
+      reason: Type.Optional(
+        Type.String({
+          description:
+            'One line Tian can read later explaining why it was stopped.',
+        }),
+      ),
+    }),
+    execute: async (args) => {
+      try {
+        const run = await deps.stopRun(args.id, args.reason);
+        return text(
+          `run ${run.id} stopped [${run.status}] — its worktree${run.worktreePath ? ` ${run.worktreePath}` : ''} is kept. Tian can land or discard it from the Runs panel; you can also read_run_diff or ask for a follow-up.`,
+        );
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
   const listRuns = defineTool({
     name: 'list_runs',
-    description: 'List dispatched runs of a scope (or all scopes) with status.',
+    description:
+      'List dispatched runs of a scope (or all scopes) with status and how long a live one has been running.',
     parameters: Type.Object({ scope: ScopeParam }),
     execute: async (args, api) => {
       const scope = args.scope
@@ -822,6 +870,8 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       listRuns,
       readRunReport,
       readRunDiff,
+      runProgress,
+      stopRun,
       sendRunMsg,
       listRunMsgs,
       delegate,

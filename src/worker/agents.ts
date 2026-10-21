@@ -16,6 +16,10 @@ import { MAGPIE_PROVIDER } from './magpie.js';
 import type { Settings } from './settings.js';
 import type { SkillRegistry } from './skills.js';
 import type { WorkerConversation, WorkerRuntime } from './runs.js';
+import type { RunToolCall } from './run-progress.js';
+
+/** Tool arguments longer than this are cut in a progress snapshot. */
+const MAX_ARG_CHARS = 160;
 
 /** The only adapter that knows Pi's conversation and submission APIs. */
 export class AgentRuntime implements WorkerRuntime {
@@ -197,6 +201,29 @@ export class AgentRuntime implements WorkerRuntime {
         };
       },
       abort: () => conversation.abort(BACKGROUND_CONTEXT, { background: true }),
+      recentToolCalls: async (limit) => {
+        const calls: RunToolCall[] = [];
+        const page = await conversation.entries(
+          { order: 'descending' },
+          // Entries mix messages and tool results, so page wider than `limit`.
+          Math.max(limit * 4, 20),
+          undefined,
+          BACKGROUND_CONTEXT,
+        );
+        for (const entry of page.items) {
+          for (const message of entry.model ?? []) {
+            if (message.role !== 'assistant') continue;
+            for (const block of message.content)
+              if (block.type === 'toolCall')
+                calls.push({
+                  name: block.name,
+                  args: summarizeArgs(block.arguments),
+                });
+          }
+        }
+        // Scanned newest first; report oldest first, newest last.
+        return calls.reverse().slice(-limit);
+      },
       lastText: async () => {
         const page = await conversation.entries(
           { order: 'descending' },
@@ -226,4 +253,17 @@ export class AgentRuntime implements WorkerRuntime {
   async close(): Promise<void> {
     await this.harness?.close(BACKGROUND_CONTEXT);
   }
+}
+
+/** One tool call's arguments as a single short line for a progress snapshot. */
+function summarizeArgs(args: unknown): string {
+  let text: string;
+  try {
+    text = JSON.stringify(args) ?? '';
+  } catch {
+    text = String(args);
+  }
+  return text.length > MAX_ARG_CHARS
+    ? `${text.slice(0, MAX_ARG_CHARS)}…`
+    : text;
 }

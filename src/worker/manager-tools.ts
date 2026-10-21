@@ -19,6 +19,7 @@ import { taskExecutionTools } from './tools-goals.js';
 import type { HistoryDeps } from './tools-history.js';
 import { workerModelLine, type WorkerModelChoice } from './run-model.js';
 import { managerName } from './manager-label.js';
+import { describeRunProgress, type RunProgress } from './run-progress.js';
 
 export interface ManagerDeps extends MemoryToolDeps {
   goals: GoalStore;
@@ -41,6 +42,10 @@ export interface ManagerDeps extends MemoryToolDeps {
   workerModels: () => WorkerModelChoice[];
   runReport: (id: string) => string;
   runDiff: (id: string) => Promise<string>;
+  /** Live progress snapshot of one of this project's runs. */
+  runProgress: (id: string) => Promise<RunProgress>;
+  /** Stop an attempt of one of this project's runs; its worktree is kept. */
+  stopRun: (id: string, reason?: string) => Promise<RunRow>;
   /** Post a message into a run's mailbox — a reply or mid-run guidance. */
   sendRunMessage: (runId: string, body: string, operationId: string) => unknown;
   runMessages: (runId: string) => AgentMessageRow[];
@@ -102,7 +107,7 @@ REPORTING UP. The chief cannot see your work unless you say so. report_chief(tex
 
 MEMORY. You read global and this project's memory (injected below), but you write ONLY this project's — remember/revise/forget/select/deselect always target this project; global stays the chief's domain. Record project decisions, conventions and outcomes.
 
-RUNS. dispatch gets a full briefing (the worker sees nothing else); dispatch(prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state>. send_run_msg answers a waiting worker or steers a run; list_runs/read_run_report/read_run_diff/list_run_msgs follow progress. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
+RUNS. dispatch gets a full briefing (the worker sees nothing else); dispatch(prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state>. send_run_msg answers a waiting worker or steers a run; list_runs, run_progress, read_run_report, read_run_diff and list_run_msgs follow progress. run_progress shows a live run's elapsed time, deadline, last words and recent tool calls — check it before dispatching a duplicate when a run goes quiet. stop_run(id, reason) ends an attempt going the wrong way and keeps its worktree for review or a follow-up; discarding stays Tian's call. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
 
 HISTORY & NOTES. search_history reads this project's past sessions, tool calls and events; read_history expands a ref. Notes are this project's long documents — keep plans and standing context there.`;
     },
@@ -408,7 +413,8 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
 
   const listRuns = defineTool({
     name: 'list_runs',
-    description: "List this project's dispatched runs with status.",
+    description:
+      "List this project's dispatched runs with status and how long a live one has been running.",
     parameters: Type.Object({}),
     execute: async (_args, api) => {
       const runs = db.listRuns(own(String(api.conversationId)));
@@ -446,6 +452,50 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
       try {
         ownRun(String(api.conversationId), args.id);
         return text(await deps.runDiff(args.id));
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const runProgress = defineTool({
+    name: 'run_progress',
+    description:
+      'Check on one of your live runs: how long it has been running, when its deadline is, what it last said, and the last few tool calls it made. Use it when a run went quiet instead of dispatching a duplicate.',
+    parameters: Type.Object({
+      id: Type.String({ description: 'Run id from list_runs.' }),
+    }),
+    execute: async (args, api) => {
+      try {
+        ownRun(String(api.conversationId), args.id);
+        return text(describeRunProgress(await deps.runProgress(args.id)));
+      } catch (e) {
+        return err(String(e));
+      }
+    },
+  });
+
+  const stopRun = defineTool({
+    name: 'stop_run',
+    replay: 'safe',
+    description:
+      'Stop one of your runs whose current attempt is going the wrong way. The worker is aborted and the run ends interrupted, but its worktree and branch stay: review, land, or follow up afterwards. Not a discard — nothing is deleted.',
+    parameters: Type.Object({
+      id: Type.String({ description: 'Run id from list_runs.' }),
+      reason: Type.Optional(
+        Type.String({
+          description:
+            'One line explaining why, kept in the run and its events.',
+        }),
+      ),
+    }),
+    execute: async (args, api) => {
+      try {
+        ownRun(String(api.conversationId), args.id);
+        const run = await deps.stopRun(args.id, args.reason);
+        return text(
+          `run ${run.id} stopped [${run.status}] — its worktree${run.worktreePath ? ` ${run.worktreePath}` : ''} is kept. Read the result with read_run_report or read_run_diff, then report_chief.`,
+        );
       } catch (e) {
         return err(String(e));
       }
@@ -767,6 +817,8 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
       listRuns,
       readRunReport,
       readRunDiff,
+      runProgress,
+      stopRun,
       sendRunMsg,
       listRunMsgs,
       searchHistory,

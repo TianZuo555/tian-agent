@@ -55,8 +55,12 @@ class FakeRuntime implements WorkerRuntime {
         }
         return { wait: () => new Promise<Outcome>(() => {}) };
       },
-      abort: async () => {},
+      abort: async () => {
+        // Like the real runtime: aborting settles the open submission.
+        this.complete({ status: 'unanswered', reason: 'aborted' });
+      },
       lastText: async () => '',
+      recentToolCalls: async () => [],
     };
   }
   /** Resolve every open submission of a worker conversation. */
@@ -542,6 +546,55 @@ test('extractor evidence rules are deterministic', () => {
     }),
     [],
   );
+
+  // A stopped attempt is reviewable evidence: it yields a candidate that says
+  // it came from a stopped run, and interrupting the run is not a failure.
+  const [fromStopped] = extractor.extract({
+    ...base,
+    run: run({ status: 'interrupted' }),
+    report: headed,
+    stopped: 'Stopped by its agent: wrong approach',
+  });
+  assert.equal(fromStopped.name, 'ship-the-release-checklist');
+  assert.match(fromStopped.description, /stopped early/);
+  assert.match(fromStopped.description, /wrong approach/);
+  assert.doesNotMatch(fromStopped.description, /Successful/);
+  // A stopped attempt without a procedure still yields nothing.
+  assert.deepEqual(
+    extractor.extract({
+      ...base,
+      run: run({ status: 'interrupted' }),
+      report: short,
+      stopped: 'Stopped by its agent',
+    }),
+    [],
+  );
+});
+
+test('stopping a run reviews the attempt but never fails its injected skills', async (t) => {
+  const f = await fixture(t);
+  // Get an approved skill so the stopped run carries injections.
+  await successfulRun(f, 'Fix the flaky login test');
+  const approved = f.skills.approve(f.skills.list('p1')[0].id);
+  assert.equal(approved.status, 'approved');
+
+  const run = await dispatchRun(f, 'Fix the flaky login test once more');
+  assert.ok(run.injectedSkills?.length);
+  // The stopped worker had already written a procedural report.
+  writeFileSync(join(run.worktreePath!, 'TIAN_REPORT.md'), STEPS_REPORT);
+  await f.runs.stop(run.id, { reason: 'wrong approach' });
+  await f.runs.join();
+
+  // Stopping is a recall, not proof the procedure failed.
+  assert.equal(f.skills.get(approved.id)!.verification, 'unverified');
+  assert.equal(f.skills.get(approved.id)!.status, 'approved');
+  // The stopped attempt still contributed its procedure as a candidate.
+  const candidates = f.skills
+    .list('p1')
+    .filter((skill) => skill.status === 'candidate');
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].description, /stopped early/);
+  assert.deepEqual(candidates[0].sourceRefs, [`run:${run.id}:attempt:1`]);
 });
 
 test('a v3 database upgrades in one transaction and leaves a backup', (t) => {

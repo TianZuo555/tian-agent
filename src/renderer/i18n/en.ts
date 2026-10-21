@@ -554,6 +554,8 @@ export const en = {
   'project.allowInPlace':
     'Allow execution in the original directory for non-Git projects',
   'project.timeout': 'Run timeout (minutes)',
+  'project.timeoutHint':
+    'How long one attempt may run before it is aborted. 0 = no limit.',
   'project.baseBranch': 'Base branch',
   'project.preamble': 'Worker instructions',
   'project.managerName': 'Manager name',

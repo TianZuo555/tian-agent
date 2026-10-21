@@ -62,6 +62,16 @@ dispatch → queued → running → collecting → done / failed
 - 工兵 `check_msgs`：读取总管发来的未读消息（答复之外的主动指令）。
 - 总管 `send_run_msg(run, body)`：回复提问中的工兵，或对运行中的 Run 主动下达指令；`list_run_msgs(run)` 查看完整线程。
 
+## 进度与中止
+
+总管与项目管理者都能读取 Run 的实时进度并中止当前 attempt——两者都不是 shell 权限，也不越过各自的 scope 边界。
+
+- **`run_progress(id)`**：返回状态、attempt、已用时间与截止时间（无超时时明说 `no deadline`）、工兵最后一段输出、最近 5 次工具调用（工具名 + 截断后的参数）。数据来自 `runs` 行与工兵会话的 `entries()`，只读；discarded 的 Run 只给行内信息。这是「它卡住了还是在干活」的判断依据，也是总管回答「进展如何」的唯一正当来源。
+- **`stop_run(id, reason?)`**：在 Run 锁内把 `status` 置为 `interrupted` 并写入 `error` 与 `finished_at`，记录 attempt 与 `run.stopped` 事件，然后 abort 工兵会话。**worktree 与分支保留**，`reviewStatus` 仍是 `pending`，因此之后仍可 `read_run_diff`、land、或 follow-up 开新一轮；它不是 discard，不删任何东西。
+- **不覆盖**：abort 让 collector 的 `submission.wait()` 返回，但 collector 在锁内复查 `status === 'interrupted'` 后直接返回，不会把结果写成 done/failed。`execute()` 只在 `reviewStatus === 'pending'` 时重启，因此中断的 attempt 不会被恢复流程续跑。
+- **边界**：总管只能中止非 Manager 名下的 Run（与 `send_run_msg` 同一规则，Manager 名下的由管理者自己收口）；管理者 `stop_run` 必须落在本项目，越界报 `belongs to another project`。
+- **经验审查**：中止也算一次 ending——`stop()` 在 abort 后读该 attempt 留下的报告，以 `stopped` 标记调用 `reviewExperience`。报告里有明确步骤段落仍可产候选（描述注明 stopped early 与原因），但**不会**把注入的 skill 标 `verification = failed`：主动收回不等于流程失效。
+
 消息 ID 与通知 ID 均由调用派生，Durable 重放不产生重复消息；已读状态持久化。工兵被要求优先自行决策，只在破坏性操作、缺失凭据或根本性歧义时提问。
 
 报告从 `TIAN_REPORT.md` 收集到 `<project root>/.tian/runs/`，每轮独立保留，报告不进入代码提交。

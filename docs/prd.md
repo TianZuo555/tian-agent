@@ -254,13 +254,13 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 ### 6.1 F09 — Experience Extraction　P1　【部分】
 
-现状：Run 完成时由 `SkillRegistry.review` 审查执行轨迹（Run 状态、报告、Attempt、Agent 消息）。默认提取器是确定性规则（`RuleBasedExtractor`）：只有成功完成的 Run 且报告含明确的步骤段落（steps/procedure/workflow 标题，或 ≥3 条连续列表项）才产生候选，并带 `run:<id>:attempt:<n>` 来源引用；失败 Run 不产生候选；重复提取同名同文合并来源而不加版本。提取器是可注入接口，模型提取器留待后续接入。
+现状：Run 结束（完成、失败或被编排者 `stop_run` 中止）时由 `SkillRegistry.review` 审查执行轨迹（Run 状态、报告、Attempt、Agent 消息）。默认提取器是确定性规则（`RuleBasedExtractor`）：`done` 或带 `stopped` 标记的被中止 attempt 且报告含明确的步骤段落（steps/procedure/workflow 标题，或 ≥3 条连续列表项）才产生候选，并带 `run:<id>:attempt:<n>` 来源引用，被中止的候选在描述里注明「stopped early」与原因；失败 Run 不产生候选；重复提取同名同文合并来源而不加版本。被中止的 attempt 不会把注入的 skill 标记 `verification = failed`（主动中止不等于流程失效）。提取器是可注入接口，模型提取器留待后续接入。
 
 任务完成后审查执行轨迹（Run 报告、Attempt、Agent 消息），提取成功步骤、失败做法、环境限制、可复用命令。普通 History 不等于经验；证据充分的流程才进入 Skill 候选。
 
 ### 6.2 F10 — Self-improving Skills　P2　【部分】
 
-现状：`skills` 表按（scope、name、version）多版本并存，状态机 `candidate → approved → retired / superseded`；批准（approve）、停用（retire）、回滚（rollback）只能是用户经 IPC/UI 触发，记入 `events` 审计。dispatch 时按名称/关键词匹配 approved 版本，注入 Worker 指令（`promptPreamble` 同一注入点），并在 `runs.injected_skills` 留痕；渲染前再次校验状态，未批准的候选绝不进入任何 prompt。加载某版本且失败的 Run 会把该版本标记 `verification = failed`（用户决定是否回滚）；回滚把当前版本置 `retired + failed` 并恢复上一个被取代（superseded）的版本为 approved，版本历史完整保留。一次未经验证的成功不得变成全局规则。现有项目设置 `promptPreamble` 仍是最原始的 Procedural Memory，可作为 Skill 的过渡载体。
+现状：`skills` 表按（scope、name、version）多版本并存，状态机 `candidate → approved → retired / superseded`；批准（approve）、停用（retire）、回滚（rollback）只能是用户经 IPC/UI 触发，记入 `events` 审计。dispatch 时按名称/关键词匹配 approved 版本，注入 Worker 指令（`promptPreamble` 同一注入点），并在 `runs.injected_skills` 留痕；渲染前再次校验状态，未批准的候选绝不进入任何 prompt。加载某版本且失败的 Run 会把该版本标记 `verification = failed`（用户决定是否回滚；被 `stop_run` 主动中止的 Run 不算失败，不改 verification）；回滚把当前版本置 `retired + failed` 并恢复上一个被取代（superseded）的版本为 approved，版本历史完整保留。一次未经验证的成功不得变成全局规则。现有项目设置 `promptPreamble` 仍是最原始的 Procedural Memory，可作为 Skill 的过渡载体。
 
 待办：按任务语义匹配（当前是名称/关键词）、回滚后的自动重验证、与 Memory Worker 的 Dreaming 联动。设计与取舍见 [D10](decisions.md#d10--skill-以人工审批为唯一注入闸门经验提取只产候选)。
 

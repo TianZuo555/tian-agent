@@ -21,6 +21,13 @@ export interface ExperienceInput {
   report: string;
   attempts: RunAttemptSummary[];
   messages: { sender: string; body: string }[];
+  /**
+   * Set when an agent stopped the attempt (stop_run) instead of the worker
+   * finishing. A stopped attempt can still yield a candidate — its report may
+   * describe a procedure that worked so far — but it is never evidence that an
+   * injected skill failed.
+   */
+  stopped?: string;
 }
 
 /** One proposed reusable procedure; never persisted before human approval. */
@@ -97,22 +104,29 @@ const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\S/;
 const STEP_WORD = /\b(steps?|procedure|workflow)\b/i;
 
 /**
- * Deterministic offline extractor: a candidate exists only when the run
- * succeeded AND the report contains an explicit, delimited procedure — either
- * a steps/procedure/workflow heading section or a run of at least three list
- * items. Failed or vague runs yield nothing; failure lessons stay in History.
+ * Deterministic offline extractor: a candidate exists only when the attempt
+ * ended in a reviewable state AND the report contains an explicit, delimited
+ * procedure — either a steps/procedure/workflow heading section or a run of at
+ * least three list items. A run an agent stopped counts like a finished one:
+ * the procedure it had already carried out is the same evidence. Failed or
+ * vague runs yield nothing; failure lessons stay in History.
  */
 export class RuleBasedExtractor implements ExperienceExtractor {
   extract(input: ExperienceInput): SkillCandidate[] {
-    const { run, report } = input;
-    if (run.status !== 'done' || report.trim().length < 40) return [];
+    const { run, report, stopped } = input;
+    const reviewable = run.status === 'done' || stopped != null;
+    if (!reviewable || report.trim().length < 40) return [];
     const section = findStepSection(report);
     if (!section) return [];
     const firstLine = run.prompt.split('\n')[0].trim().slice(0, 120);
+    const origin =
+      stopped != null
+        ? `Procedure from run ${run.id} attempt ${run.attempt}, stopped early (${stopped.slice(0, 80)})`
+        : `Successful procedure from run ${run.id} attempt ${run.attempt}`;
     return [
       {
         name: slug(firstLine, `procedure-${run.id.slice(2, 10)}`),
-        description: `Successful procedure from run ${run.id} attempt ${run.attempt}: ${firstLine}`,
+        description: `${origin}: ${firstLine}`,
         body: `# ${firstLine}\n\n${section.markdown}`.slice(0, MAX_BODY),
       },
     ];
@@ -466,9 +480,13 @@ export class SkillRegistry {
    * Experience review of one finished run (PRD §6.1): failures mark injected
    * versions failed; evidence-rich successes produce candidates with source
    * refs. Every write is transactional, so an extractor crash damages nothing.
+   *
+   * `stopped` marks an attempt an agent ended with stop_run. Stopping is a
+   * deliberate recall, not proof that an injected procedure failed, so injected
+   * skills keep their verification; the attempt can still yield a candidate.
    */
-  review(run: RunRow, report: string): void {
-    if (run.status === 'failed' && run.injectedSkills?.length) {
+  review(run: RunRow, report: string, stopped?: string): void {
+    if (!stopped && run.status === 'failed' && run.injectedSkills?.length) {
       for (const ref of run.injectedSkills) {
         this.db.sqlite
           .prepare(
@@ -488,6 +506,7 @@ export class SkillRegistry {
       report,
       attempts,
       messages: this.db.listAgentMessages(run.id),
+      stopped,
     });
     const ref = `run:${run.id}:attempt:${run.attempt}`;
     for (const candidate of candidates)

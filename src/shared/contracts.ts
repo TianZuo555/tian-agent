@@ -140,7 +140,8 @@ const patch = Type.Partial(
     autoLand: Type.Boolean(),
     allowInPlace: Type.Boolean(),
     agentKind: Type.Literal('durable-worker'),
-    runTimeoutMin: Type.Integer({ minimum: 1, maximum: 1440 }),
+    // 0 = no run deadline; any positive value is the per-attempt limit in minutes.
+    runTimeoutMin: Type.Integer({ minimum: 0, maximum: 1440 }),
     baseBranch: Type.String({ minLength: 1, maxLength: 256 }),
     promptPreamble: Type.String({ maxLength: 100_000 }),
     managerName: Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),

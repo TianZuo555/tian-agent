@@ -8,6 +8,7 @@ import type { IssueReporter } from './improvements.js';
 import type { Emit } from '../shared/types.js';
 import { atomicWrite } from './files.js';
 import * as Git from './dispatch.js';
+import type { RunProgress, RunToolCall } from './run-progress.js';
 
 export interface WorkerSubmission {
   wait(): Promise<{ status: 'done' | 'unanswered'; reason?: string }>;
@@ -17,6 +18,8 @@ export interface WorkerConversation {
   submit(prompt: string, requestId: string): Promise<WorkerSubmission>;
   abort(): Promise<void>;
   lastText(): Promise<string>;
+  /** Recent tool calls, oldest first, as a progress snapshot shows them. */
+  recentToolCalls(limit: number): Promise<RunToolCall[]>;
 }
 export interface WorkerRuntime {
   create(run: RunRow): Promise<WorkerConversation>;
@@ -36,6 +39,28 @@ export interface DispatchInput {
 }
 
 /**
+ * Run deadline helpers. `run_timeout_min = 0` means the run has no deadline: the
+ * stored `deadline_at` stays empty and every check treats it as unlimited.
+ */
+function deadlineFor(timeoutMin: number): string {
+  if (timeoutMin <= 0) return '';
+  return new Date(Date.now() + timeoutMin * 60_000).toISOString();
+}
+
+/** Milliseconds left before `deadlineAt`, or null when the run is unbounded. */
+function remainingMs(deadlineAt: string): number | null {
+  if (!deadlineAt) return null;
+  const deadline = Date.parse(deadlineAt);
+  // An unparseable deadline is treated as expired so a bad row cannot hang.
+  return Number.isFinite(deadline) ? deadline - Date.now() : 0;
+}
+
+function hasPassed(deadlineAt: string): boolean {
+  const remaining = remainingMs(deadlineAt);
+  return remaining !== null && remaining <= 0;
+}
+
+/**
  * Skill matching and experience review (PRD §6.1–6.2), provided by the Skill
  * Registry; absent = runs carry no skills and are never reviewed.
  */
@@ -44,7 +69,7 @@ export interface SkillProvider {
     scopeId: string,
     taskText: string,
   ): { id: string; name: string; version: number }[];
-  review(run: RunRow, report: string): void;
+  review(run: RunRow, report: string, stopped?: string): void;
 }
 
 /** Owns execution, attempts, review transitions, and recovery of external work. */
@@ -149,9 +174,7 @@ export class RunOrchestrator {
         thinkingLevel: input.thinkingLevel ?? null,
         startedAt,
         finishedAt: null,
-        deadlineAt: new Date(
-          Date.now() + project.runTimeoutMin * 60_000,
-        ).toISOString(),
+        deadlineAt: deadlineFor(project.runTimeoutMin),
       };
       // Claim the slot atomically: the same dispatcher sending the same
       // briefing while a run is still in flight reuses that run — a replayed
@@ -282,24 +305,16 @@ export class RunOrchestrator {
   private async execute(id: string): Promise<void> {
     const prepared = await this.locked(id, async () => {
       let run = this.require(id);
-      // interrupted: a stop may land while the run is still queued — never
-      // launch a worker for it.
-      if (
-        this.closing ||
-        run.reviewStatus !== 'pending' ||
-        run.status === 'interrupted'
-      )
-        return null;
+      if (this.closing || run.reviewStatus !== 'pending') return null;
+      // An agent or Tian stopped this attempt before it started; never submit.
+      if (run.status === 'interrupted') return null;
       if (run.status === 'collecting')
         return {
           run,
           conversation: await this.runtime.get(run.conversationId!),
           submission: null,
         };
-      if (
-        !Number.isFinite(Date.parse(run.deadlineAt)) ||
-        Date.parse(run.deadlineAt) <= Date.now()
-      ) {
+      if (hasPassed(run.deadlineAt)) {
         const error = new Error('Run exceeded its deadline');
         if (run.conversationId) {
           const conversation = await this.runtime.get(run.conversationId);
@@ -332,11 +347,11 @@ export class RunOrchestrator {
     const { conversation, submission } = prepared;
     let failure: string | null = null;
     if (submission) {
-      const deadline = Date.parse(prepared.run.deadlineAt);
-      const remaining = Number.isFinite(deadline) ? deadline - Date.now() : 0;
-      let timedOut = remaining <= 0;
+      // Fewer than `remaining` ms are left, or there is no deadline at all.
+      const remaining = remainingMs(prepared.run.deadlineAt);
+      let timedOut = remaining !== null && remaining <= 0;
       if (timedOut) await conversation.abort();
-      else {
+      else if (remaining !== null) {
         const timer = setTimeout(() => {
           timedOut = true;
           void conversation.abort().catch((error) =>
@@ -361,13 +376,10 @@ export class RunOrchestrator {
     if (this.closing) return;
     await this.locked(id, async () => {
       let run = this.require(id);
-      // interrupted: stop() already finished the run — do not collect.
-      if (
-        this.closing ||
-        run.reviewStatus !== 'pending' ||
-        run.status === 'interrupted'
-      )
-        return;
+      if (this.closing || run.reviewStatus !== 'pending') return;
+      // A stop already finished the attempt; its abort settles the wait but
+      // the outcome is already recorded, so never collect over it.
+      if (run.status === 'interrupted') return;
       // Persist the outcome before collecting so a restart cannot turn failure into success.
       run = this.db.patchRun(id, {
         status: 'collecting',
@@ -459,11 +471,24 @@ export class RunOrchestrator {
     await this.notify();
   }
 
+  /** Whatever the attempt left on disk: its report file, else its TIAN_REPORT.md. */
+  private currentReport(run: RunRow): string {
+    const file = join(run.worktreePath ?? run.rootPath, 'TIAN_REPORT.md');
+    if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+    return run.reportPath && existsSync(run.reportPath)
+      ? readFileSync(run.reportPath, 'utf8')
+      : '';
+  }
+
   /** Experience review is best-effort: it must never fail the run. */
-  private reviewExperience(run: RunRow, report: string): void {
+  private reviewExperience(
+    run: RunRow,
+    report: string,
+    stopped?: string,
+  ): void {
     if (!this.skills) return;
     try {
-      this.skills.review(run, report);
+      this.skills.review(run, report, stopped);
     } catch (error) {
       console.error(`Experience review ${run.id}:`, error);
     }
@@ -512,7 +537,7 @@ export class RunOrchestrator {
         (run.worktreePath && !existsSync(run.worktreePath))
       )
         throw new Error('Worker or worktree no longer exists');
-      const timeout = this.db.getProject(run.projectId)?.runTimeoutMin ?? 30;
+      const timeout = this.db.getProject(run.projectId)?.runTimeoutMin ?? 0;
       const next = this.db.transaction(() => {
         const value = this.db.patchRun(id, {
           status: 'queued',
@@ -522,7 +547,7 @@ export class RunOrchestrator {
           exitCode: null,
           startedAt: new Date().toISOString(),
           finishedAt: null,
-          deadlineAt: new Date(Date.now() + timeout * 60_000).toISOString(),
+          deadlineAt: deadlineFor(timeout),
         });
         this.db.recordAttempt(value);
         return value;
@@ -580,19 +605,40 @@ export class RunOrchestrator {
   }
 
   /**
-   * Tian pressed stop: abort the worker mid-flight but keep the run — its
-   * worktree, report path and review state stay intact, so it can still be
-   * landed, followed up or discarded. Only queued/running runs respond; a
-   * collecting or finished run returns unchanged.
+   * Stop the current attempt and keep everything it produced: the worker is
+   * aborted, the attempt's uncommitted edits are snapshotted onto the run
+   * branch (runDiff/land/ship read commits, so otherwise they would be
+   * lost), and the run ends `interrupted` with review still `pending` —
+   * its worktree stays for inspection, landing, or a follow-up. One gate
+   * for Tian's button and the agents' stop_run: only a queued or running
+   * attempt with pending review responds; `strict` callers get an error
+   * instead of a quiet no-op.
    */
-  async stop(id: string): Promise<RunRow> {
+  async stop(
+    id: string,
+    opts?: {
+      reason?: string;
+      actor?: 'user' | 'chief' | 'manager';
+      strict?: boolean;
+    },
+  ): Promise<RunRow> {
     return this.locked(id, async () => {
       const run = this.require(id);
       if (
         !['queued', 'running'].includes(run.status) ||
         run.reviewStatus !== 'pending'
-      )
+      ) {
+        if (opts?.strict)
+          throw new Error(
+            `Run ${id} is not running (${run.status}${run.reviewStatus !== 'pending' ? `, review ${run.reviewStatus}` : ''})`,
+          );
         return run;
+      }
+      const actor = opts?.actor ?? 'user';
+      const who = actor === 'user' ? 'Tian' : 'its agent';
+      const note = opts?.reason?.trim()
+        ? `Stopped by ${who}: ${opts.reason.trim()}`
+        : `Stopped by ${who}`;
       clearTimeout(this.timers.get(id));
       this.timers.delete(id);
       if (run.conversationId)
@@ -615,24 +661,28 @@ export class RunOrchestrator {
           });
         }
       }
-      const stopped = this.db.finishRun(id, 'interrupted', 'Stopped by Tian', {
+      const stopped = this.db.finishRun(id, 'interrupted', note, {
         id: `run:${id}:attempt:${run.attempt}:stopped`,
         scopeId: run.projectId,
         conversationId: run.chiefConversationId,
-        content: `[run ${id} stopped]\nStopped by Tian. Partial work is committed on the run's branch; follow up to continue or discard to remove it.`,
+        content: `[run ${id} stopped]\n${note}. Partial work is committed on the run's branch; follow up to continue or discard to remove it.`,
       });
       this.events?.record({
-        id: `run:${id}:stopped`,
+        id: `run:${id}:attempt:${run.attempt}:stopped`,
         type: 'run.stopped',
-        actor: 'user',
+        actor,
         scopeId: run.projectId,
         runId: id,
         conversationId: run.chiefConversationId,
-        summary: `Run ${id} stopped by Tian`,
+        summary: `${note} (${run.id} attempt ${run.attempt})`,
+        payload: { attempt: run.attempt },
       });
       this.changed();
       await this.notify();
-      return stopped;
+      // Review the attempt like any other ending, but never as a failure of
+      // the injected skills: a stop is a recall, not proof they were wrong.
+      this.reviewExperience(this.require(id), this.currentReport(run), note);
+      return this.require(id);
     });
   }
 
@@ -759,6 +809,33 @@ export class RunOrchestrator {
     return run.reportPath && existsSync(run.reportPath)
       ? readFileSync(run.reportPath, 'utf8')
       : '(no report written yet)';
+  }
+  /**
+   * Live progress of one run for its steering agent (chief or manager): its
+   * state and timing from the row, its last words and tool calls from the
+   * worker conversation. Read-only; a discarded run keeps its last snapshot.
+   */
+  async progress(id: string, toolCallLimit = 5): Promise<RunProgress> {
+    const run = this.require(id);
+    const live = run.conversationId && run.reviewStatus !== 'discarded';
+    const conversation = live
+      ? await this.runtime.get(run.conversationId!).catch(() => undefined)
+      : undefined;
+    return {
+      id: run.id,
+      projectId: run.projectId,
+      status: run.status,
+      reviewStatus: run.reviewStatus,
+      attempt: run.attempt,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      deadlineAt: run.deadlineAt,
+      error: run.error,
+      lastText: (await conversation?.lastText().catch(() => '')) ?? '',
+      toolCalls:
+        (await conversation?.recentToolCalls(toolCallLimit).catch(() => [])) ??
+        [],
+    };
   }
   async diff(id: string): Promise<string> {
     const run = this.require(id);
