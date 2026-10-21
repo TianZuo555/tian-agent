@@ -13,6 +13,8 @@ mise run doctor     # 仅 React Doctor
 mise run verify     # check + doctor + test，提交前跑这个
 ```
 
+类型检查用 [`tsrs`](https://github.com/oxc-project/tsrs)（TypeScript 7 编译器的 Rust 移植）：`pnpm typecheck` 跑 `tsrs --noEmit`，比 `tsc` 快一个数量级且内存约为三分之一。它跟随 TS 7 语义，因此 `tsconfig.json` 里不能用 TS 7 移除的选项（`baseUrl`、ES5 target、AMD/UMD module 等）；`paths` 不需要 `baseUrl`。保留 `pnpm typecheck:tsc` 作为对照——怀疑 tsrs 误报时先跑它确认，两者的诊断应逐字一致。
+
 ## 本地环境变量
 
 `mise.toml` 通过 `[env] _.file` 读取仓库根目录的 `.env`（已 gitignore，缺失不报错，值标记为 redacted）。从模板开始：
