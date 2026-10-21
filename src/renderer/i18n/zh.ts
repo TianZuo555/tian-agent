@@ -168,6 +168,7 @@ export const zh: Partial<Messages> = {
   'chat.copied': '已复制',
   'chat.assistantMessage': '总管消息',
   'chat.userMessage': '用户消息',
+  'chat.notification': '通知',
   'chat.latest': '最新',
   'chat.toolCalls': (p) => `${p.count} 次工具调用`,
   'chat.running': (p) => `${p.count} 个进行中`,
@@ -200,6 +201,7 @@ export const zh: Partial<Messages> = {
   'context.noChanges': '此 Run 没有文件改动。',
   'context.skills': '技能（{count}）',
   'context.report': '报告',
+  'context.noReport': '此 Run 没有报告。',
 
   // ─── 12. Run Status Badges ─────────────────────────────────────────────────
   'run.running': '进行中',

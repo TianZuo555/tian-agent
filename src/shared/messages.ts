@@ -13,8 +13,28 @@ export interface MessageRow {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   text: string;
+  /**
+   * System rows only: 'marker' is a transcript divider (context reset), while
+   * 'notice' is prose an agent posted — a manager/worker report, a run wake, a
+   * model error — and is rendered as markdown.
+   */
+  variant?: 'marker' | 'notice';
   toolCalls?: ToolCallRow[];
   streaming?: boolean;
+}
+
+/**
+ * Split a notification's bracketed first line (`[run … finished]`,
+ * `[<project> manager reports]`) from the body it labels. Notifications are
+ * written by agents, so the body is markdown and the label is UI chrome.
+ */
+export function noticeParts(text: string): {
+  label: string | null;
+  body: string;
+} {
+  const head = /^\[([^\]\n]{1,120})\]\n?/.exec(text);
+  if (!head) return { label: null, body: text };
+  return { label: head[1].trim(), body: text.slice(head[0].length).trim() };
 }
 
 interface ContentBlock {
@@ -143,6 +163,7 @@ export function toRows(view: ConversationView | undefined): {
           rows.push({
             id: `e${e.id}-err`,
             role: 'system',
+            variant: 'notice',
             text: `Model error: ${error}`,
           });
         }
@@ -172,6 +193,7 @@ export function toRows(view: ConversationView | undefined): {
         rows.push({
           id: `e${e.id}`,
           role: 'system',
+          variant: 'notice',
           text: text || `[${e.kind}]`,
         });
       }

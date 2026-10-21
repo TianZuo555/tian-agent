@@ -6,102 +6,45 @@ import {
   useState,
 } from 'react';
 import {
-  ArrowCounterClockwise,
   ArrowDown,
-  ArrowSquareOut,
+  Bell,
   Brain,
   CalendarCheck,
   CaretRight,
   ChatCircleDots,
-  Check,
   ChatCircleText,
+  Check,
   CheckCircle,
   CircleNotch,
   Copy,
-  CornersOut,
-  DownloadSimple,
   FileText,
   FolderSimple,
   GitMerge,
   Globe,
   MagnifyingGlass,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
   Pulse,
   Sparkle,
   Target,
   Terminal,
   WarningCircle,
   Wrench,
-  X,
 } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
-import { lazy, Suspense } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { defaultComponents, Streamdown } from 'streamdown';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { ChatComposer } from './ChatComposer';
-// Pele adds ~400 KB; load it only when a diagram actually shows up.
-const MermaidDiagram = lazy(() => import('./MermaidDiagram'));
+import { Markdown } from './Markdown';
 import { MessageIn, Reveal, TypingDots, EASE } from './motion-primitives';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
+import { noticeParts } from '@/shared/messages';
 import { actions, useStore } from '../store';
 import { useT, type MessageKey } from '../i18n';
 import { ContextToggle, SidebarToggle } from './SidebarToggle';
 import { PaneHeader } from './PaneHeader';
 import { BrandMark, BrandOrb } from './BrandMark';
-
-/**
- * Prose styling for Streamdown output. Streamdown ships its own Tailwind
- * classes, so these selectors need to be specific enough to win without
- * fighting its component structure.
- */
-const PROSE = [
-  'text-[13.5px] leading-[1.75] text-foreground',
-  '[&_p]:my-0 [&_p+p]:mt-3',
-  '[&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5',
-  '[&_ul]:list-outside [&_ul_li]:pl-0 [&_ul_li]:py-0.5',
-  '[&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:list-outside',
-  '[&_li]:my-0 [&_li>p]:inline',
-  '[&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2',
-  '[&_strong]:font-semibold [&_em]:italic',
-  '[&_h1]:mt-4 [&_h1]:mb-1 [&_h1]:font-semibold [&_h1]:text-base',
-  '[&_h2]:mt-4 [&_h2]:mb-1 [&_h2]:font-semibold [&_h2]:text-[15px]',
-  '[&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_h3]:text-sm',
-  '[&_hr]:my-4 [&_hr]:border-border',
-  '[&_blockquote]:my-3 [&_blockquote]:border-border [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-content-secondary',
-  '[&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[12.5px]',
-  '[&_th]:border [&_th]:border-border [&_th]:bg-secondary [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-medium',
-  '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1',
-  '[&_[data-streamdown=code-block]]:my-3 [&_[data-streamdown=code-block]]:rounded-md [&_[data-streamdown=code-block]]:border [&_[data-streamdown=code-block]]:border-border',
-  '[&_code]:font-mono [&_code]:text-[0.85em]',
-  '[&_:not(pre)>code]:rounded-sm [&_:not(pre)>code]:bg-secondary [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5',
-].join(' ');
-
-/** Streamdown's built-in controls, re-drawn with the app's icon family. */
-function streamIcon(IconComponent: Icon) {
-  return function StreamIcon(
-    props: React.SVGProps<SVGSVGElement> & { size?: number },
-  ) {
-    return <IconComponent {...props} />;
-  };
-}
-
-const STREAM_ICONS = {
-  CheckIcon: streamIcon(Check),
-  CopyIcon: streamIcon(Copy),
-  DownloadIcon: streamIcon(DownloadSimple),
-  ExternalLinkIcon: streamIcon(ArrowSquareOut),
-  Loader2Icon: streamIcon(CircleNotch),
-  Maximize2Icon: streamIcon(CornersOut),
-  RotateCcwIcon: streamIcon(ArrowCounterClockwise),
-  XIcon: streamIcon(X),
-  ZoomInIcon: streamIcon(MagnifyingGlassPlus),
-  ZoomOutIcon: streamIcon(MagnifyingGlassMinus),
-};
 
 function toolIcon(name: string): Icon {
   if (/memory|brain/i.test(name)) return Brain;
@@ -335,41 +278,7 @@ function AssistantBubble({ row }: { row: MessageRow }) {
         <ToolGroup tools={row.toolCalls} />
       )}
       {row.text && (
-        <div data-tian-prose="" className={PROSE}>
-          <Streamdown
-            animated
-            isAnimating={Boolean(row.streaming)}
-            caret="circle"
-            controls={{ code: { copy: true }, table: { copy: true } }}
-            icons={STREAM_ICONS}
-            components={{
-              pre: (props) => {
-                const child = Array.isArray(props.children)
-                  ? props.children[0]
-                  : props.children;
-                const language = (
-                  (child as { props?: { className?: string } })?.props
-                    ?.className ?? ''
-                ).match(/language-([\w-]+)/)?.[1];
-                if (language !== 'mermaid') {
-                  const Fallback = defaultComponents.pre;
-                  return <Fallback {...props} />;
-                }
-                const source = String(
-                  (child as { props?: { children?: unknown } })?.props
-                    ?.children ?? '',
-                ).replace(/\n$/, '');
-                return (
-                  <Suspense fallback={null}>
-                    <MermaidDiagram source={source} />
-                  </Suspense>
-                );
-              },
-            }}
-          >
-            {row.text}
-          </Streamdown>
-        </div>
+        <Markdown text={row.text} animated streaming={Boolean(row.streaming)} />
       )}
       {row.streaming && !row.text && (
         <div className="flex items-center gap-2.5 font-mono text-[11px] text-content-secondary">
@@ -395,9 +304,65 @@ function UserBubble({ row }: { row: MessageRow }) {
   );
 }
 
+/**
+ * A system wake shown as prose: manager/worker reports, run wakens, channel
+ * imports. These are written in markdown by an agent, so render them as such
+ * instead of dumping the raw source between two rules. The bracketed first
+ * line (`[run … finished]`, `[<project> manager reports]`) becomes the label.
+ */
+function NoticeCard({ row }: { row: MessageRow }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(row.text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard access can be denied; leave the message untouched.
+    }
+  };
+  const head = noticeParts(row.text);
+  return (
+    <article
+      aria-label={t('chat.notification')}
+      className="group/notice rounded-xl border border-border bg-card/60 px-3.5 py-2.5"
+    >
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <Bell
+          size={10}
+          weight="fill"
+          className="shrink-0 text-content-disabled"
+        />
+        <span className="min-w-0 truncate font-mono text-[9.5px] text-content-disabled tracking-[0.1em]">
+          {head.label ?? t('chat.notification')}
+        </span>
+        <button
+          type="button"
+          onClick={() => void copy()}
+          aria-label={t(copied ? 'chat.copied' : 'chat.copy')}
+          className="ml-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-content-disabled opacity-0 transition-[opacity,background-color,color] hover:bg-secondary hover:text-foreground group-hover/notice:opacity-100 focus-visible:opacity-100"
+        >
+          {copied ? (
+            <Check size={11} weight="bold" className="text-content-secondary" />
+          ) : (
+            <Copy size={11} />
+          )}
+        </button>
+      </div>
+      <Markdown
+        text={head.body || row.text}
+        className="text-[12.5px] text-content-secondary"
+      />
+    </article>
+  );
+}
+
 function Row({ row }: { row: MessageRow }) {
   if (row.role === 'system') {
-    return (
+    return row.variant === 'notice' ? (
+      <NoticeCard row={row} />
+    ) : (
       <div
         role="separator"
         className="flex items-center gap-3 py-2 font-mono text-[9.5px] text-content-disabled uppercase tracking-[0.14em]"
