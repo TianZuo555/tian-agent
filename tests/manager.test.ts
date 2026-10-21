@@ -650,6 +650,7 @@ function chiefSurface(f: Fixture) {
     delegateToManager: () => Promise.reject(new Error('not used')),
     sendManagerMessage: () => Promise.reject(new Error('not used')),
     managerMessages: (projectId) => f.data.managerMessages(projectId),
+    workerModels: () => [],
     history: {
       db: f.db,
       events: new EventLog(f.db),

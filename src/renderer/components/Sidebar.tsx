@@ -623,8 +623,12 @@ function AddProjectDialog({
                 value={managerName}
                 maxLength={200}
                 placeholder={t('project.managerNamePlaceholder')}
+                aria-describedby={`${id}-manager-name-hint`}
                 onChange={(e) => setManagerName(e.target.value)}
               />
+              <span id={`${id}-manager-name-hint`}>
+                {t('project.managerNameHint')}
+              </span>
             </label>
           </DialogPanel>
           <DialogFooter>

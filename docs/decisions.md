@@ -2,7 +2,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D12，按领域排序。当前 `DATABASE_VERSION = 6`、`SERVICE_PROTOCOL = 5`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D14，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 6`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 

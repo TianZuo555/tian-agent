@@ -227,6 +227,8 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       lines.push(`projects (${projects.length}):`);
       for (const p of projects.slice(0, 20))
         lines.push(`- ${p.name} (${p.rootPath})${managerClause(db, p)}`);
+      if (projects.length > 20)
+        lines.push(`… and ${projects.length - 20} more projects`);
     }
     const header = [
       `scope: ${project ? `${project.name} (${project.rootPath})${managerClause(db, project)}` : 'General'}`,
