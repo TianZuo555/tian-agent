@@ -32,6 +32,7 @@ const broadcast: Emit = (channel, payload, clientId) => {
 };
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin';
   const window = new BrowserWindow({
     show: process.env.TIAN_AGENT_SHOW_WINDOW !== '0',
     width: 1280,
@@ -41,7 +42,13 @@ function createWindow(): void {
     title: 'Tian Agent',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 14, y: 15 },
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#171719' : '#fbfbfc',
+    backgroundColor: isMac
+      ? '#00000000'
+      : nativeTheme.shouldUseDarkColors
+        ? '#171719'
+        : '#fbfbfc',
+    vibrancy: isMac ? 'under-window' : undefined,
+    visualEffectState: isMac ? 'active' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

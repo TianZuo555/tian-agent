@@ -505,10 +505,7 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
     >
       {/* The traffic lights always cover this row's left in the boot view,
           and in the shell whenever the sidebar is folded. */}
-      <PaneHeader
-        clearance={!(sidebarOpen && !onBack)}
-        className="bg-background/80 backdrop-blur-md"
-      >
+      <PaneHeader clearance={!(sidebarOpen && !onBack)}>
         {!onBack && <SidebarToggle />}
         <span
           aria-hidden="true"

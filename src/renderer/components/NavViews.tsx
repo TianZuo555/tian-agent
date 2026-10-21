@@ -67,10 +67,7 @@ function Header({
   const contextOpen = useStore((s) => s.contextOpen);
   return (
     // A folded sidebar leaves the traffic lights over this row's left.
-    <PaneHeader
-      clearance={!sidebarOpen}
-      className="bg-background/80 backdrop-blur-md"
-    >
+    <PaneHeader clearance={!sidebarOpen}>
       <SidebarToggle />
       <span
         aria-hidden="true"

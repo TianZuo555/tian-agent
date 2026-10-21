@@ -1157,7 +1157,7 @@ export function ContextPane() {
   return (
     <aside
       aria-label={t('context.title')}
-      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+      className="flex min-h-0 min-w-0 flex-1 flex-col border-border/40 border-l bg-surface-primary/60 shadow-[-1px_0_0_0_rgba(255,255,255,0.05)] backdrop-blur-2xl dark:border-white/[0.06] dark:bg-surface-primary/30"
     >
       <PaneHeader inset="compact">
         <span
@@ -1183,7 +1183,7 @@ export function ContextPane() {
         role="tablist"
         aria-label={t('context.sections')}
         tabIndex={-1}
-        className="flex shrink-0 items-center gap-0.5 border-border border-b px-1.5 py-1"
+        className="flex shrink-0 items-center gap-0.5 border-border/50 border-b bg-surface-secondary/40 px-1.5 py-1 backdrop-blur-md"
         onKeyDown={(e) => {
           // Roving-tabindex arrow navigation per the ARIA tabs pattern.
           const current = tabs.findIndex((t) => t.id === tab);
