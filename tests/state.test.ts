@@ -173,6 +173,7 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     followUpRun: async () => {
       throw new Error('Unused');
     },
+    stopRun: async () => {},
     landRun: async () => '',
     discardRun: async () => {},
     shipRun: async () => '',

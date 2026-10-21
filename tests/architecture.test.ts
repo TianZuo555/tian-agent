@@ -445,6 +445,115 @@ test('dispatch operation IDs produce one run and one worker', async (t) => {
   assert.equal(f.runtime.records.size, 1);
 });
 
+test('a repeated identical dispatch reuses the in-flight run', async (t) => {
+  const f = await fixture(t);
+  const first = await start(f);
+  // A double-fired call — different operation id, same dispatcher, project
+  // and briefing — folds into the active run instead of stacking a worker.
+  const second = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: null,
+    operationId: 'dispatch:another-call',
+  });
+  assert.equal(second.id, first.id);
+  assert.equal(f.db.listRuns(null).length, 1);
+  assert.equal(f.runtime.records.size, 1);
+  // A different briefing, or a different dispatcher, is a different run.
+  const other = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Other work',
+    chiefConversationId: null,
+  });
+  assert.notEqual(other.id, first.id);
+  const another = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: 'chief-2',
+  });
+  assert.notEqual(another.id, first.id);
+  // Once the run settles the same briefing may be sent again.
+  f.runtime.complete(first.conversationId!);
+  await until(() => f.db.getRun(first.id)?.status === 'done');
+  const retry = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: null,
+  });
+  assert.notEqual(retry.id, first.id);
+  f.runtime.complete(retry.conversationId!);
+  f.runtime.complete(other.conversationId!);
+  f.runtime.complete(another.conversationId!);
+});
+
+test('a folded dispatch stays idempotent after the run settles', async (t) => {
+  const f = await fixture(t);
+  const first = await start(f);
+  const folded = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: null,
+    operationId: 'dispatch:folded-call',
+  });
+  assert.equal(folded.id, first.id);
+  f.runtime.complete(first.conversationId!);
+  await until(() => f.db.getRun(first.id)?.status === 'done');
+  // The fold record outlives the active window: replaying the same
+  // operation id resolves to the original run, not a second worker.
+  const retried = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: null,
+    operationId: 'dispatch:folded-call',
+  });
+  assert.equal(retried.id, first.id);
+  assert.equal(f.db.listRuns(null).length, 1);
+  assert.equal(f.runtime.records.size, 1);
+});
+
+test('stop interrupts a running worker but keeps the run for review', async (t) => {
+  const f = await fixture(t);
+  const run = await start(f);
+  writeFileSync(join(run.worktreePath!, 'partial.txt'), 'in progress\n');
+  await f.runs.stop(run.id);
+  const stopped = f.db.getRun(run.id)!;
+  assert.equal(stopped.status, 'interrupted');
+  assert.equal(stopped.error, 'Stopped by Tian');
+  assert.notEqual(stopped.finishedAt, null);
+  assert.equal(stopped.reviewStatus, 'pending');
+  assert.equal(f.runtime.records.get(run.conversationId!)!.aborted, true);
+  // The collector must not resurrect the run; the worktree stays for review.
+  await f.runs.join();
+  assert.equal(f.db.getRun(run.id)!.status, 'interrupted');
+  assert.equal(existsSync(run.worktreePath!), true);
+  assert.equal(f.db.pendingNotifications().length, 1);
+  // The abort snapshots the partial edits into a commit, so the diff —
+  // and a later land or ship — still sees them.
+  assert.match(await f.runs.diff(run.id), /partial\.txt/);
+  // A settled run ignores another stop but accepts a follow-up.
+  const again = await f.runs.stop(run.id);
+  assert.equal(again.status, 'interrupted');
+  await f.runs.followUp(run.id, 'continue');
+  await until(
+    () => f.runtime.records.get(run.conversationId!)!.submissions.size === 2,
+  );
+});
+
+test('stop before launch never spawns a worker', async (t) => {
+  const f = await fixture(t);
+  f.runs.pause();
+  const run = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'queued work',
+    chiefConversationId: null,
+  });
+  assert.equal(f.db.getRun(run.id)!.status, 'queued');
+  await f.runs.stop(run.id);
+  assert.equal(f.db.getRun(run.id)!.status, 'interrupted');
+  for (const record of f.runtime.records.values())
+    assert.equal(record.submissions.size, 0);
+});
+
 test('completion commits the worktree, records report and one durable notification, and lands once', async (t) => {
   const f = await fixture(t);
   const run = await start(f);

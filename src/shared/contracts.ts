@@ -114,6 +114,7 @@ export interface Commands {
   runReport: Command<[id: string], string>;
   runDiff: Command<[id: string], string>;
   followUpRun: Command<[id: string, prompt: string], RunInfo>;
+  stopRun: Command<[id: string], void>;
   landRun: Command<[id: string], string>;
   discardRun: Command<[id: string], void>;
   shipRun: Command<[id: string], string>;
@@ -290,6 +291,7 @@ export const commandArgs = {
   runReport: Type.Tuple([id]),
   runDiff: Type.Tuple([id]),
   followUpRun: Type.Tuple([id, text]),
+  stopRun: Type.Tuple([id]),
   landRun: Type.Tuple([id]),
   discardRun: Type.Tuple([id]),
   shipRun: Type.Tuple([id]),

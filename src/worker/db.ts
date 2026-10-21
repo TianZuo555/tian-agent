@@ -833,7 +833,7 @@ export class Db {
   }
   finishRun(
     id: string,
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'interrupted',
     error: string | null,
     notification: Notification,
   ): RunRow {
@@ -907,6 +907,41 @@ export class Db {
     const value = this.db
       .prepare('SELECT * FROM runs WHERE conversation_id = ?')
       .get(conversationId);
+    return value ? this.readRun(value) : undefined;
+  }
+
+  /** The run a folded dispatch resolved to — replay-safe for late retries. */
+  dispatchFold(operationId: string): string | undefined {
+    const saved = this.db
+      .prepare('SELECT result FROM operations WHERE id = ?')
+      .get(`dispatch-fold:${operationId}`) as { result: string } | undefined;
+    return saved ? (JSON.parse(saved.result) as string) : undefined;
+  }
+  recordDispatchFold(operationId: string, runId: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO operations VALUES (?, ?)')
+      .run(`dispatch-fold:${operationId}`, JSON.stringify(runId));
+  }
+
+  /**
+   * The in-flight run this dispatcher already owns with the same briefing —
+   * the dedup key a replayed or double-fired dispatch reuses instead of
+   * stacking a second identical run.
+   */
+  activeRunByPrompt(
+    projectId: string,
+    prompt: string,
+    chiefConversationId: string | null,
+  ): RunRow | undefined {
+    const value = this.db
+      .prepare(
+        `SELECT * FROM runs WHERE project_id = ? AND prompt = ?
+         AND COALESCE(chief_conversation_id, '') = COALESCE(?, '')
+         AND status IN ('queued', 'running', 'collecting')
+         AND review_status = 'pending'
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(projectId, prompt, chiefConversationId);
     return value ? this.readRun(value) : undefined;
   }
 

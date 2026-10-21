@@ -194,6 +194,8 @@ export const zh: Partial<Messages> = {
   'context.taskLabel': '任务：{title}',
   'context.runLabel': 'Run {id}：{status}',
   'context.followUp': '继续跟进',
+  'context.stop': '停止',
+  'context.stopRun': '停止 Run {id}',
   'context.land': '合入',
   'context.ship': 'Ship',
   'context.discard': '丢弃',
