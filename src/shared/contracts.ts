@@ -24,6 +24,7 @@ import type {
   SessionBinding,
   ServiceInfo,
   UsageStats,
+  WechatStatus,
 } from './types';
 
 import type { DesktopApi, ServiceActivity } from './desktop';
@@ -124,6 +125,8 @@ export interface Commands {
   skillRetire: Command<[skillId: string, reason: string | null], SkillItem>;
   skillRollback: Command<[skillId: string, reason: string | null], SkillItem>;
   getSettings: Command<[], SettingsInfo>;
+  wechatStatus: Command<[], WechatStatus>;
+  wechatRelogin: Command<[], WechatStatus>;
   setModel: Command<[model: SettingsInfo['model']], void>;
   modelCatalog: Command<[], ModelCatalog>;
   refreshModels: Command<[], ModelCatalog>;
@@ -308,6 +311,8 @@ export const commandArgs = {
     Type.Union([Type.String({ maxLength: 2_000 }), Type.Null()]),
   ]),
   getSettings: Type.Tuple([]),
+  wechatStatus: Type.Tuple([]),
+  wechatRelogin: Type.Tuple([]),
   setModel: Type.Tuple([
     Type.Object(
       {

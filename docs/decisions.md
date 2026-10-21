@@ -313,3 +313,20 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 **后果**：两个编排者都能在派发重复任务前核实「是不是还活着」，并能止损而不用丢掉已经产出的工作。局限：进度来自 transcript，不解析工兵的内部计划。
 
 **后续（经验审查）**：`stop()` 在 abort 之后读该 attempt 留下的报告（worktree 里的 `TIAN_REPORT.md`，否则上一次收集的报告文件），以 `stopped` 标记调用 `reviewExperience`。语义与失败区分开：中止是主动收回，不是「注入的 skill 失败」的证据，所以 `verification` 不动；但报告里的明确步骤段落仍可作为候选（`RuleBasedExtractor` 接受 `done` 或 `stopped`，描述写成「stopped early」并带上原因），候选依旧只能由用户批准。
+
+## D17 · 微信走官方 iLink（ClawBot）通道，24 小时窗口用「最小保活」维持
+
+微信成为第三个用户入口。走腾讯 2026-03 开放的 iLink Bot 协议（微信「设置 → 插件」的 ClawBot），而不是 Wechaty / hook / 逆向 iPad 协议：那是官方通道，协议是 HTTP/JSON（`get_bot_qrcode`、`getupdates` 长轮询、`sendmessage`），与 D8 的 Telegram 适配器同构。
+
+**背景**：官方只发布了 OpenClaw 专用插件（`@tencent-weixin/openclaw-weixin`），但只要实现协议就能接任何 Agent；社区已有 Node/Python/Go/Rust SDK。协议的两条硬约束决定了设计：① 回复必须回传入站消息的 `context_token`，它 24 小时后失效，机器人不能凭空发起对话；② 每个窗口内机器人主动消息约 10 条上限，用尽后 `sendmessage` 返回 `ret=-2`。此外扫码机器人只能私聊，拉不进普通微信群。
+
+**决定**：
+
+- **传输用现成 SDK**：`@wechatbot/wechatbot`（零运行时依赖、Node ≥22、文件存储），与「优先成熟库」的原则一致；SDK 收在 `WechatClient` 注入接口后面（登录、start/stop、send、事件），测试用假客户端驱动真实适配器。凭证、游标、context_token 存在 `<dataDir>/wechat/`。
+- **与 Telegram 同构**：白名单 `WECHAT_ALLOWED_USER_IDS`（为空则适配器完全不启动；首次登录前留空，扫码后从 Settings 拿到自己的 `…@im.wechat` 再加白名单重启）；每用户一条稳定渠道会话、`/scope` `/status` `/help` 本地命令、`wx:<userId>:<messageId>` 稳定 requestId、转发游标 `wechat_forward_cursor`、conversation watch 触发。宿主接口抽成 `ChannelHost`（`worker/channel-host.ts`），assistant 文本提取两个适配器共用一份。
+- **窗口耗尽不丢消息**：转发遇到发送失败即重试三次后**不前移游标**，等用户下次发消息（打开新窗口）时自动补发。Telegram 侧不做这种区分（对端永久失败会一直报错），微信侧必须区分，因为 24 小时过期是常态而非异常。
+- **24 小时保活 = 最小代价探测**：窗口内短信条数有限，频繁保活会先把额度烧光。因此仅在用户静默 ≥11 小时、且距窗口结束仍有 ≥30 分钟时，发一个字符的「.」，每个窗口最多两次（`wechat_windows` 表记录 last_inbound/last_outbound/last_probe/probes）；被拒即认为窗口已关闭，把额度标记用尽、不再试探，等用户主动发消息。入站消息重置计数。
+- **登录入口在 App**：服务启动时若无凭证就发布二维码 URL，Settings → Channels 轮询展示（含配对码与重新生成）；不把二维码打进日志。
+- **配置边界不变**：只在 `service/entry.ts` 读 `WECHAT_*` 后显式传入；`Service` 不读 `process.env`，测试不触网。`SERVICE_PROTOCOL` 升到 9（新增 `wechatStatus` / `wechatRelogin` 命令）。
+
+**后果**：微信成为与 App、Telegram、Inbox 并列的角色入口，共享同一份 Scope Memory；保活策略在「窗口开着」与「不烧额度」之间取平衡，代价是最坏情况下仍有约一小时的空窗（11 小时心跳 + 30 分钟余量），且两条心跳后若用户仍沉默则窗口必然关闭，需用户先说一句话。局限：不支持群聊与斜杠命令菜单；保活是否真能延长窗口取决于腾讯服务端行为（社区仅确认「机器人自己发消息不刷新 token」，反向未经验证），因此保活失败被当作正常分支处理而不是错误。

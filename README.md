@@ -16,7 +16,7 @@
 - **Run 与验收**：工兵在 worktree 中执行，支持多轮 follow-up；Land / Ship / Discard 验收。
 - **双向消息**：工兵 `ask_chief` 提问等待答复，总管 `send_run_msg` 回复或下达指令，线程持久化。
 - **项目管理者**：每个项目一条持久会话，总管以 Task 为单位委派项目管理，管理者执行、收口并回报；用户也可从侧栏直接打开管理者会话派活，直接派的活静默收口、不通知总管（见 [docs/agent-work.md](docs/agent-work.md#项目管理者)）。
-- **多入口**：App、Telegram 与 Inbox 文件邮箱各自独立会话，共享同一份 scope 记忆。
+- **多入口**：App、Telegram、微信（官方 ClawBot / iLink 通道，扫码接入）与 Inbox 文件邮箱各自独立会话，共享同一份 scope 记忆。
 - **常驻服务**：独立于 App 安装与升级，服务升级带回滚，App 支持导入新版并配套升级（见 [docs/service.md](docs/service.md)）。
 - **改进日志**：产品问题、摩擦、想法与成功经验；运行时异常自动去重记录，可提升为 Task。
 
@@ -39,7 +39,7 @@ mise run verify   # typecheck + lint + react-doctor + test
 | [docs/decisions.md](docs/decisions.md)             | 设计决策 D1–D12：为什么这样搭                 |
 | [docs/architecture.md](docs/architecture.md)       | 进程模型、桌面客户端、模块地图、权限与 scope  |
 | [docs/service.md](docs/service.md)                 | 常驻服务：安装、操作、升级与回滚              |
-| [docs/channels.md](docs/channels.md)               | 渠道与会话绑定，Telegram 接入，Inbox          |
+| [docs/channels.md](docs/channels.md)               | 渠道与会话绑定，Telegram / 微信接入，Inbox    |
 | [docs/memory.md](docs/memory.md)                   | 记忆系统与自动提取                            |
 | [docs/agent-work.md](docs/agent-work.md)           | 目标、任务、调度、Run 与总管 ⇄ 工兵消息       |
 | [docs/data.md](docs/data.md)                       | 存储、恢复、通知、History 与 Event            |

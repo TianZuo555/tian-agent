@@ -60,6 +60,22 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     finishMaintenance: async () => {},
     listScopes: async () => [],
     listConversations: async () => [],
+    wechatStatus: async () => ({
+      enabled: false,
+      loggedIn: false,
+      accountId: null,
+      qrCodeUrl: null,
+      scanned: false,
+      error: null,
+    }),
+    wechatRelogin: async () => ({
+      enabled: false,
+      loggedIn: false,
+      accountId: null,
+      qrCodeUrl: null,
+      scanned: false,
+      error: null,
+    }),
     getSettings: async () => ({
       model: { provider: 'anthropic', modelId: 'test' },
     }),

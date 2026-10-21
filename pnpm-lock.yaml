@@ -44,6 +44,9 @@ importers:
       '@tailwindcss/vite':
         specifier: 4.3.3
         version: 4.3.3(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      '@wechatbot/wechatbot':
+        specifier: ^2.2.0
+        version: 2.2.0
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2658,6 +2661,10 @@ packages:
         optional: true
       oxc-transform-react:
         optional: true
+
+  '@wechatbot/wechatbot@2.2.0':
+    resolution: {integrity: sha512-M3+RbTrwr5pW2GQC8RwGWh2JTZkSUHJFIjgs6R4UlBb4IaTOoTu6CmEW3G7MEGwU0ScswXCAN/iYfk1w4/UYeg==}
+    engines: {node: '>=22'}
 
   '@xmldom/xmldom@0.9.12':
     resolution: {integrity: sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==}
@@ -7157,6 +7164,8 @@ snapshots:
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
+
+  '@wechatbot/wechatbot@2.2.0': {}
 
   '@xmldom/xmldom@0.9.12': {}
 

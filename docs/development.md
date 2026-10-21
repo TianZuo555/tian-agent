@@ -21,15 +21,16 @@ mise run verify     # check + doctor + test，提交前跑这个
 cp .env.example .env
 ```
 
-| 变量                                 | 作用                                                |
-| ------------------------------------ | --------------------------------------------------- |
-| `MAGPIE_BASE_URL` / `MAGPIE_API_KEY` | 模型网关地址与密钥，默认 `http://127.0.0.1:3425/v1` |
-| `TELEGRAM_BOT_TOKEN`                 | Telegram Bot token；为空时适配器不启动              |
-| `TELEGRAM_ALLOWED_CHAT_IDS`          | 允许对话的 chat id，逗号分隔                        |
-| `TIAN_AGENT_DATA_DIR`                | 数据目录；`mise run service:env` 也据此决定写到哪里 |
-| `TIAN_AGENT_SOCKET_PATH`             | Unix socket 路径（绝对路径，不超过 100 字节）       |
+| 变量                                 | 作用                                                             |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| `MAGPIE_BASE_URL` / `MAGPIE_API_KEY` | 模型网关地址与密钥，默认 `http://127.0.0.1:3425/v1`              |
+| `TELEGRAM_BOT_TOKEN`                 | Telegram Bot token；为空时适配器不启动                           |
+| `TELEGRAM_ALLOWED_CHAT_IDS`          | 允许对话的 chat id，逗号分隔                                     |
+| `WECHAT_ALLOWED_USER_IDS`            | 允许对话的微信 id（`…@im.wechat`），逗号分隔；为空时适配器不启动 |
+| `TIAN_AGENT_DATA_DIR`                | 数据目录；`mise run service:env` 也据此决定写到哪里              |
+| `TIAN_AGENT_SOCKET_PATH`             | Unix socket 路径（绝对路径，不超过 100 字节）                    |
 
-`.env` 只影响 mise shell 里的 App 与 `pnpm` 任务。常驻服务由 launchd 启动，读不到 shell 环境；用 `mise run service:env` 把非空的 `MAGPIE_*` / `TELEGRAM_*` 原子写入 `<dataDir>/service.env`（0600），再 `mise run service:restart`。其余开发变量不会进入服务环境。
+`.env` 只影响 mise shell 里的 App 与 `pnpm` 任务。常驻服务由 launchd 启动，读不到 shell 环境；用 `mise run service:env` 把非空的 `MAGPIE_*` / `TELEGRAM_*` / `WECHAT_*` 原子写入 `<dataDir>/service.env`（0600），再 `mise run service:restart`。其余开发变量不会进入服务环境。
 
 ## 测试
 

@@ -313,6 +313,18 @@ export interface SettingsInfo {
   model: { provider: string; modelId: string };
 }
 
+/** WeChat (iLink / ClawBot) channel state; the QR code never leaves the service otherwise. */
+export interface WechatStatus {
+  /** An allow-list is configured, so the adapter runs. */
+  enabled: boolean;
+  loggedIn: boolean;
+  accountId: string | null;
+  /** Login QR code URL while the scan is pending. */
+  qrCodeUrl: string | null;
+  scanned: boolean;
+  error: string | null;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
