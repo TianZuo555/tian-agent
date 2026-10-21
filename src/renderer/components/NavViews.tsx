@@ -48,6 +48,7 @@ import type {
 import { actions, useStore } from '../store';
 import { t, useT, type MessageKey } from '../i18n';
 import { EASE } from './motion-primitives';
+import { Markdown } from './Markdown';
 import { ContextToggle, SidebarToggle } from './SidebarToggle';
 import { PaneHeader } from './PaneHeader';
 
@@ -1048,9 +1049,10 @@ function InboxList({
                   {m.ts.slice(5, 16).replace('T', ' ')}
                 </span>
               </div>
-              <div className="whitespace-pre-wrap break-words text-[13px] text-content-secondary leading-relaxed">
-                {m.body}
-              </div>
+              <Markdown
+                text={m.body}
+                className="text-[12.5px] text-content-secondary"
+              />
             </motion.li>
           );
         })}

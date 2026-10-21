@@ -168,6 +168,7 @@ export const en = {
   'chat.copied': 'Copied',
   'chat.assistantMessage': 'Agent message',
   'chat.userMessage': 'User message',
+  'chat.notification': 'Notification',
   'chat.latest': 'latest',
   'chat.toolCalls': (p: Params) => `${p.count} tool calls`,
   'chat.running': (p: Params) => `${p.count} running`,
@@ -200,6 +201,7 @@ export const en = {
   'context.noChanges': 'No file changes in this run.',
   'context.skills': 'Skills ({count})',
   'context.report': 'Report',
+  'context.noReport': 'No report for this run.',
 
   // ─── 12. Run Status Badges ─────────────────────────────────────────────────
   'run.running': 'running',

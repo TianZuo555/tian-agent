@@ -43,6 +43,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { tian } from '../api';
 import { useT, type MessageKey } from '../i18n';
 import { CountPulse, EASE } from './motion-primitives';
+import { Markdown } from './Markdown';
 import { PaneHeader } from './PaneHeader';
 import { ContextToggle } from './SidebarToggle';
 import type { MemoryItem, RunInfo } from '@/shared/types';
@@ -396,9 +397,18 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
             />
             {t('context.report')}
           </summary>
-          <pre className="max-h-72 overflow-auto px-3 pb-3 whitespace-pre-wrap break-words font-mono text-[11px] text-content-secondary leading-relaxed">
-            {report ?? t('common.loading')}
-          </pre>
+          <div className="max-h-72 overflow-auto px-3 pb-3">
+            {report === null ? (
+              <span className="font-mono text-[11px] text-content-secondary">
+                {t('common.loading')}
+              </span>
+            ) : (
+              <Markdown
+                text={report || t('context.noReport')}
+                className="text-[12px]"
+              />
+            )}
+          </div>
         </details>
       </ScrollArea>
     </motion.div>
