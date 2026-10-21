@@ -529,10 +529,12 @@ export function SettingsView({ onBack }: { onBack?: () => void }) {
         )}
       </PaneHeader>
 
-      <div className="@container flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1">
+        {/* The rail always stays: it is the only way to switch sections, so a
+            narrow pane narrows it instead of hiding it. */}
         <nav
           aria-label={t('settings.sectionsNav')}
-          className="hidden w-40 shrink-0 flex-col gap-0.5 border-border border-r px-2 py-3 @[44rem]:flex"
+          className="flex w-36 shrink-0 flex-col gap-0.5 overflow-y-auto border-border border-r px-2 py-3"
         >
           {SECTIONS.map(({ id, label, icon: SectionIcon }) => (
             <button
