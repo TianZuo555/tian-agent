@@ -240,7 +240,7 @@ const toolCallTurn = (
 });
 
 const toolResultTurn = (name: string, text: string, minutes: number) => ({
-  kind: 'pi.toolResult',
+  kind: 'pi.tool-result',
   model: [
     {
       role: 'toolResult',

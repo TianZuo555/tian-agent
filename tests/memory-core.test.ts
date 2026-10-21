@@ -703,7 +703,7 @@ test('long history: middle and tail of a tool result are searchable and pageable
   const long = `${head}\n${'filler line for the build output\n'.repeat(400)}${middle}\n${'more filler\n'.repeat(200)}${tail}`;
   await f.append(conversation, userTurn('run the migration', 0));
   await f.append(conversation, {
-    kind: 'pi.toolResult',
+    kind: 'pi.tool-result',
     model: [
       {
         role: 'toolResult',

@@ -177,7 +177,7 @@ test('a finished tool result wins over the live slot', () => {
       {
         id: 2,
         kind: 'pi.tool-result',
-        model: [{ role: 'tool', toolCallId: 'c1', content: 'result' }],
+        model: [{ role: 'toolResult', toolCallId: 'c1', content: 'result' }],
       },
     ],
     docs: {
