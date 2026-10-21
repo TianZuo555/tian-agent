@@ -1,9 +1,9 @@
 import { cn } from '@/lib/utils';
 
 /**
- * The card's 44px title strip. Every pane carries the same row and none of
- * them draws a rule under it, so the top of the window reads as one bar that
- * only the panes' own divider splits — Qoder's floating-card layout.
+ * The card's 44px title strip. Every pane carries the same frosted row with
+ * one hairline seam, so the top of the window reads as a single glass bar
+ * split only by the panes' own dividers — Qoder's floating-card layout.
  *
  * The leading inset animates on the same curve and duration as the panes
  * themselves, so the sidebar toggle glides with the rail it controls instead

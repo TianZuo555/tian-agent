@@ -2,7 +2,12 @@ import { app, BrowserWindow, ipcMain, dialog, nativeTheme } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { DesktopController } from './desktop/controller.js';
-import { desktopActions, type DesktopAction } from './shared/desktop.js';
+import {
+  desktopActions,
+  themeNames,
+  type DesktopAction,
+  type ThemeName,
+} from './shared/desktop.js';
 import { servicePaths } from './shared/service-paths.js';
 import { validateCommand } from './shared/contracts.js';
 import { mkdirSync } from 'node:fs';
@@ -140,6 +145,17 @@ if (primaryInstance)
             });
         },
       );
+      // The renderer's theme choice steers the native appearance so vibrancy
+      // and the window backing match the app's surfaces, not just the OS.
+      ipcMain.on('tian:theme', (event, theme: unknown) => {
+        if (
+          event.senderFrame !== event.sender.mainFrame ||
+          !BrowserWindow.fromWebContents(event.sender) ||
+          !themeNames.includes(theme as ThemeName)
+        )
+          return;
+        nativeTheme.themeSource = theme as ThemeName;
+      });
       ipcMain.handle(
         'tian:invoke',
         async (event, command: unknown, args: unknown) => {

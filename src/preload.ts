@@ -32,6 +32,9 @@ const api: TianApi = {
       action,
       candidateId,
     )) as TianApi['desktop'],
+  setTheme(theme) {
+    ipcRenderer.send('tian:theme', theme);
+  },
   on(channel, callback) {
     if (!events.includes(channel)) throw new Error(`Unknown event: ${channel}`);
     const handler = (

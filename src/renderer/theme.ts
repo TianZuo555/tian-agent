@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { ThemeName } from '../shared/desktop';
 
 /**
  * Appearance preferences. Like the locale, these live in localStorage rather
@@ -6,7 +7,7 @@ import { useSyncExternalStore } from 'react';
  * store also builds under Node's test runner, which has no localStorage, so
  * every access is guarded.
  */
-export type Theme = 'system' | 'light' | 'dark';
+export type Theme = ThemeName;
 
 const THEME_KEY = 'tian.theme';
 const listeners = new Set<() => void>();
@@ -40,6 +41,13 @@ function applyTheme() {
     root.style.colorScheme = dark ? 'dark' : 'light';
   } catch {
     /* no DOM in tests */
+  }
+  // Translucent chrome composites over the native vibrancy material, so the
+  // window's appearance must track the app theme rather than only the OS.
+  try {
+    window.tian.setTheme(theme);
+  } catch {
+    /* no bridge in tests */
   }
 }
 applyTheme();
