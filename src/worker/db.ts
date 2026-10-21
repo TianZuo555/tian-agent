@@ -910,6 +910,19 @@ export class Db {
     return value ? this.readRun(value) : undefined;
   }
 
+  /** The run a folded dispatch resolved to — replay-safe for late retries. */
+  dispatchFold(operationId: string): string | undefined {
+    const saved = this.db
+      .prepare('SELECT result FROM operations WHERE id = ?')
+      .get(`dispatch-fold:${operationId}`) as { result: string } | undefined;
+    return saved ? (JSON.parse(saved.result) as string) : undefined;
+  }
+  recordDispatchFold(operationId: string, runId: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO operations VALUES (?, ?)')
+      .run(`dispatch-fold:${operationId}`, JSON.stringify(runId));
+  }
+
   /**
    * The in-flight run this dispatcher already owns with the same briefing —
    * the dedup key a replayed or double-fired dispatch reuses instead of

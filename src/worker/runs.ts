@@ -155,14 +155,27 @@ export class RunOrchestrator {
       };
       // Claim the slot atomically: the same dispatcher sending the same
       // briefing while a run is still in flight reuses that run — a replayed
-      // or double-fired dispatch must not stack identical runs.
+      // or double-fired dispatch must not stack identical runs. A prior fold
+      // is remembered too, so a retry after the run settles still resolves
+      // to it instead of launching a second worker.
       const claimed = this.db.transaction(() => {
+        const folded = input.operationId
+          ? this.db.dispatchFold(input.operationId)
+          : undefined;
+        if (folded) {
+          const original = this.db.getRun(folded);
+          if (original) return original;
+        }
         const duplicate = this.db.activeRunByPrompt(
           project.id,
           run.prompt,
           run.chiefConversationId,
         );
-        if (duplicate) return duplicate;
+        if (duplicate) {
+          if (input.operationId)
+            this.db.recordDispatchFold(input.operationId, duplicate.id);
+          return duplicate;
+        }
         this.db.addRun(run);
         return run;
       });
@@ -580,11 +593,33 @@ export class RunOrchestrator {
         run.reviewStatus !== 'pending'
       )
         return run;
+      clearTimeout(this.timers.get(id));
+      this.timers.delete(id);
+      if (run.conversationId)
+        await (await this.runtime.get(run.conversationId)).abort();
+      // Snapshot whatever the worker left behind: runDiff/land/ship read
+      // branch commits, so uncommitted edits would land nothing and the
+      // later cleanup would delete them unseen. Best-effort — a failed
+      // snapshot must not undo the stop.
+      if (run.worktreePath) {
+        try {
+          await Git.commitAll(
+            run.worktreePath,
+            `tian run ${id} attempt ${run.attempt} (stopped)`,
+          );
+        } catch (error) {
+          this.onIssue?.('run.stop.commit', error, {
+            scopeId: run.projectId,
+            runId: id,
+            taskId: run.taskId ?? undefined,
+          });
+        }
+      }
       const stopped = this.db.finishRun(id, 'interrupted', 'Stopped by Tian', {
         id: `run:${id}:attempt:${run.attempt}:stopped`,
         scopeId: run.projectId,
         conversationId: run.chiefConversationId,
-        content: `[run ${id} stopped]\nStopped by Tian. Partial work is kept in the worktree; follow up to continue or discard to remove it.`,
+        content: `[run ${id} stopped]\nStopped by Tian. Partial work is committed on the run's branch; follow up to continue or discard to remove it.`,
       });
       this.events?.record({
         id: `run:${id}:stopped`,
@@ -596,10 +631,6 @@ export class RunOrchestrator {
         summary: `Run ${id} stopped by Tian`,
       });
       this.changed();
-      clearTimeout(this.timers.get(id));
-      this.timers.delete(id);
-      if (run.conversationId)
-        await (await this.runtime.get(run.conversationId)).abort();
       await this.notify();
       return stopped;
     });

@@ -2,7 +2,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D14，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 6`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D15，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 7`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -283,6 +283,7 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - **总管行为指引**：MANAGERS 段说明 `manager: 无` 的含义——Tian 从侧栏项目按钮打开管理者；总管提起管理者时用名字称呼。
 
 **后果**：总管能按名字谈论与定位各项目的管理者，且不会被「有名字但没打开」的项目误导——委派前就被拦截；未命名项目照常工作。局限：名字只是单值字符串，不支持多称呼；「未配置」提示只在 agent 工具面与 state 里出现，UI 列表未加标记；名字与 `channel_sessions` 绑定是两个来源，Tian 改名不影响已存会话。
+
 ## D15 · 同一派发者的重复派单折叠，手动停止保留半成品
 
 两个围绕 Run 生命周期的修正：同一 dispatcher 重复发出的相同派单折叠为一个 Run；Tian 可在右侧面板手动停止在跑的 Run。
@@ -291,9 +292,9 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 
 **决定**：
 
-- **内容级去重**：`runs.dispatch` 在建行事务里查 `activeRunByPrompt(projectId, prompt, chiefConversationId)`——同一派发者、同一项目、同一份 briefing 且仍有在飞 Run（queued/running/collecting 且 review 未被丢弃）时，直接返回既有 Run，不再建第二个。不同 briefing 或不同派发者照常各建各的；已完结的 Run 之后同名 prompt 可再发。
-- **手动停止**：新命令 `stopRun(id)`（`SERVICE_PROTOCOL` 升至 6）只对 queued/running 且 reviewStatus=pending 的 Run 生效——`finishRun` 落 `interrupted` + `Stopped by Tian`、排队一条完成通知、记录 `run.stopped` 事件、清超时计时器并 abort worker 会话。worktree、report 路径、review 状态全部保留：可 followUp 续跑、可 land/ship、可 discard。
+- **内容级去重**：`runs.dispatch` 在建行事务里先查 `operations` 表中的 `dispatch-fold:<operationId>` 折叠记录、再查 `activeRunByPrompt(projectId, prompt, chiefConversationId)`——同一派发者、同一项目、同一份 briefing 且仍有在飞 Run（queued/running/collecting 且 review 未被丢弃）时，直接返回既有 Run 并把该 operationId 记入折叠表，不再建第二个。不同 briefing 或不同派发者照常各建各的；已完结的 Run 之后同名 prompt 可再发；被折叠过的 operationId 在 Run 完结后重试仍解析回原 Run（幂等语义与首调一致）。
+- **手动停止**：新命令 `stopRun(id)`（`SERVICE_PROTOCOL` 升至 7）只对 queued/running 且 reviewStatus=pending 的 Run 生效——清超时计时器、abort worker 会话、对 worktree 做一次 `commitAll` 快照（尽力而为，失败记 issue 不撤销停止）、`finishRun` 落 `interrupted` + `Stopped by Tian`、排队一条完成通知、记录 `run.stopped` 事件。worktree、report 路径、review 状态全部保留：可 followUp 续跑、可 land/ship、可 discard。快照先于落 interrupted，保证 diff/land/ship 能看到半成品——否则未提交改动会随 worktree 删除而丢失。
 - **collector 不复活**：`execute` 两处闸口新增 `status === 'interrupted'` 检查——queued 时被停的 Run 永不 spawn worker；running 时被停的 Run，abort 后 collector 见到 interrupted 直接退出，不再覆盖状态、不再 collect。
-- **UI**：Runs 列表里在跑的 Run 行尾挂红色实心 stop 图标（icon-only 带 `stopRun` aria-label），Run 详情动作条加红色 Stop 按钮；非活跃 Run 不显示。
+- **UI**：Runs 列表里 queued/running 的 Run 行尾挂红色实心 stop 图标（icon-only 带 `stopRun` aria-label），Run 详情动作条加红色 Stop 按钮；collecting 与已完结 Run 不显示。`interrupted` 且 reviewStatus=pending 的 Run 照常出现在评审区（Land/Ship/Discard 可用）。
 
-**后果**：管理者一轮误发两次相同派单不再产生孪生 Run；Tian 获得「暂停但不销毁」的中间态——比 discard 轻、比干等快。局限：去重按 (project, prompt, dispatcher) 完全匹配，换措辞的相似派单仍会并行——这是有意的（不同 briefing 视为不同工作）；停止不收集报告，半成品留在 worktree 未提交区。
+**后果**：管理者一轮误发两次相同派单不再产生孪生 Run；Tian 获得「暂停但不销毁」的中间态——比 discard 轻、比干等快，半成品以一次快照提交留在 Run 分支上。局限：去重按 (project, prompt, dispatcher) 完全匹配，换措辞的相似派单仍会并行——这是有意的（不同 briefing 视为不同工作）；停止不收集报告（reportPath 留空），但快照提交使 diff/land/ship 照常可见。

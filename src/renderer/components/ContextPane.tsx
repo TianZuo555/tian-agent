@@ -93,7 +93,12 @@ const isDiscarded = (run: RunInfo) => run.reviewStatus === 'discarded';
 /** Only pending, finished runs can be landed, shipped, or thrown away. */
 const isReviewable = (run: RunInfo) =>
   !isDiscarded(run) &&
-  (run.status === 'done' || run.status === 'failed') &&
+  ['done', 'failed', 'interrupted'].includes(run.status) &&
+  run.reviewStatus === 'pending';
+
+/** Stop mirrors the service gate: queued or running, never while collecting. */
+const isStoppable = (run: RunInfo) =>
+  (run.status === 'queued' || run.status === 'running') &&
   run.reviewStatus === 'pending';
 
 const DIFF_OPTIONS = {
@@ -203,7 +208,7 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
           className="mt-1 shrink-0 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100"
         />
       </motion.button>
-      {isLive(run) && (
+      {isStoppable(run) && (
         <Button
           variant="ghost"
           size="icon-xs"
@@ -212,6 +217,87 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
           onClick={() => void actions.stopRun(run.id)}
         >
           <Stop size={12} weight="fill" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** The detail view's action bar: stop, follow-up, land/ship, discard. */
+function RunActionBar({
+  run,
+  busy,
+  act,
+  onDiscard,
+}: {
+  run: RunInfo;
+  busy: string | null;
+  act: (key: string, fn: () => Promise<unknown>) => void;
+  onDiscard: () => void;
+}) {
+  const t = useT();
+  const reviewable = isReviewable(run);
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-1 border-border border-b px-2 py-1.5">
+      {isStoppable(run) && (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-destructive-foreground"
+          loading={busy === 'stop'}
+          onClick={() => void act('stop', () => actions.stopRun(run.id))}
+        >
+          <Stop size={11} weight="fill" />
+          {t('context.stop')}
+        </Button>
+      )}
+      {!isDiscarded(run) && (
+        <Button
+          variant="ghost"
+          size="xs"
+          loading={busy === 'follow'}
+          onClick={() =>
+            void act('follow', () => actions.followUpRun(run.id, 'continue'))
+          }
+        >
+          {t('context.followUp')}
+        </Button>
+      )}
+      {run.branch && reviewable && (
+        <>
+          <Button
+            variant="ghost"
+            size="xs"
+            loading={busy === 'land'}
+            onClick={() => void act('land', () => actions.landRun(run.id))}
+          >
+            <GitMerge size={11} />
+            {t('context.land')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            loading={busy === 'ship'}
+            onClick={() => void act('ship', () => actions.shipRun(run.id))}
+          >
+            {t('context.ship')}
+          </Button>
+        </>
+      )}
+      {!isDiscarded(run) && (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="ml-auto text-destructive-foreground"
+          loading={busy === 'discard'}
+          onClick={() =>
+            void act('discard', async () => {
+              await actions.discardRun(run.id);
+              onDiscard();
+            })
+          }
+        >
+          {t('context.discard')}
         </Button>
       )}
     </div>
@@ -253,8 +339,6 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
     }
   };
 
-  const reviewable = isReviewable(run);
-
   return (
     <motion.div
       initial={reduce ? false : { opacity: 0, x: 14 }}
@@ -285,69 +369,7 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
         </Badge>
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-border border-b px-2 py-1.5">
-        {isLive(run) && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="text-destructive-foreground"
-            loading={busy === 'stop'}
-            onClick={() => void act('stop', () => actions.stopRun(run.id))}
-          >
-            <Stop size={11} weight="fill" />
-            {t('context.stop')}
-          </Button>
-        )}
-        {!isDiscarded(run) && (
-          <Button
-            variant="ghost"
-            size="xs"
-            loading={busy === 'follow'}
-            onClick={() =>
-              void act('follow', () => actions.followUpRun(run.id, 'continue'))
-            }
-          >
-            {t('context.followUp')}
-          </Button>
-        )}
-        {run.branch && reviewable && (
-          <>
-            <Button
-              variant="ghost"
-              size="xs"
-              loading={busy === 'land'}
-              onClick={() => void act('land', () => actions.landRun(run.id))}
-            >
-              <GitMerge size={11} />
-              {t('context.land')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              loading={busy === 'ship'}
-              onClick={() => void act('ship', () => actions.shipRun(run.id))}
-            >
-              {t('context.ship')}
-            </Button>
-          </>
-        )}
-        {!isDiscarded(run) && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="ml-auto text-destructive-foreground"
-            loading={busy === 'discard'}
-            onClick={() =>
-              void act('discard', async () => {
-                await actions.discardRun(run.id);
-                onBack();
-              })
-            }
-          >
-            {t('context.discard')}
-          </Button>
-        )}
-      </div>
+      <RunActionBar run={run} busy={busy} act={act} onDiscard={onBack} />
 
       {error && (
         <div

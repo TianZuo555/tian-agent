@@ -486,6 +486,31 @@ test('a repeated identical dispatch reuses the in-flight run', async (t) => {
   f.runtime.complete(another.conversationId!);
 });
 
+test('a folded dispatch stays idempotent after the run settles', async (t) => {
+  const f = await fixture(t);
+  const first = await start(f);
+  const folded = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: null,
+    operationId: 'dispatch:folded-call',
+  });
+  assert.equal(folded.id, first.id);
+  f.runtime.complete(first.conversationId!);
+  await until(() => f.db.getRun(first.id)?.status === 'done');
+  // The fold record outlives the active window: replaying the same
+  // operation id resolves to the original run, not a second worker.
+  const retried = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'Do work',
+    chiefConversationId: null,
+    operationId: 'dispatch:folded-call',
+  });
+  assert.equal(retried.id, first.id);
+  assert.equal(f.db.listRuns(null).length, 1);
+  assert.equal(f.runtime.records.size, 1);
+});
+
 test('stop interrupts a running worker but keeps the run for review', async (t) => {
   const f = await fixture(t);
   const run = await start(f);
@@ -502,6 +527,9 @@ test('stop interrupts a running worker but keeps the run for review', async (t) 
   assert.equal(f.db.getRun(run.id)!.status, 'interrupted');
   assert.equal(existsSync(run.worktreePath!), true);
   assert.equal(f.db.pendingNotifications().length, 1);
+  // The abort snapshots the partial edits into a commit, so the diff —
+  // and a later land or ship — still sees them.
+  assert.match(await f.runs.diff(run.id), /partial\.txt/);
   // A settled run ignores another stop but accepts a follow-up.
   const again = await f.runs.stop(run.id);
   assert.equal(again.status, 'interrupted');
