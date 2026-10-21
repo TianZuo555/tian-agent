@@ -80,6 +80,8 @@ export const commandHandlers = (service: Service, clientId: number) =>
     skillRetire: (skillId, reason) => service.skillRetire(skillId, reason),
     skillRollback: (skillId, reason) => service.skillRollback(skillId, reason),
     getSettings: () => service.getSettings(),
+    wechatStatus: () => service.wechatStatus(),
+    wechatRelogin: () => service.wechatRelogin(),
     setModel: (model) => service.setModel(model),
     modelCatalog: () => service.getModelCatalog(),
     refreshModels: () => service.refreshModels(),

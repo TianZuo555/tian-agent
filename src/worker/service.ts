@@ -40,6 +40,11 @@ import {
   fetchBotApi,
   type TelegramSetup,
 } from './telegram.js';
+import {
+  WechatAdapter,
+  type WechatSetup,
+  type WechatStatus,
+} from './wechat.js';
 import { toRows, type ConversationView } from '../shared/messages.js';
 import type {
   Emit,
@@ -70,6 +75,7 @@ export class Service {
   readonly scheduler: GoalScheduler;
   readonly memoryWorker: MemoryWorker;
   private telegram: TelegramAdapter | null = null;
+  private wechat: WechatAdapter | null = null;
   private agents: AgentRuntime;
   private settings: Settings;
   private globalDir: string;
@@ -93,6 +99,8 @@ export class Service {
     private emit: Emit,
     /** Telegram setup resolved by the service entry; absent = adapter off. */
     private telegramSetup: TelegramSetup = {},
+    /** WeChat setup resolved by the service entry; absent = adapter off. */
+    private wechatSetup: WechatSetup | null = null,
     private options: { warmModels?: boolean } = {},
   ) {
     this.db = new Db(userDataDir);
@@ -313,6 +321,53 @@ export class Service {
         this.reportIssue('models.warm', error),
       );
     await this.startTelegram();
+    await this.startWechat();
+  }
+
+  /**
+   * Start the WeChat gateway over iLink. It owns its own login: with no stored
+   * credentials it publishes a QR code for Settings to show and waits.
+   */
+  private async startWechat(): Promise<void> {
+    if (this.closing || this.maintenanceMode) return;
+    const setup = this.wechatSetup;
+    // An empty allow-list means nobody may reach the chief: keep the adapter off.
+    if (!setup?.config?.allowedUserIds.length) return;
+    if (!this.wechat)
+      this.wechat = new WechatAdapter(
+        {
+          db: this.db,
+          scopes: this.scopes,
+          openSession: (binding) => this.openSession(binding),
+          submit: async (conversationId, content, requestId) => {
+            await this.submit(conversationId, content, requestId);
+          },
+          conversation: (id) => this.agents.conversation(id),
+          reportIssue: (area, error, context) =>
+            this.reportIssue(area, error, context),
+        },
+        setup.config,
+        setup,
+      );
+    await this.wechat.start();
+  }
+
+  wechatStatus(): WechatStatus {
+    return (
+      this.wechat?.status() ?? {
+        enabled: false,
+        loggedIn: false,
+        accountId: null,
+        qrCodeUrl: null,
+        scanned: false,
+        error: null,
+      }
+    );
+  }
+
+  wechatRelogin(): Promise<WechatStatus> {
+    if (!this.wechat) throw new Error('The WeChat channel is not configured');
+    return this.wechat.relogin();
   }
 
   /** Start the Telegram gateway; without a configured token it stays off. */
@@ -358,6 +413,7 @@ export class Service {
       // server's maintenance gate, so a message accepted after the check would
       // be work the upgrade never saw. stop() settles in-flight submits first.
       await this.telegram?.stop();
+      await this.wechat?.stop();
       await this.delivery;
       const activity = await this.activity();
       if (
@@ -373,6 +429,7 @@ export class Service {
     } catch (error) {
       this.maintenanceMode = false;
       await this.startTelegram();
+      await this.startWechat();
       // Maintenance was refused (work still running): schedules must keep
       // firing instead of staying stopped until the next activate().
       this.scheduler.start();
@@ -394,6 +451,7 @@ export class Service {
     clearInterval(this.maintenance);
     clearInterval(this.memoryTimer);
     await this.telegram?.stop();
+    await this.wechat?.stop();
     for (const timer of this.inboxTimers.values()) clearTimeout(timer);
     for (const watcher of this.inboxWatches.values()) watcher.close();
     this.inboxTimers.clear();

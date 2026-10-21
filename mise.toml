@@ -91,7 +91,7 @@ description = "Run the built service in the foreground (needs build:service)"
 run = "pnpm service:run"
 
 [tasks."service:env"]
-description = "Write MAGPIE_*/TELEGRAM_* from .env into <dataDir>/service.env (0600)"
+description = "Write MAGPIE_*/TELEGRAM_*/WECHAT_* from .env into <dataDir>/service.env (0600)"
 run = '''
 set -euo pipefail
 dir="${TIAN_AGENT_DATA_DIR:-$HOME/Library/Application Support/Tian Agent}"
@@ -99,7 +99,7 @@ install -d -m 700 "$dir"
 tmp="$(mktemp "$dir/.service.env.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 chmod 600 "$tmp"
-env | grep -E '^(MAGPIE_|TELEGRAM_)' | grep -vE '=$' | sort >> "$tmp" || true
+env | grep -E '^(MAGPIE_|TELEGRAM_|WECHAT_)' | grep -vE '=$' | sort >> "$tmp" || true
 mv "$tmp" "$dir/service.env"
 trap - EXIT
 echo "Wrote $dir/service.env"

@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { ResidentServer } from './server.js';
 import { servicePaths } from '../shared/service-paths.js';
+import { join } from 'node:path';
 import { telegramConfigFromEnv } from '../worker/telegram.js';
+import { wechatAllowedFromEnv } from '../worker/wechat.js';
 
 const { values } = parseArgs({
   options: { 'data-dir': { type: 'string' } },
@@ -17,6 +19,11 @@ if (existsSync(paths.environmentPath))
 // Service itself never inspects process.env, so tests cannot reach the network.
 const server = new ResidentServer(paths, {
   telegram: { config: telegramConfigFromEnv() },
+  wechat: {
+    config: { allowedUserIds: wechatAllowedFromEnv() },
+    // The SDK's file storage: credentials, poll cursor and context tokens.
+    storageDir: join(paths.dataDir, 'wechat'),
+  },
 });
 // Runs before Node's default crash path, so a process-level failure still lands
 // in the Improvement Log when the database is reachable.

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { lock } from 'proper-lockfile';
 import { Service } from '../worker/service.js';
 import type { TelegramSetup } from '../worker/telegram.js';
+import type { WechatSetup } from '../worker/wechat.js';
 import type { IssueContext } from '../worker/improvements.js';
 import { commandHandlers } from '../worker/commands.js';
 import { validateCommand, type RuntimeMessage } from '../shared/contracts.js';
@@ -26,6 +27,8 @@ interface Connection {
 export interface ResidentOptions {
   /** Telegram gateway setup; resolved by the entry from service.env. */
   telegram?: TelegramSetup;
+  /** WeChat (iLink) gateway setup; resolved by the entry from service.env. */
+  wechat?: WechatSetup;
 }
 
 /** Owns one application service, independent of every desktop/client process. */
@@ -115,6 +118,7 @@ export class ResidentServer {
         this.paths.dataDir,
         this.emit,
         this.options.telegram ?? {},
+        this.options.wechat ?? null,
         { warmModels: true },
       );
       this.maintenance = existsSync(

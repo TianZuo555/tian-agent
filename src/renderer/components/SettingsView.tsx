@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowsClockwise,
   ChartBar,
+  ChatCircleDots,
   Check,
   Cpu,
   Desktop,
@@ -44,6 +45,7 @@ import { ContextToggle, SidebarToggle } from './SidebarToggle';
 import { PaneHeader } from './PaneHeader';
 import { UsageHeatmap } from './UsageHeatmap';
 import { ServiceSettings } from './ServiceSettings';
+import { WechatSettings } from './WechatSettings';
 import { ImprovementLog } from './ImprovementLog';
 
 /** One page per category: the rail switches pages, it does not scroll a long one. */
@@ -53,6 +55,7 @@ type SettingsPage =
   | 'model'
   | 'usage'
   | 'log'
+  | 'channels'
   | 'service';
 
 const SECTIONS: { id: SettingsPage; label: MessageKey; icon: Icon }[] = [
@@ -61,6 +64,11 @@ const SECTIONS: { id: SettingsPage; label: MessageKey; icon: Icon }[] = [
   { id: 'model', label: 'settings.section.model', icon: Cpu },
   { id: 'usage', label: 'settings.section.usage', icon: ChartBar },
   { id: 'log', label: 'settings.section.log', icon: Notebook },
+  {
+    id: 'channels',
+    label: 'settings.section.channels',
+    icon: ChatCircleDots,
+  },
   { id: 'service', label: 'settings.section.service', icon: Pulse },
 ];
 
@@ -76,6 +84,10 @@ const PAGES: Record<
   model: { title: 'settings.section.model', render: () => <ModelSection /> },
   usage: { title: 'settings.section.usage', render: () => <UsageSection /> },
   log: { title: 'settings.section.log', render: () => <LogSection /> },
+  channels: {
+    title: 'settings.section.channels',
+    render: () => <ChannelsSection />,
+  },
   service: {
     title: 'settings.section.service',
     render: () => <ServiceSection />,
@@ -438,6 +450,19 @@ function LogSection() {
       }
     >
       <ImprovementLog />
+    </Section>
+  );
+}
+
+function ChannelsSection() {
+  const t = useT();
+  return (
+    <Section
+      id="channels"
+      title={t('settings.section.channels')}
+      icon={ChatCircleDots}
+    >
+      <WechatSettings active />
     </Section>
   );
 }

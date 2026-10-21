@@ -63,6 +63,8 @@
 | `worker/usage.ts`              | 按本地日统计各 scope 的模型 token 用量                                             |
 | `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令                                           |
 | `worker/telegram.ts`           | Telegram Bot 长轮询、白名单、会话映射与回复转发                                    |
+| `worker/wechat.ts`             | 微信 iLink（ClawBot）扫码登录、白名单、会话映射、回复转发与 24 小时窗口保活        |
+| `worker/channel-host.ts`       | 渠道适配器共用的宿主接口与总管回复文本提取                                         |
 
 ## 权限与 scope
 

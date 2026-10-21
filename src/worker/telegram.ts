@@ -1,12 +1,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import type {
-  Conversation,
-  EntryId,
-  EntryRecord,
-} from '@earendil-works/pi-durable';
-import type { ConversationInfo, SessionBinding } from '../shared/types.js';
-import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
-import type { Db } from './db.js';
+import type { EntryId } from '@earendil-works/pi-durable';
+import { GLOBAL_SCOPE } from './scopes.js';
+import { assistantText, type ChannelHost } from './channel-host.js';
 import type { IssueContext } from './improvements.js';
 
 export const TELEGRAM_CHANNEL = 'telegram';
@@ -85,20 +80,7 @@ const DEFAULT_OPTIONS: TelegramOptions = {
   maxUpdateAttempts: 5,
 };
 
-/** Application surface the adapter works against; owned by the Service. */
-export interface TelegramHost {
-  db: Db;
-  scopes: Scopes;
-  openSession(binding: SessionBinding): Promise<ConversationInfo>;
-  submit(
-    conversationId: string,
-    content: string,
-    requestId: string,
-  ): Promise<void>;
-  conversation(conversationId: string): Promise<Conversation>;
-  /** Automatic issue sink; the adapter degrades to console logging without it. */
-  reportIssue?: (area: string, error: unknown, context?: IssueContext) => void;
-}
+export type TelegramHost = ChannelHost;
 
 const API_BASE = 'https://api.telegram.org';
 const MESSAGE_LIMIT = 4096;
@@ -158,26 +140,6 @@ export function fetchBotApi(token: string): TelegramBotApi {
     sendMessage: (chatId, text, signal) =>
       call<unknown>('sendMessage', { chat_id: chatId, text }, signal),
   };
-}
-
-/** Text of a completed assistant entry: text blocks only, no thinking or tool calls. */
-export function assistantText(entry: EntryRecord): string {
-  if (entry.kind !== 'pi.assistant' || !entry.model) return '';
-  const parts: string[] = [];
-  for (const message of entry.model) {
-    const content: unknown = (message as { content?: unknown }).content;
-    if (typeof content === 'string') {
-      if (content.trim()) parts.push(content);
-    } else if (Array.isArray(content)) {
-      for (const block of content) {
-        const type = (block as { type?: unknown } | null)?.type;
-        const text = (block as { text?: unknown } | null)?.text;
-        if (type === 'text' && typeof text === 'string' && text.trim())
-          parts.push(text);
-      }
-    }
-  }
-  return parts.join('\n').trim();
 }
 
 /**

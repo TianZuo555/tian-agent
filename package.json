@@ -74,6 +74,7 @@
     "@phosphor-icons/react": "^2.1.10",
     "@pierre/diffs": "^1.5.2",
     "@tailwindcss/vite": "4.3.3",
+    "@wechatbot/wechatbot": "^2.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cn": "^0.5.0",

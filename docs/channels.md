@@ -23,6 +23,22 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 - 所在会话的总管回复（直接回复与主动汇报）以纯文本发回 chat：按行边界拆分为不超过 4096 字符的消息；转发游标持久化，重启不重发也不漏发；流式片段、工具调用与思考内容不转发。
 - 审批等受控操作尚未接入 Telegram，命令入口与推送通道为后续接入预留。
 
+## 微信（iLink / ClawBot）
+
+适配器走腾讯 iLink Bot 协议（微信「设置 → 插件」里的官方 ClawBot 插件），底层用 `@wechatbot/wechatbot` SDK：扫码登录 + 长轮询，官方通道、不需要公网入口，也不是客户端 hook。凭证、游标和 `context_token` 由 SDK 存在 `<dataDir>/wechat/`。
+
+```sh
+WECHAT_ALLOWED_USER_IDS=wxid_您本人的id@im.wechat
+```
+
+写进仓库 `.env` 后 `mise run service:env && mise run service:restart`。白名单为空时适配器完全关闭——首次登录前先留空并重启，扫码成功后 App 的 **Settings → Channels** 会显示机器人账号（`…@im.bot`），把您本人的 `…@im.wechat` 加进白名单再重启一次。
+
+- 扫码登录：服务启动时若无凭证，会把二维码 URL 发布到 Settings → Channels（同时支持配对码）。扫码确认后凭证持久化，重启自动恢复；二维码过期或换号用「重新生成二维码」。
+- 只有白名单内的用户能触发对话。每个用户一条稳定会话，默认 scope 为 `global`，命令与 Telegram 相同（`/scope`、`/status`、`/help`）。入站 `requestId` 为 `wx:<userId>:<messageId>`，重启不重放。
+- 总管回复以纯文本回发，转发游标持久化。微信在每次用户消息后只给约 10 条机器人消息，且 `context_token` 24 小时后失效；发送被拒时游标不前移，等用户下次发消息（开新窗口）自动补发，既不丢也不重复。
+- **24 小时保活**：用户长时间沉默时，服务在窗口内最多发两条一个字符的「.」（间隔 ≥11 小时、距窗口结束还有 30 分钟以上才发）；保活被拒说明窗口已关闭，此后不再试探，等用户主动发消息。这样既保住推送窗口，又不白白耗尽 10 条额度。
+- 已知限制：iLink 的扫码机器人只能私聊，拉不进普通微信群；不支持快捷命令菜单（`/model` 只能带参数使用）。
+
 ## Inbox
 
 外部参与者向 `<scope root>/.tian/inbox/*.md` 投递消息：
