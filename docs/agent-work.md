@@ -38,11 +38,16 @@ Task 状态机：`pending → running → waiting_approval → completed`，另�
 ## Run 生命周期
 
 ```text
+执行状态（status）：
 dispatch → queued → running → collecting → done / failed
-                            ↘ discard → interrupted
-```
+            │         │
+            └── stop ─┴──→ interrupted
 
-执行与验收状态分别记录；验收状态为 `pending / landing / landed / shipping / shipped / discarding / discarded`。
+验收状态（reviewStatus，独立记录）：
+pending → landing → landed
+       ↘ shipping → shipped
+       ↘ discarding → discarded
+```
 
 - Git 项目必须成功创建 worktree，隔离失败终止派发并保留记录；非 Git 项目默认拒绝，明确开启 `allowInPlace` 后才可修改原目录。
 - Run 保存派发时的目录、base branch、执行模式及截止时间。

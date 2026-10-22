@@ -50,6 +50,8 @@
 | `worker/files.ts`              | 原子文件发布（临时文件 + rename）                                                  |
 | `worker/scheduler.ts`          | cron 解析与触发事务                                                                |
 | `worker/runs.ts`               | Run 状态、attempt、收集、恢复及验收                                                |
+| `worker/run-progress.ts`       | Run 进度快照类型与工具输出格式化（`run_progress`）                                 |
+| `worker/manager-label.ts`      | 项目管理者命名与标签解析（D18）                                                    |
 | `worker/data.ts`               | task、memory、Inbox 操作和更新事件                                                 |
 | `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录                                          |
 | `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入                                                |
@@ -68,9 +70,9 @@
 
 ## 权限与 scope
 
-总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch、delegate（`delegate` / `send_manager_msg` / `list_manager_msgs`）、Run 查询与 Run 消息（`send_run_msg` / `list_run_msgs`），没有 `bash/read/write/edit`；读取 Run 结果用 `read_run_report` / `read_run_diff`。启动时会重新限制已有总管会话的 extension。记忆与 notes 按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）：总管只写 Global、只注入 Global Core，项目的记忆与 notes 只能带 `scope` 只读查询。
+总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch、delegate（`delegate` / `send_manager_msg` / `list_manager_msgs`）、Run 查询与 Run 消息（`send_run_msg` / `list_run_msgs` / `run_progress` / `stop_run`），没有 `bash/read/write/edit`；读取 Run 结果用 `read_run_report` / `read_run_diff`。启动时会重新限制已有总管会话的 extension。记忆与 notes 按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）：总管只写 Global、只注入 Global Core，项目的记忆与 notes 只能带 `scope` 只读查询。
 
-项目管理者启用 manager extension，由 `channel_sessions` 中 `channel = 'manager'`、`external_id = project_id` 的绑定决定，每项目恰好一条持久会话，随 `addProject` 创建（名字必填），服务启动时为旧项目补建；`channel = 'manager'` 是保留 channel，公开 `openSession` 不能绑定它——面向用户的入口是 `openManager(projectId)` 命令（拒 Global 与未知项目，重复调用幂等），会话行用 `role: 'manager'` 在 `ConversationInfo` 中标识并在侧栏置顶于本项目。它的工具全部锁定本项目 scope：任务执行（`delegate` 产生的 `assignee='manager'` Task 归它收口，总管不再能 start/complete/fail）、Run 管理（`dispatch` 只许本项目的 Task，把 `chief_conversation_id` 指到自己，工兵的提问与结果回到管理者）、记忆与 notes 由它独占写入（Global 记忆只读，注入 Global + 本项目 Core），history 同样只许本项目；没有 shell / 编码工具。上行用 `report_chief` / `ask_chief` 走 `manager_messages` 持久线程（kind/task_id/reply_to/closed_at），通知按委派 Task 的 `report_to` 路由到对应总管会话。
+项目管理者启用 manager extension，由 `channel_sessions` 中 `channel = 'manager'`、`external_id = project_id` 的绑定决定，每项目恰好一条持久会话，随 `addProject` 创建（名字必填），服务启动时为旧项目补建；`channel = 'manager'` 是保留 channel，公开 `openSession` 不能绑定它——面向用户的入口是 `openManager(projectId)` 命令（拒 Global 与未知项目，重复调用幂等），会话行用 `role: 'manager'` 在 `ConversationInfo` 中标识并在侧栏置顶于本项目。它的工具全部锁定本项目 scope：任务执行（`delegate` 产生的 `assignee='manager'` Task 归它收口，总管不再能 start/complete/fail）、Run 管理（`dispatch` 只许本项目的 Task，把 `chief_conversation_id` 指到自己，支持 `run_progress` 与 `stop_run`，工兵的提问与结果回到管理者）、记忆与 notes 由它独占写入（Global 记忆只读，注入 Global + 本项目 Core），history 同样只许本项目；没有 shell / 编码工具。上行用 `report_chief` / `ask_chief` 走 `manager_messages` 持久线程（kind/task_id/reply_to/closed_at），通知按委派 Task 的 `report_to` 路由到对应总管会话。
 
 Tian 可直接在管理者会话里对话派活：本轮输入的 `currentInput` 为 `kind='user'` 即为 Tian 轮次。此时 `ask_chief` 与 `report_chief` 被工具层守卫挡下（返回提示语、不写 `manager_messages`、不唤醒总管）——例外是 `report_chief` 带一个 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 指派的 Task 经 `add_task` 创建、`assignee` 为 NULL，静默收口；Tian 轮次里 `remember(source:'user')` 照常记 `user_confirmed`。
 
