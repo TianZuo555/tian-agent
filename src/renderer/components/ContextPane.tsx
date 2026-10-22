@@ -834,6 +834,8 @@ function MemoryReviewDetails({ item }: { item: MemoryItem }) {
                   void actions.memoryPromote(item.seq, {
                     seq: related.seq,
                     content: related.content,
+                    conditions: related.conditions,
+                    validUntil: related.validUntil,
                   })
                 }
               >

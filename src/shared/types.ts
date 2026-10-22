@@ -298,7 +298,13 @@ export interface MemoryItem {
   verifiedAt?: string | null;
   validUntil?: string | null;
   /** Related facts require review; similarity does not prove a conflict. */
-  related?: { seq: number; content: string; sourceRef: string | null }[];
+  related?: {
+    seq: number;
+    content: string;
+    sourceRef: string | null;
+    conditions?: string;
+    validUntil?: string | null;
+  }[];
   /** Explicitly selected into the Core Memory view. */
   core: boolean;
   supersededBy: string | null;

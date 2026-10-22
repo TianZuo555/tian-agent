@@ -419,7 +419,7 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
   });
   assert.match(toolText(verbatim), /user-confirmed/);
   const row = f.db.sqlite
-    .prepare('SELECT source_ref, trust_level, core FROM memories WHERE seq = 1')
+    .prepare('SELECT source_ref, trust_level, core FROM memories WHERE seq = 2')
     .get() as { source_ref: string; trust_level: string; core: number };
   assert.equal(row.trust_level, 'user_confirmed');
   assert.equal(row.source_ref, `conv:${id}#21`);

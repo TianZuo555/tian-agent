@@ -250,7 +250,7 @@ test('promote renders in Core Memory (applying conflicts); dismiss never comes b
   // The dismissal is remembered: the same source cannot re-create it.
   f.seed(
     'global',
-    row('2', '21', 'our build server runs on Ubuntu 24.04 with node 26'),
+    row('2', '21', 'Our build server runs on Ubuntu 24.04 with node 26'),
   );
   const again = await f.worker.trigger('global', 'task-completed', {
     force: true,

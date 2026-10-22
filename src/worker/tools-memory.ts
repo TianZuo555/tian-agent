@@ -450,6 +450,13 @@ export function memoryTools(
           return toolErr(
             'Promotion needs a verified explicit user save request or Memory panel review',
           );
+        const target =
+          candidate.supersedes === null
+            ? null
+            : deps.scopes
+                .memory(scope)
+                .dump()
+                .items.find((row) => row.seq === candidate.supersedes);
         const result = data.promote(
           scope,
           args.seq,
@@ -458,6 +465,14 @@ export function memoryTools(
             sourceRef: evidenceRef(conversationId, input),
             method: 'explicit-save',
           },
+          target
+            ? {
+                seq: target.seq,
+                content: target.content,
+                conditions: target.conditions,
+                validUntil: target.validUntil,
+              }
+            : undefined,
         );
         return toolText(
           `#${result.memory.seq} active; Core selection is separate.`,
@@ -489,7 +504,12 @@ export function coreMemorySection(
 ) {
   const snapshots = new Map<
     string,
-    { text: string; version: string; turn: string | null }
+    {
+      text: string;
+      version: string;
+      turn: string | null;
+      expires: string | null;
+    }
   >();
   /** The scopes this role's Core renders, General first. */
   const rendered = (conversationId: string): string[] => {
@@ -508,6 +528,11 @@ export function coreMemorySection(
     const version = scopes
       .map((scope) => deps.scopes.memory(scope).version())
       .join('/');
+    const expires =
+      scopes
+        .map((scope) => deps.scopes.memory(scope).nextCoreExpiry())
+        .filter((at): at is string => at !== null)
+        .sort()[0] ?? null;
     let turn: string | null;
     try {
       turn = await deps.latestInputEntry(conversationId);
@@ -515,8 +540,14 @@ export function coreMemorySection(
       turn = `unavailable-${Date.now()}`; // degradation: recompute every request
     }
     const cached = snapshots.get(conversationId);
-    if (cached && cached.turn === turn) return cached.text;
-    if (cached && cached.version === version) {
+    // A cached snapshot is stale once any selected fact expires, even without
+    // a write or a new turn.
+    const expired =
+      cached?.expires !== null &&
+      cached?.expires !== undefined &&
+      cached.expires <= new Date().toISOString();
+    if (cached && cached.turn === turn && !expired) return cached.text;
+    if (cached && cached.version === version && !expired) {
       cached.turn = turn; // new turn but unchanged memory: keep the snapshot
       return cached.text;
     }
@@ -524,7 +555,7 @@ export function coreMemorySection(
       .map((scope) => `[${label(scope)}]\n${deps.scopes.memory(scope).wake()}`)
       .join('\n\n');
     if (snapshots.size > 200) snapshots.clear();
-    snapshots.set(conversationId, { text, version, turn });
+    snapshots.set(conversationId, { text, version, turn, expires });
     return text;
   });
 }

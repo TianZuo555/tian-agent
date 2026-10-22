@@ -111,7 +111,12 @@ export interface Commands {
     [
       scopeId: string,
       seq: number,
-      replacement?: { seq: number; content: string },
+      replacement?: {
+        seq: number;
+        content: string;
+        conditions?: string;
+        validUntil?: string | null;
+      },
     ],
     void
   >;
@@ -294,6 +299,8 @@ export const commandArgs = {
       Type.Object({
         seq: Type.Integer({ minimum: 0 }),
         content: Type.String(),
+        conditions: Type.Optional(Type.String()),
+        validUntil: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       }),
     ),
   ]),

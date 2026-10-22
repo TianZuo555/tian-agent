@@ -4,7 +4,7 @@
 
 ```text
 <scope root>/memory/
-  MEMORY.md        每次写入提交后原子重写的只读视图（有效记忆 + 是否选入 Core + 用量）
+  MEMORY.md        每次写入提交后原子重写的只读快照（生成时间 + 有效记忆 + 是否选入 Core + 用量）
   legacy/          一次性导入后的旧 LOG.txt 与 TREE/（旧摘要树已退役，不再读取）
 ```
 
@@ -66,11 +66,12 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 - Core 快照的"轮次"以任意输入 kind 为界：通知唤醒也会在下一请求刷新，而不会被旧的用户轮次缓存冻结。
 - 用户在 Memory 面板的修订固定为 `user_confirmed`、来源 `ui:memory-panel`，并写入 `memory_confirmations`。
 - `observed_at` 是来源发生时间，`verified_at` 是用户审核/明确保存时间；`select` / `deselect` 只改变视图，不改变任何事实时间。
-- `valid_until` 只用于确实有明确有效期的记忆；过期条目不再进入默认 `recall`、Core 或 `MEMORY.md`，但仍可在 `include_history` 中审核。不按频率自动衰减。
+- `valid_until` 只用于确实有明确有效期的记忆；写入时统一规范化为 UTC ISO（纯日期按 UTC 零点；带时间必须含 `Z` 或偏移）。过期条目不再进入默认 `recall`、Core 或下一次导出的 `MEMORY.md`，但仍可在 `include_history` 中审核。不按频率自动衰减。
+- `MEMORY.md` 是**带生成时间的快照**，只在写入提交后重写；到期后若没有新的写入，旧文件可能仍含已过期条目，文件头的时间标明快照时刻。运行时读取（Core、`recall`）每次按当前时间过滤，不依赖该文件。
 
 ## 去重与幂等
 
-- 同 Scope、规范化空白后完全相同的正文（大小写保留，`Foo` 与 `foo` 视为不同）返回原 `#seq`，不新增条目。
+- 事实身份 = 正文 + `conditions` + `valid_until`；同 Scope、规范化空白后正文相同且条件与有效期相同的写入返回原 `#seq`（大小写保留，`Foo` 与 `foo` 视为不同）。`revise` 与 `promote` 使用同一身份规则；只改条件或有效期的修订同样版本化并取代旧行，不会留下两个 active 行。
 - 重复写入若带来新的证据引用或用户确认，会追加 `memory_evidence` / `memory_confirmations`，并追加一条 `evidence` 版本记录、重建导出并推进版本号；重复同一引用是幂等的。`revise` 到相同正文也走同一条补证据路径（`changed=false` 但 `evidenceAdded=true`），元数据变宽导致 Core 放不下时会移出 Core 并明确返回 `coreDropped`。
 - 重复写入若同时要求 `core: true`，仍按最终渲染集合校验预算；超额整笔回滚（包括证据更新），不会先写证据再绕过预算。
 - 同内容但已 superseded/deleted 的历史不会被复活：会写入新的 active 条目。
@@ -82,8 +83,9 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 `worker/memory-worker.ts` 在常驻服务内后台运行，不占用总管对话回合。触发时机：Task 完成、会话空闲（watch 到 busy→idle，另有 5 分钟兜底 sweep）、用户纠正（`revise` / `forget` 强制触发）。按 scope 游标增量读取 History 派生索引，经 Extract → Classify → Deduplicate（只做精确正文去重与已驳回内容抑制）→ Persist 生成候选记忆。相关事实只作为审核提示，不自动设置 `supersedes`。自动触发有 30 秒最小间隔节流；服务关闭或维护时暂停。
 
 - 候选一律为 `candidate`、trust = `agent_inferred`，绝不进入 `wake()` 渲染与只读导出；提取与入库在同一事务，提取器抛异常则整体回滚、游标不动。
-- 候选可以列出相关 active 事实；只有用户在 Memory 面板选择“确认此条取代 #seq”时，promote 才在同一事务内取代该事实。promote 不自动进入 Core。
-- dismiss 后相同正文不再重复提取；抑制按具体正文，不用全历史相似度永久压制新的纠正。
+- 候选可以列出相关 active 事实；只有用户在 Memory 面板选择“确认此条取代 #seq”时，promote 才在同一事务内取代该事实，并用完整的旧事实身份做乐观校验（正文/条件/有效期任一变化都失败）。promote 不自动进入 Core。
+- 用户审核修订候选时，旧候选保留为 `superseded` 历史并链接新版本；新正文成为 active 候选版本。返回的 `superseded` 是旧候选，不是新版本。
+- dismiss 后相同完整事实（含 scope、正文大小写、条件与有效期）不再重复提取；抑制 key 含 scope，不用全历史相似度永久压制新的纠正。
 - 提取器是可注入接口 `MemoryExtractor`，默认为确定性启发式（`Intl.Segmenter` 多语言分词，中英文模式表见源码），可离线测试；接 Magpie 模型的位置已预留但未接（PRD 问题 6 未决）。
 
 ## 任务相关上下文

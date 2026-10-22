@@ -14,6 +14,14 @@ import {
   type ConfirmationInput,
 } from './memory-evidence.js';
 import { similarity } from './memory-worker.js';
+import {
+  memoryIdentityKey,
+  memoryDismissalKey,
+  normalizeConditions,
+  normalizeValidUntil,
+  type MemoryIdentity,
+  type MemoryReplacement,
+} from './memory-identity.js';
 
 /**
  * SQLite-backed memory with provenance, versions, and an explicitly selected
@@ -117,7 +125,7 @@ export interface RememberInput {
   reason?: string | null;
   evidence?: EvidenceInput;
   confirmation?: ConfirmationInput;
-  conditions?: string;
+  conditions?: string | null;
   validUntil?: string | null;
   status?: 'active' | 'candidate';
   supersedes?: number | null;
@@ -324,22 +332,76 @@ export class MemoryStore {
       this.scopeId,
     ).map(toMemory);
   }
-  private activeByTextTx(key: string): MemoryRow | undefined {
+  private matchingTx(
+    identity: MemoryIdentity,
+    statuses: MemoryStatus[],
+  ): MemoryRow | undefined {
+    const key = memoryIdentityKey(identity);
     return this.all(
-      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' ORDER BY seq",
+      'SELECT * FROM memories WHERE scope_id = ? ORDER BY seq',
       this.scopeId,
     )
       .map(toMemory)
-      .find((memory) => dedupeKey(memory.content) === key);
+      .find(
+        (memory) =>
+          statuses.includes(memory.status) && memoryIdentityKey(memory) === key,
+      );
   }
-  private candidateByTextTx(key: string): MemoryRow | undefined {
-    return this.all(
-      "SELECT * FROM memories WHERE scope_id = ? AND status = 'candidate' ORDER BY seq",
-      this.scopeId,
+
+  private supersedeTx(
+    memory: MemoryRow,
+    replacement: MemoryRow,
+    actor: MemoryActor,
+    reason: string,
+  ): MemoryRow {
+    const updated: MemoryRow = {
+      ...memory,
+      status: 'superseded',
+      core: false,
+      supersededBy: replacement.id,
+      updatedAt: new Date().toISOString(),
+    };
+    this.run(
+      'UPDATE memories SET status = ?, core = 0, superseded_by = ?, updated_at = ? WHERE id = ?',
+      updated.status,
+      replacement.id,
+      updated.updatedAt,
+      memory.id,
+    );
+    this.recordVersionTx(
+      memory.id,
+      'supersede',
+      actor,
+      reason,
+      memory,
+      updated,
+    );
+    return updated;
+  }
+
+  private replacementTx(
+    expected: MemoryReplacement,
+    allowCandidate = false,
+  ): MemoryRow {
+    const target = this.bySeqTx(expected.seq);
+    if (
+      !target ||
+      (!allowCandidate && target.status !== 'active') ||
+      memoryIdentityKey(target) !== memoryIdentityKey(expected)
     )
-      .map(toMemory)
-      .find((memory) => dedupeKey(memory.content) === key);
+      throw new Error('Replacement target changed; review it again');
+    return target;
   }
+
+  isDismissed(identity: MemoryIdentity): boolean {
+    return Boolean(
+      this.get(
+        'SELECT 1 FROM memory_meta WHERE key = ?',
+        memoryDismissalKey(this.scopeId, identity),
+      ),
+    );
+  }
+
   private insertMemoryTx(memory: MemoryRow): void {
     this.run(
       `INSERT INTO memories (id, scope_id, seq, goal_id, kind, content, source_type, source_ref,
@@ -449,24 +511,14 @@ export class MemoryStore {
    */
   remember(input: RememberInput): RememberResult {
     const content = normalizeLine(input.text, 'memory');
-    const conditions = input.conditions?.trim() ?? '';
-    if (conditions.length > 300)
-      throw new Error('Conditions must be at most 300 characters');
-    if (input.validUntil && !Number.isFinite(Date.parse(input.validUntil)))
-      throw new Error('validUntil must be an ISO date');
+    const conditions = normalizeConditions(input.conditions);
+    const validUntil = normalizeValidUntil(input.validUntil);
+    const identity = { content, conditions, validUntil };
     const actor = input.actor ?? 'chief';
     const result = this.db.transaction((): RememberResult => {
-      const existing = this.all(
-        "SELECT * FROM memories WHERE scope_id = ? AND status IN ('active', 'candidate') ORDER BY status, seq",
-        this.scopeId,
-      )
-        .map(toMemory)
-        .find(
-          (row) =>
-            dedupeKey(row.content) === content &&
-            (row.conditions ?? '') === conditions &&
-            (row.validUntil ?? null) === (input.validUntil ?? null),
-        );
+      const existing =
+        this.matchingTx(identity, ['active']) ??
+        this.matchingTx(identity, ['candidate']);
       const now = new Date().toISOString();
       let memory: MemoryRow = existing ?? {
         id: newId(),
@@ -484,7 +536,7 @@ export class MemoryStore {
         conditions,
         observedAt: input.evidence?.observedAt ?? null,
         verifiedAt: input.confirmation ? now : null,
-        validUntil: input.validUntil ?? null,
+        validUntil,
         status: input.status ?? 'active',
         core: false,
         supersededBy: null,
@@ -655,6 +707,8 @@ export class MemoryStore {
     supersedes?: number | null;
     reason?: string;
     evidence?: EvidenceInput;
+    conditions?: string | null;
+    validUntil?: string | null;
   }): MemoryRow | null {
     const result = this.remember({
       ...input,
@@ -683,140 +737,111 @@ export class MemoryStore {
       sourceType?: MemorySourceType;
       evidence?: EvidenceInput;
       confirmation?: ConfirmationInput;
-      conditions?: string;
+      conditions?: string | null;
       validUntil?: string | null;
-      replacement?: { seq: number; content: string };
+      replacement?: MemoryReplacement;
     } = {},
   ): ReviseResult {
     const content = normalizeLine(text, 'memory');
     const result = this.db.transaction((): ReviseResult => {
-      const superseded = this.bySeqTx(seq);
-      if (!superseded)
-        throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
-      if (superseded.status === 'candidate' && options.confirmation) {
-        const evidenceAdded = this.attachEvidenceTx(
-          superseded,
-          options,
-          actor,
-          false,
+      const old = this.bySeqTx(seq);
+      if (!old) throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+      if (old.status !== 'active' && old.status !== 'candidate')
+        throw new Error(
+          `memory #${seq} is ${old.status}; only active memories can be revised`,
         );
-        this.promote(
-          seq,
-          actor,
-          reason,
-          options.confirmation,
-          options.replacement,
-        );
-        return {
-          memory: this.withEvidence(this.bySeqTx(seq)!),
-          superseded: this.withEvidence(this.bySeqTx(seq)!),
-          changed: false,
-          evidenceAdded,
-          coreDropped: false,
-        };
-      }
-      if (superseded.status === 'candidate')
+      if (old.status === 'candidate' && !options.confirmation)
         throw new Error(
           `memory #${seq} is candidate; only active memories can be revised without a verified user confirmation`,
         );
-      if (superseded.status !== 'active')
-        throw new Error(
-          `memory #${seq} is ${superseded.status}; only active memories can be revised`,
-        );
-      if (dedupeKey(content) === dedupeKey(superseded.content)) {
-        const result = this.remember({
+      if (options.replacement)
+        this.replacementTx(options.replacement, old.status === 'candidate');
+      const conditions = normalizeConditions(
+        options.conditions === undefined ? old.conditions : options.conditions,
+      );
+      const validUntil = normalizeValidUntil(
+        options.validUntil === undefined ? old.validUntil : options.validUntil,
+      );
+      const identity = { content, conditions, validUntil };
+      const same = memoryIdentityKey(old) === memoryIdentityKey(identity);
+      if (same) {
+        const recorded = this.remember({
           text: content,
           ...options,
           actor,
-          conditions: options.conditions ?? superseded.conditions,
-          validUntil: options.validUntil ?? superseded.validUntil,
+          conditions,
+          validUntil,
         });
         return {
-          memory: result.memory,
-          superseded: result.memory,
+          memory: recorded.memory,
+          superseded: old,
           changed: false,
-          evidenceAdded: result.evidenceAdded,
-          coreDropped: result.coreDropped,
+          evidenceAdded: recorded.evidenceAdded,
+          coreDropped: recorded.coreDropped,
         };
       }
-
-      const duplicate = this.activeByTextTx(dedupeKey(content));
+      const duplicate = this.matchingTx(identity, ['active', 'candidate']);
       if (duplicate && duplicate.seq !== seq)
         throw new Error(
           `memory #${duplicate.seq} already says that; revise #${duplicate.seq} instead of duplicating it`,
         );
       const now = new Date().toISOString();
-      const trustLevel =
-        options.trustLevel ??
-        (actor === 'user' ? 'user_confirmed' : 'agent_inferred');
       const memory: MemoryRow = {
-        ...superseded,
         id: newId(),
+        scopeId: this.scopeId,
         seq: this.seqCountTx(),
-        content,
+        goalId: old.goalId,
+        kind: old.kind,
+        ...identity,
         sourceType: options.sourceType ?? (actor === 'user' ? 'user' : 'agent'),
-        // Never inherit the old source: a correction points at its own evidence.
         sourceRef: options.sourceRef ?? null,
-        trustLevel,
+        trustLevel: options.confirmation
+          ? 'user_confirmed'
+          : (options.trustLevel ??
+            (actor === 'user' ? 'user_confirmed' : 'agent_inferred')),
         confidence: null,
-        conditions: options.conditions ?? superseded.conditions,
         observedAt: options.evidence?.observedAt ?? null,
         verifiedAt: options.confirmation ? now : null,
-        validUntil: options.validUntil ?? null,
-        status: 'active',
+        status: old.status === 'candidate' ? 'candidate' : 'active',
         core: false,
         supersededBy: null,
-        // The revision itself is the supersede; the target pointer is spent.
-        supersedes: null,
+        supersedes: old.status === 'candidate' ? old.supersedes : null,
         createdAt: now,
         updatedAt: now,
       };
       let coreDropped = false;
-      if (superseded.core) {
-        const projected = [...this.selectedTx(), memory].filter(
-          (item) => item.seq !== superseded.seq,
-        );
-        if (renderCore(projected, CORE_BUDGET, this.activeTx().length).overflow)
-          coreDropped = true;
-        else memory.core = true;
-      }
-      const revisedOld: MemoryRow = {
-        ...superseded,
-        status: 'superseded',
-        core: false,
-        supersededBy: memory.id,
-        updatedAt: now,
-      };
-      this.insertMemoryTx(memory);
-      this.attachEvidenceTx(memory, options, actor);
-      this.run(
-        'UPDATE memories SET status = ?, core = 0, superseded_by = ?, updated_at = ? WHERE id = ?',
-        'superseded',
-        memory.id,
-        now,
-        superseded.id,
-      );
-      this.recordVersionTx(memory.id, 'create', actor, reason, null, memory);
-      if (memory.core)
-        this.recordVersionTx(
-          memory.id,
-          'select',
-          actor,
-          `${reason} (replacement for #${seq})`,
-          null,
+      if (old.status === 'active' && old.core) {
+        const projected = [
+          ...this.selectedTx().filter((row) => row.seq !== seq),
           memory,
-        );
+        ];
+        coreDropped = renderCore(
+          projected,
+          CORE_BUDGET,
+          this.activeTx().length,
+        ).overflow;
+        memory.core = !coreDropped;
+      }
+      this.insertMemoryTx(memory);
+      this.attachEvidenceTx(memory, options, actor, false);
       this.recordVersionTx(
-        superseded.id,
-        'supersede',
+        memory.id,
+        'create',
         actor,
         reason,
-        superseded,
-        revisedOld,
+        null,
+        this.bySeqTx(memory.seq)!,
       );
+      if (memory.core)
+        this.recordVersionTx(memory.id, 'select', actor, reason, null, memory);
+      // Promotion runs first: if its optimistic replacement check fails, the
+      // whole transaction rolls back before A is marked superseded.
+      if (old.status === 'candidate')
+        this.promote(memory.seq, actor, reason, options.confirmation);
+      const superseded = this.supersedeTx(old, memory, actor, reason);
       return {
         memory: this.withEvidence(this.bySeqTx(memory.seq)!),
-        superseded: revisedOld,
+        superseded,
         changed: true,
         evidenceAdded: false,
         coreDropped,
@@ -866,7 +891,7 @@ export class MemoryStore {
         if (memory.status === 'candidate')
           this.run(
             'INSERT OR REPLACE INTO memory_meta (key, value) VALUES (?, ?)',
-            `dismissed:${dedupeKey(memory.content).toLowerCase()}`,
+            memoryDismissalKey(this.scopeId, memory),
             JSON.stringify({ seq, reason }),
           );
         return { memory: updated, changed: true };
@@ -963,13 +988,10 @@ export class MemoryStore {
     actor: MemoryActor = 'user',
     reason = 'promoted from candidates',
     confirmation?: ConfirmationInput,
-    replacement?: { seq: number; content: string },
+    replacement?: MemoryReplacement,
   ): { memory: MemoryRow; superseded: MemoryRow | null } {
     const result = this.db.transaction(
-      (): {
-        memory: MemoryRow;
-        superseded: MemoryRow | null;
-      } => {
+      (): { memory: MemoryRow; superseded: MemoryRow | null } => {
         const memory = this.bySeqTx(seq);
         if (!memory)
           throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
@@ -979,57 +1001,32 @@ export class MemoryStore {
           throw new Error(
             `memory #${seq} is ${memory.status}; only candidates can be promoted`,
           );
-        const duplicate = this.activeByTextTx(dedupeKey(memory.content));
+        const duplicate = this.matchingTx(memory, ['active']);
         if (duplicate)
           throw new Error(
             `active memory #${duplicate.seq} already says that; dismiss this candidate instead`,
           );
+        const target = replacement
+          ? this.replacementTx(replacement)
+          : memory.supersedes === null
+            ? null
+            : this.bySeqTx(memory.supersedes);
+        if (!replacement && target && target.status !== 'active')
+          throw new Error(
+            `memory #${target.seq} is ${target.status} since this candidate was extracted; dismiss it and revise the current memory instead`,
+          );
         const now = new Date().toISOString();
-        let superseded: MemoryRow | null = null;
-        const targetSeq = replacement?.seq ?? memory.supersedes;
-        if (targetSeq !== null && targetSeq !== undefined) {
-          const target = this.bySeqTx(targetSeq);
-          if (replacement && target?.content !== replacement.content)
-            throw new Error('Replacement target changed; review it again');
-          if (!target || target.status !== 'active')
-            throw new Error(
-              `memory #${targetSeq} is ${target?.status ?? 'missing'} since this candidate was extracted; dismiss it and revise the current memory instead`,
-            );
-          superseded = {
-            ...target,
-            status: 'superseded',
-            core: false,
-            supersededBy: memory.id,
-            updatedAt: now,
-          };
-          this.run(
-            'UPDATE memories SET status = ?, core = 0, superseded_by = ?, updated_at = ? WHERE id = ?',
-            'superseded',
-            memory.id,
-            now,
-            target.id,
-          );
-          this.recordVersionTx(
-            target.id,
-            'supersede',
-            actor,
-            `${reason} (candidate #${seq})`,
-            target,
-            superseded,
-          );
-        }
-        const updated: MemoryRow = {
-          ...memory,
-          status: 'active',
-          core: false,
-          updatedAt: now,
-        };
         this.run(
-          'UPDATE memories SET status = ?, core = 0, updated_at = ? WHERE id = ?',
+          'UPDATE memories SET status = ?, updated_at = ? WHERE id = ?',
           'active',
           now,
           memory.id,
         );
+        const updated: MemoryRow = {
+          ...memory,
+          status: 'active',
+          updatedAt: now,
+        };
         if (confirmation) {
           confirmMemory(this.db, memory.id, memory.content, confirmation);
           this.run(
@@ -1047,6 +1044,14 @@ export class MemoryStore {
           memory,
           updated,
         );
+        const superseded = target
+          ? this.supersedeTx(
+              target,
+              updated,
+              actor,
+              `${reason} (candidate #${seq})`,
+            )
+          : null;
         return { memory: this.withEvidence(this.bySeqTx(seq)!), superseded };
       },
     );
@@ -1203,11 +1208,15 @@ export class MemoryStore {
                       similarity(memory.content, active.content) >= 0.3,
                   )
                   .slice(0, 5)
-                  .map(({ seq, content, sourceRef }) => ({
-                    seq,
-                    content,
-                    sourceRef,
-                  }))
+                  .map(
+                    ({ seq, content, sourceRef, conditions, validUntil }) => ({
+                      seq,
+                      content,
+                      sourceRef,
+                      conditions,
+                      validUntil,
+                    }),
+                  )
               : [],
         }));
       return {
@@ -1221,6 +1230,20 @@ export class MemoryStore {
   /** Monotonic change counter for a scope, for per-conversation Core snapshots. */
   version(): number {
     return this.versionCounter;
+  }
+
+  /**
+   * Earliest future expiry among selected memories, or null. The Core snapshot
+   * refreshes at that instant even without a write, so an expired fact cannot
+   * stay resident until the next unrelated change.
+   */
+  nextCoreExpiry(): string | null {
+    return (
+      (this.get<{ at: string | null }>(
+        "SELECT MIN(valid_until) AS at FROM memories WHERE scope_id = ? AND status = 'active' AND core = 1 AND valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+        this.scopeId,
+      )?.at as string | null) ?? null
+    );
   }
   private loadVersion(): number {
     const value = this.get<{ n: number }>(
@@ -1374,7 +1397,7 @@ export class MemoryStore {
     const lines = [
       `# Memory（${this.scopeId}）`,
       '',
-      '> 只读导出：由 Tian Agent 服务在每次写入后生成。数据库是唯一写入来源，请勿手改本文件。',
+      `> 只读快照：由 Tian Agent 服务在 ${new Date().toISOString()} 生成。数据库是唯一写入来源；有效期按生成时间判断，到期后需下一次写入刷新。请勿手改本文件。`,
       `> Core Memory：${core.selected} 条已选入，约 ${core.tokens}/${core.budget} tokens；其余有效记忆可检索。`,
       '',
       '## 有效记忆',

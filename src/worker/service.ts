@@ -1364,7 +1364,12 @@ export class Service {
   memoryPromote(
     scopeId: string,
     seq: number,
-    replacement?: { seq: number; content: string },
+    replacement?: {
+      seq: number;
+      content: string;
+      conditions?: string;
+      validUntil?: string | null;
+    },
   ): void {
     this.data.promote(
       scopeId,

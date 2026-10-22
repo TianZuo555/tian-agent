@@ -122,7 +122,12 @@ export class DataService {
       confirmation?: ConfirmationInput;
       conditions?: string;
       validUntil?: string | null;
-      replacement?: { seq: number; content: string };
+      replacement?: {
+        seq: number;
+        content: string;
+        conditions?: string;
+        validUntil?: string | null;
+      };
     },
   ): ReviseResult {
     const memory = this.scopes.memory(scopeId);
@@ -186,7 +191,12 @@ export class DataService {
       sourceRef: 'ui:memory-panel',
       method: 'review',
     },
-    replacement?: { seq: number; content: string },
+    replacement?: {
+      seq: number;
+      content: string;
+      conditions?: string;
+      validUntil?: string | null;
+    },
   ): {
     memory: MemoryRow;
     superseded: MemoryRow | null;

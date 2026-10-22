@@ -5,6 +5,7 @@ import type { MemoryKind } from './memory.js';
 import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
 import { MAX_MEMORY_CHARS } from './memory.js';
 import { codePointLength } from './search.js';
+import { memoryIdentityKey } from './memory-identity.js';
 
 /**
  * Memory Worker (PRD §4.4 F03): background candidate extraction inside the
@@ -700,45 +701,34 @@ export class MemoryWorker {
         // Re-check references and live state after extraction, inside the commit transaction.
         const source = sourcesByRef.get(item.sourceRef);
         if (!source) continue;
-        const dismissedBefore = this.deps.db.sqlite
-          .prepare('SELECT 1 FROM memory_meta WHERE key = ?')
-          .get(`dismissed:${text.toLowerCase()}`) as { 1: number } | undefined;
-        if (dismissedBefore) {
+        // Dismissal and dedupe use the complete fact identity (scope, wording,
+        // conditions, expiry); case is significant.
+        const identity = { content: text, conditions: '', validUntil: null };
+        if (memory.isDismissed(identity)) {
           duplicates++;
           continue;
         }
-        // An identical active fact is not a new candidate; if this exact
-        // statement was dismissed before, the dismissal already covers it.
         if (
           memory
             .dump()
             .items.some(
-              (row) => row.content === text && row.status === 'active',
+              (row) =>
+                row.status === 'active' &&
+                memoryIdentityKey(row) === memoryIdentityKey(identity),
             )
         ) {
           duplicates++;
           continue;
         }
-        const dismissed = memory
-          .dump()
-          .items.some(
-            (row) =>
-              (row.status === 'deleted' || row.status === 'superseded') &&
-              row.evidence?.some(
-                (evidence) =>
-                  evidence.sourceRef === item.sourceRef ||
-                  evidence.excerpt === text,
-              ),
-          );
-        if (dismissed) {
-          duplicates++;
-          continue;
-        }
+        // Evidence is the original source text, never the extractor's rewrite.
         const evidence = {
           sourceRef: item.sourceRef,
-          excerpt: text,
+          excerpt: source.text,
           actor: source.role ?? 'external',
-          relation: 'inference' as const,
+          relation:
+            normalize(source.text) === text
+              ? ('direct' as const)
+              : ('inference' as const),
           observedAt: source.at,
         };
         const stored = memory.candidate({
