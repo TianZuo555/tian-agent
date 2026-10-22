@@ -1,143 +1,145 @@
-# Tian Agent
+# Tian Agent — Ubiquitous Language & Core Concepts
 
-一个长期在线的个人 Agent：用户管理目标，Agent 管理任务；会话可以结束，记忆、目标和责任不会消失。
+**English** | [简体中文](docs/CONTEXT.md)
 
-## 参与者
+An always-on personal agent: users manage goals; agents manage tasks. Conversations may conclude, but memory, goals, and responsibilities endure.
 
-**Chief（总管）**:
-长期在线、与用户对话的主 Agent；负责 Global 记忆（关于 Tian 与跨项目的事实）、规划目标、派发工作和汇报，自己不改代码。项目记忆只按需只读查询，不写入。
+## Participants
+
+**Chief**:
+The always-on primary conversational agent that interacts with the user; responsible for Global memory (facts about Tian and facts shared across projects), goal planning, work delegation, and status reporting. Project memory is queried read-only when needed. The Chief does not edit code directly.
 _Avoid_: steward, assistant, orchestrator
 
-**Worker（工兵）**:
-在隔离 worktree 中无人值守执行一次 Run 的编码 Agent；只读共享记忆，不写记忆。
+**Worker**:
+A headless coding agent that executes a single Run inside an isolated Git worktree; reads shared memory but never writes memories.
 _Avoid_: sub-agent, executor
 
-**Manager（项目管理者）**:
-每个项目恰好一个、随项目创建的长期 Pi 会话，名字必填；Chief 把有边界的项目工作委派给它——每次委派是一条 assignee 为 Manager 的 Task，由它执行、收口并回报。Tian 也可以直接在 Manager 会话里派活——这类 Task 属于 Manager 自己，静默收口、不通知 Chief。Manager 是本项目记忆与 Notes 的唯一 Agent 写入者，管理本项目的 Task 与 Run，可再分发编码工作给 Worker；Global 记忆对它只读，Goal 仍归 Chief，自己不改代码。
+**Manager (Project Manager)**:
+Exactly one persistent Pi conversation per project, created when the project is registered, with a required name. The Chief delegates bounded project work to it as a discrete Task assigned to the Manager, which the Manager executes, concludes, and reports back on. Tian can also directly assign tasks inside the Manager conversation—such tasks belong directly to the Manager and conclude quietly without notifying the Chief. The Manager is the sole agent writer of its project's memories and Notes, manages project-scoped Tasks and Runs, and dispatches coding tasks to Workers. Global memory is read-only for the Manager; Goals remain owned by the Chief, and the Manager does not edit code directly.
 _Avoid_: sub-agent, coordinator
 
-## 范围
+## Scopes
 
 **Scope**:
-记忆、Notes、Inbox 与会话的归属边界，只有 Global 与 Project 两种。Global 的记忆与 Notes 归 Chief，Project 的归该项目 Manager。
+The boundary of ownership for memories, Notes, Inbox messages, and conversations. Only two scope types exist: Global and Project. Global memories and Notes belong to the Chief; Project memories and Notes belong to that project's Manager.
 _Avoid_: workspace, context
 
 **Project**:
-用户手动注册的一个本地目录，对应一个 Scope；注册时必须给它的 Manager 起名。
+A local directory explicitly registered by the user, mapped to a Project Scope. The user must name its Manager during registration.
 _Avoid_: repo, workspace
 
-## 目标与工作
+## Goals & Work
 
-**Goal（目标）**:
-用户希望长期达成或维持的结果，属于一个 Scope，持续数天到数年，带完成标准、约束和唤醒条件。
+**Goal**:
+A long-term outcome the user wishes to achieve or maintain within a Scope, lasting from days to years, carrying completion criteria, constraints, and wakeup rules.
 _Avoid_: objective, mission, project
 
-**Task（任务）**:
-为某个 Goal、或独立于 Goal 而要完成的一件具体工作，归属用户或 Agent 之一，有自己的状态与结果；可带 assignee，把执行指派给该项目 Manager。
+**Task**:
+A concrete unit of work to be completed in service of a Goal or independently. Owned by either the user or an agent, with its own state and outcome. May carry an `assignee` to delegate execution to that project's Manager.
 _Avoid_: todo, job, ticket
 
 **Run**:
-Worker 为一个代码类 Task 在隔离 worktree 中进行的一次执行，可包含多轮 Attempt。
-_Avoid_: job, dispatch（dispatch 是动作，不是对象）
+A single execution performed by a Worker for a coding task inside an isolated Git worktree; may contain multiple Attempts.
+_Avoid_: job, dispatch (dispatch is an action, not an object)
 
 **Attempt**:
-Run 内的一轮输入与结果；follow-up 产生新的 Attempt，复用同一 Worker 会话与 worktree。
+A single round of input and result within a Run; a follow-up generates a new Attempt, reusing the same Worker conversation and worktree.
 _Avoid_: retry, round
 
-**Review（验收）**:
-用户对 Run 结果做出的 Land、Ship 或 Discard 决定，与 Run 的执行状态分开记录。
+**Review**:
+The user's decision on a Run's outcome (Land, Ship, or Discard), tracked separately from the Run's execution state.
 _Avoid_: acceptance, approval
 
 **Land**:
-把 Run 的分支合入其保存的 base branch 的本地 checkout。
+Merges the Run's branch into the local checkout of its designated base branch.
 _Avoid_: merge
 
 **Ship**:
-推送 Run 的分支并创建或复用 PR。
+Pushes the Run's branch to the remote repository and creates or reuses a Pull Request.
 _Avoid_: push, deploy
 
 **Schedule**:
-按 cron 表达式唤醒某个 Goal 并生成 Task 的持久规则。
+A durable rule that wakes a Goal according to a cron expression and produces a Task.
 _Avoid_: timer, job, heartbeat
 
 **Trigger**:
-使 Task 产生的原因：Manual、Schedule 或外部 Event 之一。
+The originating cause of a Task: Manual, Schedule, or external Event.
 _Avoid_: hook, wakeup
 
-## 记忆
+## Memory
 
 **Memory**:
-一条跨会话保留、带来源与可信度的事实、偏好、决策或结论，单行且不超过 1000 个字符。
+A single fact, preference, decision, or conclusion preserved across conversations, carrying provenance and confidence; single-line and at most 1,000 Unicode characters.
 _Avoid_: note, fact, log line
 
 **Core Memory**:
-某 Scope 中由用户或该 Scope 的记忆所有者（Global 为 Chief，Project 为其 Manager）明确选入、在 Token 预算内渲染并注入的少量 Memory。Chief 会话只注入 Global Core；Manager 会话注入 Global 与本项目 Core。
-_Avoid_: wake, profile, system memory, 摘要树
+A small subset of memories within a Scope explicitly selected by the user or the Scope's memory owner (Chief for Global, Manager for its Project), rendered and injected within a token budget. Chief conversations receive only Global Core Memory; Manager conversations receive Global and their own Project's Core Memory.
+_Avoid_: wake, profile, system memory, summary tree
 
-**Select（选入）/ Deselect（移出）**:
-把一条有效 Memory 放进或移出 Core Memory。移出不等于遗忘：Memory 仍有效、仍可检索。
-_Avoid_: pin, unpin, promote（promote 专指候选转有效）
+**Select / Deselect**:
+Places an active Memory into or removes it from Core Memory. Deselection is not deletion: the memory remains active and searchable.
+_Avoid_: pin, unpin, promote (promote specifically refers to converting a candidate into an active memory)
 
-**Core Usage（Core 用量）**:
-当前选入条目按最终渲染文本（含序号、类型、可信度与用量页脚）估算的 Token 数与预算之比。
-_Avoid_: 截断, overflow log
+**Core Usage**:
+The ratio of estimated tokens for currently selected Core Memory entries (based on fully rendered text including sequence numbers, types, confidence levels, and usage footer) against the Scope's token budget.
+_Avoid_: truncation, overflow log
 
-**Supersede（取代）**:
-用修订后的 Memory 替换旧 Memory；旧 Memory 保留为历史，不再进入 Core Memory，也不会被自动重新选入。
+**Supersede**:
+Replaces an outdated Memory with a revised Memory; the previous Memory is retained as history, leaves Core Memory, and will not be re-selected automatically.
 _Avoid_: overwrite, edit, update
 
-**Provenance（来源）**:
-Memory 的来源对象与可信级别：用户确认、Agent 推断或第三方数据。操作者（谁执行写入）与来源（谁陈述事实）分开记录；只有当前请求确实由真实用户轮次发起时，才可标为用户确认。
+**Provenance**:
+The originating source and confidence tier of a Memory: user confirmed, agent inferred, or third-party data. The actor (who executed the write) and source (who stated the fact) are recorded separately; marked as user confirmed only if the current request originated from a genuine user turn.
 _Avoid_: origin, citation
 
 **History**:
-所有已发生的会话内容和事件的可检索记录；只有沉淀为 Memory 的内容才会自动进入其他会话。
+Searchable log of all past conversation transcripts and events; only items consolidated into Memory automatically enter other conversations.
 _Avoid_: episodic memory, transcript log
 
 **Note**:
-Scope 中 `notes/` 下的 Markdown 长文档，用于放不适合单行 Memory 的内容。
+A long-form Markdown document under a Scope's `notes/` directory for content unsuitable for a single-line Memory.
 _Avoid_: doc, memory
 
-## 改进
+## Improvements
 
-**Improvement Log（改进日志）**:
-按 Scope 归属、可 triage 的改进记录集合，包含产品问题、使用摩擦、想法与成功经验；可由 Tian、Chief 或系统写入。
-_Avoid_: bug tracker、feedback inbox、event log
+**Improvement Log**:
+A triage-ready collection of improvement records scoped to Global or a Project, containing product issues, user friction, ideas, and wins; writable by Tian, Chief, or automated system instrumentation.
+_Avoid_: bug tracker, feedback inbox, event log
 
-**Improvement Entry（改进条目）**:
-改进日志中的一条记录，带 kind（issue / friction / idea / win）、状态与可选的 Run、Conversation、Task 引用；可提升为 Task。
-_Avoid_: log line、event、memory
+**Improvement Entry**:
+A single record within the Improvement Log, carrying a kind (`issue`, `friction`, `idea`, or `win`), status, and optional references to Runs, Conversations, or Tasks; can be promoted to a Task.
+_Avoid_: log line, event, memory
 
-## 交互
+## Interactions
 
 **Conversation**:
-Chief、Manager 或 Worker 的一次持久 Pi 会话；PRD 中的 "Session" 指它。
+A single persistent Pi session for Chief, Manager, or Worker (referred to as "Session" in the PRD).
 _Avoid_: session, chat, thread
 
 **Channel Binding**:
-（渠道、外部会话 ID、Scope）到一个 Conversation 的稳定映射，例如 Desktop、Telegram、某个 Goal 或某项目的 Manager。
+A stable mapping from `(channel, externalId, scopeId)` to an internal Conversation, e.g. Desktop, Telegram, a specific Goal, or a Project Manager.
 _Avoid_: session, connection
 
 **Inbox**:
-Scope 中供外部参与者投递消息的文件邮箱。
+A file-drop mailbox under a Scope for external participants to deliver messages.
 _Avoid_: mailbox, task inbox
 
-**Archive（归档）**:
-把会话从侧栏收起并让出 Scope 级唤醒目标，不删除 transcript、不结束 Task；归档会话仍可被打开与检索。
+**Archive**:
+Collapses a conversation from the sidebar and yields its claim as a Scope-level wake target without deleting transcripts or terminating Tasks; archived conversations remain openable and searchable.
 _Avoid_: delete, close
 
-**Task Board（任务看板）**:
-集中展示待处理、运行中、待审批、失败与最近完成 Task 的界面。
+**Task Board**:
+A centralized interface displaying pending, running, awaiting approval, failed, and recently completed Tasks.
 _Avoid_: task inbox, schedule view, dashboard
 
 **Notification**:
-唤醒某条 Chief 或 Manager Conversation 的持久投递记录，按 ID 去重。
+A durable delivery record that wakes a Chief or Manager Conversation, deduplicated by delivery ID.
 _Avoid_: alert, event, push
 
-**Approval（审批）**:
-用户对某一次具体受控操作的持久化许可或拒绝；拒绝后同一操作不得执行。
+**Approval**:
+Persistent user consent or rejection for a specific controlled action; once rejected, the identical operation cannot proceed.
 _Avoid_: permission, consent, review
 
 **Event**:
-系统中已发生、需要审计或检索的业务事实，例如 Task 状态变化、审批决定或外部通知。
+An auditable business fact recorded in the system, such as a Task status transition, an approval decision, or an external notification.
 _Avoid_: log, notification
