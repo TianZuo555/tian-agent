@@ -407,7 +407,9 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
     'agent_inferred',
   );
 
-  // Recording the user's exact words is the confirmation path.
+  // Recording the user's exact words is the confirmation path. The pending
+  // correction becomes active; the original fact stays until an explicit
+  // replacement is confirmed.
   f.turn = { entryId: '21', kind: 'user', text: '其实我喝茶' };
   const verbatim = await call(f.tool('revise'), id, {
     seq: 1,
@@ -417,12 +419,14 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
   });
   assert.match(toolText(verbatim), /user-confirmed/);
   const row = f.db.sqlite
-    .prepare('SELECT source_ref, trust_level, core FROM memories WHERE seq = 2')
+    .prepare('SELECT source_ref, trust_level, core FROM memories WHERE seq = 1')
     .get() as { source_ref: string; trust_level: string; core: number };
   assert.equal(row.trust_level, 'user_confirmed');
   assert.equal(row.source_ref, `conv:${id}#21`);
-  assert.equal(row.core, 1);
-  // The original fact is history, not Core, and never comes back.
+  assert.equal(row.core, 0);
+  // The user's verified correction supersedes the original fact in the same
+  // transaction; the old fact leaves Core but remains as history.
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'superseded');
   assert.doesNotMatch(f.scopes.memory('global').wake(), /我喝咖啡/);
   assert.match(
     f.scopes.memory('global').recall('我喝咖啡', { includeHistory: true }),
@@ -511,14 +515,15 @@ test('same-text revision records confirmation, publishes version and export, and
 
   // Same content, but now confirmed from a later entry: trust, source, version,
   // export and the next-turn snapshot all move.
-  const same = memory.revise(0, '项目用 pnpm', 'Tian confirmed it', 'chief', {
+  const same = memory.revise(0, '项目用 pnpm', 'Tian confirmed it', 'user', {
     sourceRef: 'conv:1#9',
-    trustLevel: 'user_confirmed',
+    confirmation: { sourceRef: 'conv:1#9', method: 'review' },
   });
   assert.equal(same.changed, false);
   assert.equal(same.evidenceAdded, true);
   assert.equal(same.memory.trustLevel, 'user_confirmed');
   assert.equal(same.memory.sourceRef, 'conv:1#9');
+  assert.equal(same.memory.verifiedAt !== null, true);
   assert.equal(
     (
       db.sqlite.prepare('SELECT COUNT(*) AS n FROM memory_versions').get() as {
@@ -532,9 +537,9 @@ test('same-text revision records confirmation, publishes version and export, and
   assert.ok(memory.version() > 0);
 
   // Repeating adds nothing: no duplicate evidence rows.
-  const repeat = memory.revise(0, '项目用 pnpm', 'again', 'chief', {
+  const repeat = memory.revise(0, '项目用 pnpm', 'again', 'user', {
     sourceRef: 'conv:1#9',
-    trustLevel: 'user_confirmed',
+    confirmation: { sourceRef: 'conv:1#9', method: 'review' },
   });
   assert.equal(repeat.evidenceAdded, false);
   assert.equal(
@@ -634,7 +639,6 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
   const f = await harness(t);
   const conversation = await f.openConversation('p1');
   const id = String(conversation.id);
-  const remember = f.tool('remember');
   f.turn = null;
   const facts = [
     'Project uses SQLite for durable memory storage',
@@ -643,7 +647,10 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
     '部署使用 release 分支',
     'Unrelated deployment detail about caches',
   ];
-  for (const text of facts) await call(remember, id, { text });
+  // Seed active rows directly: tool writes without a verified user turn are
+  // candidates by design and are covered by the review tests.
+  for (const text of facts)
+    f.scopes.memory('global').remember({ text, actor: 'chief' });
 
   const recall = f.tool('recall');
   // Non-contiguous words both match (AND), unlike the old phrase query.
@@ -855,6 +862,8 @@ test('memory writes are idempotent under a replayed operation and duplicates add
   assert.match(toolText(again), /already says that/);
   assert.match(toolText(again), /evidence recorded/);
   assert.equal(f.scopes.memory('global').dump().items.length, 1);
+  // The duplicate is one review record with two citations, not a second fact
+  // or a second audit write.
   assert.equal(
     f.db.sqlite
       .prepare(
@@ -863,6 +872,7 @@ test('memory writes are idempotent under a replayed operation and duplicates add
       .get()?.n,
     1,
   );
+  assert.equal(f.scopes.memory('global').dump().items[0].evidence?.length, 2);
 });
 
 test('candidates never enter Core automatically, and a stale supersede target blocks promotion', async (t) => {
@@ -1101,11 +1111,13 @@ test('writes bind the exact current input even for agent-inferred facts', async 
     kind: 'system.notification',
     text: '[run finished] report ready',
   };
-  await call(f.tool('revise'), id, {
+  const revised = await call(f.tool('revise'), id, {
     seq: 0,
     text: 'The migration test is flaky on CI runners',
     reason: 'refine wording',
   });
+  // An unverified correction is a review candidate, not an automatic replace.
+  assert.match(toolText(revised), /candidate/);
   assert.equal(
     (
       f.db.sqlite
@@ -1114,6 +1126,9 @@ test('writes bind the exact current input even for agent-inferred facts', async 
     ).source_ref,
     `conv:${id}#11`,
   );
+  // An unverified agent write is a candidate, never silently active.
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'candidate');
+  assert.equal(f.scopes.memory('global').dump().items[1].supersedes, null);
 });
 
 test('the newest input wins even when it carries no text', async (t) => {

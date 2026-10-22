@@ -13,6 +13,7 @@ import type {
   ReviseResult,
 } from './memory.js';
 import type { Scopes } from './scopes.js';
+import type { EvidenceInput, ConfirmationInput } from './memory-evidence.js';
 import type { Emit } from '../shared/types.js';
 
 /** Application operations shared by IPC and the chief's tools. */
@@ -72,6 +73,12 @@ export class DataService {
       core?: boolean;
       actor?: MemoryActor;
       operationId?: string;
+      evidence?: EvidenceInput;
+      confirmation?: ConfirmationInput;
+      conditions?: string;
+      validUntil?: string | null;
+      status?: 'active' | 'candidate';
+      supersedes?: number | null;
     },
   ): RememberResult {
     // Resolve (and fully initialize) the store before the replayable write
@@ -88,6 +95,12 @@ export class DataService {
         goalId: options?.goalId ?? null,
         core: options?.core,
         actor: options?.actor,
+        evidence: options?.evidence,
+        confirmation: options?.confirmation,
+        conditions: options?.conditions,
+        validUntil: options?.validUntil,
+        status: options?.status,
+        supersedes: options?.supersedes ?? null,
       }),
     );
     this.emit('memory', scopeId);
@@ -105,6 +118,11 @@ export class DataService {
       trustLevel?: 'user_confirmed' | 'agent_inferred' | 'third_party';
       sourceType?: 'user' | 'agent' | 'tool' | 'external';
       operationId?: string;
+      evidence?: EvidenceInput;
+      confirmation?: ConfirmationInput;
+      conditions?: string;
+      validUntil?: string | null;
+      replacement?: { seq: number; content: string };
     },
   ): ReviseResult {
     const memory = this.scopes.memory(scopeId);
@@ -163,11 +181,26 @@ export class DataService {
   promote(
     scopeId: string,
     seq: number,
+    operationId?: string,
+    confirmation: ConfirmationInput = {
+      sourceRef: 'ui:memory-panel',
+      method: 'review',
+    },
+    replacement?: { seq: number; content: string },
   ): {
     memory: MemoryRow;
     superseded: MemoryRow | null;
   } {
-    const result = this.scopes.memory(scopeId).promote(seq, 'user');
+    const store = this.scopes.memory(scopeId);
+    const result = this.db.once(operationId, () =>
+      store.promote(
+        seq,
+        'user',
+        'user reviewed stored statement',
+        confirmation,
+        replacement,
+      ),
+    );
     this.emit('memory', scopeId);
     return result;
   }

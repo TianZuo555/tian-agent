@@ -120,7 +120,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.2 F01 — Core Memory　P0　【已有】
 
-现状：记忆按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）——总管会话只注入 Global 的 `wake()` 视图，项目管理者会话注入 Global 与本项目。Core 是由用户或该 scope 的所有者（Global 为 Chief，Project 为其 Manager）**明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 与 Manager 用 `remember` / `revise` / `forget` / `recall` / `select` / `deselect` 读写各自那份，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、选入/移出、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
+现状：记忆按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）——总管会话只注入 Global 的 `wake()` 视图，项目管理者会话注入 Global 与本项目。Core 是由用户或该 scope 的所有者（Global 为 Chief，Project 为其 Manager）**明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 与 Manager 用 `remember` / `revise` / `promote` / `forget` / `recall` / `select` / `deselect` 读写各自那份，取代与删除都保留版本；用户可在 Memory 面板确认候选、驳回、选入/移出、修订候选与有效记忆，并展开证据、确认记录与时间。Core 选择与晋升分开：晋升只使候选成为 active，不自动选入 Core。另有一条独立预算的任务相关上下文（见 F07）。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
 
 需求：
 
@@ -131,7 +131,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 设计要点（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)）：
 
-- 工具：`remember`（替代 `note`，避免与 Markdown Note 混淆）、`revise`（取代）、`forget`（标记删除）、`recall`（关键词 AND + 相关性排序）、`select` / `deselect`（显式 Core 管理）。旧的摘要树 `nap` / `zoom` 已删除。
+- 工具：`remember`（替代 `note`，避免与 Markdown Note 混淆）、`revise`（取代）、`promote`（审核确认候选）、`forget`（标记删除）、`recall`（关键词 AND + 相关性排序）、`select` / `deselect`（显式 Core 管理）。旧的摘要树 `nap` / `zoom` 已删除。
 - 快照：Core Memory 在 Conversation 内按"记忆版本号"缓存，只在新用户轮次且版本变化时刷新；会话中的新写入通过工具返回值告知模型。
 - 待验证：Pi 的 `section` 是否位于可缓存的前缀。当前 `state` section 含精确到分钟的 `now`，若位于前缀，每分钟都会使缓存失效；应把易变内容移到前缀之后或用户输入侧。
 
@@ -165,40 +165,52 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.4 F03 — 自动记忆提取　P1（M4）　【部分】
 
-现状：`worker/memory-worker.ts` 在常驻服务内运行后台提取（不占用 Chief 对话回合）。触发时机：Task 完成（`complete_task` / `doneTask`）、会话空闲（watch 到 busy→idle，另有 5 分钟兜底 sweep）、用户纠正（`revise` / `forget` 强制触发，30 秒最小间隔节流，服务关闭/维护时暂停）。流程：Collect（按 Scope 游标增量取 `history_entries`）→ Extract → Classify → Deduplicate（与 `memory_fts` 比对既有记忆）→ Resolve Conflicts（与 active 记忆同 kind 且措辞高度重叠时生成取代候选）→ Persist（单事务，提取器抛异常则回滚且游标不前进）。提取器为可注入接口 `MemoryExtractor`，默认实现是确定性启发式（离线可测）；接 Magpie 模型的位置已预留但未接（问题 6 未决）。
+现状：`worker/memory-worker.ts` 在常驻服务内运行后台提取（不占用 Chief 对话回合）。触发时机：Task 完成（`complete_task` / `doneTask`）、会话空闲（watch 到 busy→idle，另有 5 分钟兜底 sweep）、用户纠正（`revise` / `forget` 强制触发，30 秒最小间隔节流，服务关闭/维护时暂停）。流程：Collect（按 Scope 游标增量取 `history_entries`）→ Extract → Classify → Deduplicate（只做精确正文去重与已驳回正文抑制）→ Persist（单事务，提取器抛异常则回滚且游标不前进）。词面相似度只用于在审核界面列出相关事实，不自动判定重复或取代。提取器为可注入接口 `MemoryExtractor`，默认实现是确定性启发式，使用 `Intl.Segmenter` 支持中文与混合文本（离线可测）；接 Magpie 模型的位置已预留但未接（问题 6 未决）。
 
-优先：稳定偏好、项目决策、环境配置、问题与解法、有复用价值的经验。不记：闲聊、未证实推测、重复 Tool 输出、外部内容中的指令、临时状态（启发式模式表见 `memory-worker.ts`）。
+优先：稳定偏好、项目决策、环境配置、问题与解法、有复用价值的经验。不记：闲聊、未证实推测、重复 Tool 输出、外部内容中的指令、临时状态（启发式模式表见 `memory-worker.ts`）。中文短偏好（如“我喜欢用中文交流”“以后统一使用中文回复”）必须可提取。
 
-自动提取的 Memory 可信度为"Agent 推断"，进入 candidate 状态，不直接进入 Core Memory；用户在 Memory 面板 promote（转 active，trust 不变；若候选与 active 记忆矛盾则同事务取代旧记忆）或 dismiss（标记删除且不再重复提取）。
+自动提取的 Memory 进入 candidate 状态，不直接进入 Core Memory。用户可在 Memory 面板 promote（转 active；普通候选不自动取代任何事实，只有用户明确选择“确认此条取代 #seq”时同事务取代该事实）或 dismiss（标记删除且相同正文不再重复提取）。晋升与 Core 选择是两件事。
 
 ### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【部分】
 
-现状：Light 阶段（候选提取、冲突检测、来源引用）已由 Memory Worker 实现；Consolidate 与 Promote 仍以确定性去重、用户晋升和显式 Core 选择为主，没有后台 Dreaming，也不按频率自动提高权重。摘要树压缩已删除，不再作为 Consolidate 的雏形。
+现状：Light 阶段（候选提取、证据引用、相关事实提示）已由 Memory Worker 实现；Consolidate 与 Promote 仍以精确去重、用户审核和显式 Core 选择为主，没有后台 Dreaming，也不按频率自动提高权重。摘要树压缩已删除，不再作为 Consolidate 的雏形。
 
-要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。
+要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。重复事实只补充证据，不制造新事实，也不因出现次数升级可信度。
 
 ### 4.6 F05 — Provenance　P0　【已有】
 
-每条 Memory 字段（`memories` 表；来源、可信度、版本与取代关系均已实现）：
+证据、确认与相似度的边界见 [D19](decisions.md#d19--记忆证据确认与相似度证据表达依据确认表达审核相似度只提示相关)。
 
-| 字段                        | 说明                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `id`、`scope_id`、`seq`     | `seq` 为 Scope 内不可变序号                                                                    |
-| `goal_id`                   | 可选                                                                                           |
-| `kind`                      | preference / fact / decision / outcome / environment                                           |
-| `content`                   | ≤1000 Unicode 字符                                                                             |
-| `source_type`、`source_ref` | user / agent / tool / external / legacy；`source_ref` 精确到 `conv:<id>#<entry>` 或事件、UI 等 |
-| `trust_level`、`confidence` | 用户确认 / Agent 推断 / 第三方；`confidence` 仅由候选提取写入，暂不参与选择                    |
-| `core`                      | 是否显式选入 Core Memory                                                                       |
-| `status`、`superseded_by`   | candidate / active / superseded / deleted                                                      |
-| `created_at`、`updated_at`  |                                                                                                |
+每条 Memory 字段（`memories` 表；来源、证据、确认、版本与取代关系均已实现）：
 
-- `memory_versions` 追加记录每次写入、取代、删除（操作者、原因、前后内容），支持恢复。
-- 操作者（谁执行写入）与来源（谁陈述事实）分开；`source: "user"` 需要当前请求确实由真实用户轮次发起的 Runtime 证据，系统唤醒/通知不算，否则降为 `agent_inferred`。
+| 字段                                        | 说明                                                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `id`、`scope_id`、`seq`                     | `seq` 为 Scope 内不可变序号                                                                    |
+| `goal_id`                                   | 可选                                                                                           |
+| `kind`                                      | preference / fact / decision / outcome / environment                                           |
+| `content`                                   | ≤1000 Unicode 字符                                                                             |
+| `source_type`、`source_ref`                 | user / agent / tool / external / legacy；`source_ref` 精确到 `conv:<id>#<entry>` 或事件、UI 等 |
+| `trust_level`                               | 用户确认 / Agent 推断 / 第三方；由独立确认记录推导，不由模型参数自称                           |
+| `conditions`                                | 适用环境、对象或版本；`prod PostgreSQL` 与 `test SQLite` 可共存                                |
+| `observed_at`、`verified_at`、`valid_until` | 来源发生时间、用户审核时间、可选明确有效期；Core 选择不改变事实时间                            |
+| `core`                                      | 是否显式选入 Core Memory                                                                       |
+| `status`、`superseded_by`                   | candidate / active / superseded / deleted                                                      |
+| `created_at`、`updated_at`                  | 记录创建与最后状态变化                                                                         |
+
+- `memory_evidence` 保存多条证据：实际 `source_ref`、原文片段、来源 actor、`direct`/`paraphrase`/`inference` 关系与观察时间。`memory_confirmations` 保存独立确认记录（`explicit-save` / `review` / `legacy`）。
+- `memory_versions` 追加记录每次写入、取代、删除（操作者、原因、前后内容），支持审计。Evidence 表达事实依据；版本记录表达操作审计。
+- 操作者（谁执行写入）、来源（谁陈述事实）与确认（谁审核存储正文）分开；`source: "user"` 需要当前请求确实由真实用户轮次发起的 Runtime 证据，系统唤醒/通知不算，否则降为 `agent_inferred`。确认必须是真实用户操作或经服务校验的明确保存请求；历史引用只提供证据，不能授权确认。
+- 证据引用由服务校验存在、属于写入 scope 且片段确在原文中；模型不能伪造引用。
 - 外部工具结果和第三方内容不得以高优先级指令的形式进入 Prompt。
-- 现有 `LOG.txt` 一次性导入；旧 `TREE/` 只移入 legacy、不再读取；之后单向导出供 Worker 与人阅读。
+- 现有 `LOG.txt` 一次性导入；旧 `TREE/` 只移入 legacy、不再读取；之后单向导出供 Worker 与人阅读。升级时旧记录获得 `legacy` 证据（原 `user_confirmed` 另有 `legacy` 确认记录），原有正文、状态、版本与候选全部保留。
 
 ---
+
+### 4.7 F07 — 任务相关上下文　P1　【已有】
+
+现状：Core 仍是按轮次稳定的显式快照；另有独立 token 预算（默认 1200）的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索本 Scope 的 Memory、Notes 与 History。它使用共享 `planSearch` 与少量显式同义词（中文/Chinese、postgres/PostgreSQL、production/prod 等），不引入向量库、知识图谱或强制模型调用。Worker 获得本项目任务相关上下文，并可只读 `recall` 继续查询、`read_history` 展开原始证据；不加载全量记忆，不跨项目。
+
+验收：预算覆盖完整输出；被取代事实的旧 transcript 证据不回到默认上下文；Worker 无写工具且只能读本项目；项目隔离测试通过。
 
 ## 5. 目标与任务（Goal Engine）
 

@@ -12,7 +12,7 @@ import { codePointLength } from './search.js';
  *
  *   Collect   → new history rows per scope, from the worker's own cursor
  *   Extract   → injectable `MemoryExtractor` (deterministic heuristics default)
- *   Classify  → kind + confidence on every line
+ *   Classify  → kind on every line
  *   Deduplicate → skip lines memory_fts already knows
  *   Resolve   → a candidate contradicting an active memory records `supersedes`
  *   Persist   → status `candidate`; wake() only renders active memory, so
@@ -55,7 +55,7 @@ export interface ExtractInput {
 export interface ExtractedMemory {
   text: string;
   kind: MemoryKind;
-  confidence: number;
+  confidence?: number;
   /** History ref the line came from (F05 provenance). */
   sourceRef: string;
 }
@@ -99,10 +99,6 @@ export interface RunResult {
 const DEFAULT_MIN_INTERVAL_MS = 30_000;
 const MAX_SOURCES = 200;
 const CURSOR_PREFIX = 'memory-worker:';
-/** Similarity at or above this means "same memory", not a new one. */
-const DUPLICATE_SIMILARITY = 0.8;
-/** Similarity at or above this (but below duplicate) reads as a contradiction. */
-const CONFLICT_SIMILARITY = 0.45;
 
 const emptyResult = (scopeId: string): RunResult => ({
   scopeId,
@@ -312,7 +308,7 @@ const PREFERENCE_PATTERNS = [
   /\bI don't (?:like|want|use)\b/i,
   /\bplease (?:always|never)\b/i,
   /我(?:更|比较)?(?:喜欢|偏好|习惯|不喜欢|讨厌)/,
-  /以后(?:都|请|一律)/,
+  /以后(?:都|请|一律|统一)/,
   /请(?:始终|一律|不要)/,
   /默认(?:用|使用|走)/,
 ];
@@ -391,14 +387,15 @@ const INSTRUCTION_PATTERNS = [
 const matches = (patterns: RegExp[], text: string) =>
   patterns.some((pattern) => pattern.test(text));
 
-/** Content words of a line; CJK runs split into characters. */
+/** Unicode word segmentation supports CJK and mixed identifiers without dropping single words. */
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
 export function tokens(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replaceAll(/[^\p{L}\p{N}\s]/gu, ' ')
-    .split(/\s+/)
-    .flatMap((word) => (/[\u4e00-\u9fff]/.test(word) ? [...word] : [word]))
-    .filter((word) => word.length > 1 && !STOPWORDS.has(word));
+  return [...segmenter.segment(text.toLowerCase())]
+    .filter((part) => part.isWordLike)
+    .map((part) => part.segment)
+    .filter(
+      (word) => !STOPWORDS.has(word) || /^(?:not|no|with|without)$/u.test(word),
+    );
 }
 
 /** Jaccard similarity over content tokens; 1 means identical wording. */
@@ -414,26 +411,17 @@ export function similarity(a: string, b: string): number {
 /** Classify a line by the strongest signal; `fact` is the fallback. */
 export function classify(text: string): {
   kind: MemoryKind;
-  confidence: number;
   patterns: RegExp[];
 } {
   if (matches(PREFERENCE_PATTERNS, text))
-    return {
-      kind: 'preference',
-      confidence: 0.7,
-      patterns: PREFERENCE_PATTERNS,
-    };
+    return { kind: 'preference', patterns: PREFERENCE_PATTERNS };
   if (matches(DECISION_PATTERNS, text))
-    return { kind: 'decision', confidence: 0.7, patterns: DECISION_PATTERNS };
+    return { kind: 'decision', patterns: DECISION_PATTERNS };
   if (matches(ENVIRONMENT_PATTERNS, text))
-    return {
-      kind: 'environment',
-      confidence: 0.6,
-      patterns: ENVIRONMENT_PATTERNS,
-    };
+    return { kind: 'environment', patterns: ENVIRONMENT_PATTERNS };
   if (matches(SOLUTION_PATTERNS, text))
-    return { kind: 'outcome', confidence: 0.6, patterns: SOLUTION_PATTERNS };
-  return { kind: 'fact', confidence: 0.5, patterns: [] };
+    return { kind: 'outcome', patterns: SOLUTION_PATTERNS };
+  return { kind: 'fact', patterns: [] };
 }
 
 /** True for lines that must never become memory. */
@@ -452,7 +440,7 @@ export function isNoise(source: MemorySource): boolean {
   if (matches(TRANSIENT_PATTERNS, text)) return true;
   if (matches(SPECULATION_PATTERNS, text)) return true;
   // A line needs a few content words to say anything durable.
-  return tokens(text).length < 3;
+  return tokens(text).length < (classify(text).kind === 'fact' ? 3 : 1);
 }
 
 /** Keep the clause that carries the signal so a candidate stays one line. */
@@ -476,13 +464,13 @@ export class HeuristicExtractor implements MemoryExtractor {
     const results: ExtractedMemory[] = [];
     for (const source of input.sources) {
       if (isNoise(source)) continue;
-      const { kind, confidence, patterns } = classify(source.text);
+      const { kind, patterns } = classify(source.text);
       if (kind === 'fact' && tokens(source.text).length < 6) continue;
       const text = focusSentence(source.text, patterns)
         .replace(/^[-*•]\s*/, '')
         .trim();
       if (!text || tooLong(text)) continue;
-      results.push({ text, kind, confidence, sourceRef: source.ref });
+      results.push({ text, kind, sourceRef: source.ref });
     }
     return results;
   }
@@ -495,22 +483,12 @@ export class HeuristicExtractor implements MemoryExtractor {
  * promotes it (MemoryStore.promote applies `supersedes`).
  */
 export function resolveConflict(
-  text: string,
-  kind: MemoryKind,
-  active: { seq: number; content: string; kind: MemoryKind }[],
+  _text: string,
+  _kind: MemoryKind,
+  _active: { seq: number; content: string; kind: MemoryKind }[],
 ): number | null {
-  let best: { seq: number; score: number } | null = null;
-  for (const memory of active) {
-    if (memory.kind !== kind) continue;
-    const score = similarity(text, memory.content);
-    if (
-      score >= CONFLICT_SIMILARITY &&
-      score < DUPLICATE_SIMILARITY &&
-      (!best || score > best.score)
-    )
-      best = { seq: memory.seq, score };
-  }
-  return best?.seq ?? null;
+  // Lexical overlap is only a review hint. Replacement requires an explicit correction.
+  return null;
 }
 
 /**
@@ -713,22 +691,63 @@ export class MemoryWorker {
 
     const result = this.deps.db.transaction(() => {
       const memory = this.deps.scopes.memory(scopeId);
-      const known = this.knownTexts(scopeId);
       let candidates = 0;
       let duplicates = 0;
+      const sourcesByRef = new Map(sources.map((row) => [row.ref, row]));
       for (const item of extracted) {
         const text = normalize(item.text);
         if (!text || tooLong(text)) continue;
-        if (this.isDuplicate(scopeId, text, known)) {
+        // Re-check references and live state after extraction, inside the commit transaction.
+        const source = sourcesByRef.get(item.sourceRef);
+        if (!source) continue;
+        const dismissedBefore = this.deps.db.sqlite
+          .prepare('SELECT 1 FROM memory_meta WHERE key = ?')
+          .get(`dismissed:${text.toLowerCase()}`) as { 1: number } | undefined;
+        if (dismissedBefore) {
           duplicates++;
           continue;
         }
+        // An identical active fact is not a new candidate; if this exact
+        // statement was dismissed before, the dismissal already covers it.
+        if (
+          memory
+            .dump()
+            .items.some(
+              (row) => row.content === text && row.status === 'active',
+            )
+        ) {
+          duplicates++;
+          continue;
+        }
+        const dismissed = memory
+          .dump()
+          .items.some(
+            (row) =>
+              (row.status === 'deleted' || row.status === 'superseded') &&
+              row.evidence?.some(
+                (evidence) =>
+                  evidence.sourceRef === item.sourceRef ||
+                  evidence.excerpt === text,
+              ),
+          );
+        if (dismissed) {
+          duplicates++;
+          continue;
+        }
+        const evidence = {
+          sourceRef: item.sourceRef,
+          excerpt: text,
+          actor: source.role ?? 'external',
+          relation: 'inference' as const,
+          observedAt: source.at,
+        };
         const stored = memory.candidate({
           text,
           kind: item.kind,
-          confidence: item.confidence,
+          confidence: null,
           sourceRef: item.sourceRef,
-          supersedes: resolveConflict(text, item.kind, active),
+          evidence,
+          supersedes: null,
           reason: `memory worker: ${trigger}`,
         });
         if (!stored) {
@@ -736,7 +755,6 @@ export class MemoryWorker {
           duplicates++;
           continue;
         }
-        known.push(text);
         candidates++;
       }
       this.setCursor(scopeId, cursor);
@@ -755,63 +773,6 @@ export class MemoryWorker {
     });
     if (result.candidates > 0) this.deps.emitMemory?.(scopeId);
     return result;
-  }
-
-  /**
-   * Existing memory text for dedupe: every row the scope has ever stored.
-   * A line the user dismissed or a memory they revised must not come back
-   * as a new candidate just because its wording changed slightly.
-   */
-  private knownTexts(scopeId: string): string[] {
-    return (
-      this.deps.db.sqlite
-        .prepare('SELECT content FROM memories WHERE scope_id = ?')
-        .all(scopeId) as { content: string }[]
-    ).map((row) => row.content);
-  }
-
-  /**
-   * Deduplicate: exact text first, then a memory_fts (trigram) lookup of the
-   * longest term to find near-identical rows, then a token similarity scan
-   * for CJK-only lines the trigram index cannot serve.
-   */
-  private isDuplicate(scopeId: string, text: string, known: string[]): boolean {
-    const normalized = normalize(text);
-    if (known.some((existing) => normalize(existing) === normalized))
-      return true;
-    const terms = [...new Set(tokens(normalized))]
-      .filter((term) => [...term].length >= 3)
-      .sort((a, b) => [...b].length - [...a].length)
-      .slice(0, 3);
-    if (terms.length > 0) {
-      const match = terms
-        .map((term) => `"${term.replaceAll('"', '""')}"`)
-        .join(' OR ');
-      const ids = this.deps.db.sqlite
-        .prepare('SELECT mem_id FROM memory_fts WHERE memory_fts MATCH ?')
-        .all(match) as unknown as { mem_id: string }[];
-      if (ids.length > 0) {
-        const placeholders = ids.map(() => '?').join(',');
-        const near = this.deps.db.sqlite
-          .prepare(
-            `SELECT content FROM memories
-            WHERE scope_id = ? AND id IN (${placeholders})`,
-          )
-          .all(scopeId, ...ids.map((row) => row.mem_id)) as {
-          content: string;
-        }[];
-        if (
-          near.some(
-            (row) =>
-              similarity(row.content, normalized) >= DUPLICATE_SIMILARITY,
-          )
-        )
-          return true;
-      }
-    }
-    return known.some(
-      (existing) => similarity(existing, normalized) >= DUPLICATE_SIMILARITY,
-    );
   }
 
   private recordRun(

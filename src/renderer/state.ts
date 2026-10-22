@@ -471,8 +471,15 @@ export function createAppStore(api: TianApi) {
     },
     memoryForget: (seq: number, reason: string) =>
       safe(() => api.memoryForget(state.activeScopeId, seq, reason)),
-    memoryPromote: (seq: number) =>
-      safe(() => api.memoryPromote(state.activeScopeId, seq)),
+    memoryPromote: (
+      seq: number,
+      replacement?: { seq: number; content: string },
+    ) =>
+      safe(() =>
+        replacement
+          ? api.memoryPromote(state.activeScopeId, seq, replacement)
+          : api.memoryPromote(state.activeScopeId, seq),
+      ),
     memoryDismiss: (seq: number) =>
       safe(() => api.memoryDismiss(state.activeScopeId, seq)),
     memorySelect: (seq: number) =>

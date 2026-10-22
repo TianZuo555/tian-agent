@@ -22,6 +22,8 @@ export interface InputEvidence {
 export interface EvidenceVerdict {
   confirmed: boolean;
   reason: string;
+  /** Explicit intent permits activation; source authorship alone does not. */
+  saveRequested?: boolean;
 }
 
 /** Whitespace-only normalization; case and punctuation are preserved. */
@@ -49,9 +51,26 @@ export function verifyUserEvidence(
       confirmed: false,
       reason: 'the current user input is empty, so it is agent_inferred',
     };
+  // Only a complete, anchored save command may shed its command prefix.
+  // Do not search substrings: negated requests and quoted claims stay unconfirmed.
+  const command =
+    /^(?:记住[：:]\s*|请记住[：:]?\s*|remember[：:]\s*|please remember[：:]?\s*)(.+)$/i.exec(
+      normalizedTurn,
+    );
+  if (
+    command &&
+    normalize(command[1]) === normalizedClaim &&
+    !/[“”"「」『』]/u.test(command[1])
+  )
+    return {
+      confirmed: true,
+      saveRequested: true,
+      reason: 'verified explicit save request for this exact statement',
+    };
   if (normalizedClaim === normalizedTurn)
     return {
       confirmed: true,
+      saveRequested: false,
       reason: 'Tian stated exactly this in the current user turn',
     };
   return {

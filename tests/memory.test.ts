@@ -309,6 +309,7 @@ test('exact duplicates reuse the row and append evidence without reviving histor
   assert.equal(confirmed.memory.trustLevel, 'user_confirmed');
   assert.equal(confirmed.memory.sourceType, 'user');
   assert.equal(confirmed.memory.sourceRef, 'conv:1#12');
+  assert.equal(confirmed.memory.evidence?.at(-1)?.sourceRef, 'conv:1#12');
   assert.deepEqual(
     versions(f.db, first.memory.id).map((row) => [row.action, row.actor]),
     [
@@ -317,6 +318,27 @@ test('exact duplicates reuse the row and append evidence without reviving histor
     ],
   );
   assert.match(versions(f.db, first.memory.id)[1].reason!, /conv:1#12/);
+  const repeatedAgain = memory.remember({
+    text: 'Project uses pnpm',
+    sourceType: 'user',
+    trustLevel: 'user_confirmed',
+    sourceRef: 'conv:1#12',
+    actor: 'chief',
+  });
+  assert.equal(repeatedAgain.evidenceAdded, false);
+  assert.equal(versions(f.db, first.memory.id).length, 2);
+  // A later duplicate from a new source is evidence; the first source stays
+  // stable and no second audit row appears for the same review.
+  const third = memory.remember({
+    text: 'Project uses pnpm',
+    sourceRef: 'conv:1#13',
+    actor: 'chief',
+  });
+  assert.equal(third.evidenceAdded, true);
+  // The most recent confirmed source identifies the row; every citation stays
+  // in evidence.
+  assert.equal(third.memory.sourceRef, 'conv:1#12');
+  assert.equal(third.memory.evidence?.length, 3);
 
   // Same content after a supersede is a new fact, not a resurrection.
   memory.revise(0, 'Project uses pnpm workspaces', 'refined', 'chief');
@@ -759,7 +781,10 @@ test('a v4 database migrates without losing memory, versions, provenance, or can
       ],
     );
     assert.equal(d.items[3].supersedes, 2);
-    assert.equal(d.items[3].confidence, 0.7);
+    // Uncalibrated confidence is removed; evidence and review carry provenance.
+    assert.equal(d.items[3].confidence, null);
+    assert.equal(d.items[0].confirmations?.[0].method, 'legacy');
+    assert.equal(d.items[3].evidence?.[0].sourceRef, 'conv:1#7');
     // Version history survived the upgrade.
     assert.equal(
       db.sqlite

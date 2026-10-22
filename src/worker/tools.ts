@@ -4,6 +4,7 @@ import {
   section,
 } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
+import { relevantMemorySection } from './relevant-context.js';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
 import type {
   AgentMessageRow,
@@ -857,7 +858,12 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
 
   return defineExtension({
     name: 'chief',
-    sections: [preamble, memorySection, stateSection],
+    sections: [
+      preamble,
+      memorySection,
+      stateSection,
+      relevantMemorySection(deps, false),
+    ],
     tools: [
       ...memoryTools(deps, {
         actor: 'chief',

@@ -4,6 +4,7 @@ import {
   section,
 } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
+import { relevantMemorySection } from './relevant-context.js';
 import { GLOBAL_SCOPE } from './scopes.js';
 import type { AgentMessageRow, RunRow, TaskRow } from './db.js';
 import type { GoalStore } from './goals.js';
@@ -792,6 +793,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     sections: [
       preamble,
       coreMemorySection(deps, { withProject: true }),
+      relevantMemorySection(deps, true),
       stateSection,
     ],
     tools: [

@@ -107,7 +107,14 @@ export interface Commands {
     MemoryRevisionResult
   >;
   memoryForget: Command<[scopeId: string, seq: number, reason: string], void>;
-  memoryPromote: Command<[scopeId: string, seq: number], void>;
+  memoryPromote: Command<
+    [
+      scopeId: string,
+      seq: number,
+      replacement?: { seq: number; content: string },
+    ],
+    void
+  >;
   memoryDismiss: Command<[scopeId: string, seq: number], void>;
   memorySelect: Command<[scopeId: string, seq: number], void>;
   memoryDeselect: Command<[scopeId: string, seq: number], void>;
@@ -280,7 +287,16 @@ export const commandArgs = {
     Type.Integer({ minimum: 0 }),
     Type.String({ minLength: 1, maxLength: 2_000 }),
   ]),
-  memoryPromote: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
+  memoryPromote: Type.Tuple([
+    id,
+    Type.Integer({ minimum: 0 }),
+    Type.Optional(
+      Type.Object({
+        seq: Type.Integer({ minimum: 0 }),
+        content: Type.String(),
+      }),
+    ),
+  ]),
   memoryDismiss: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   memorySelect: Type.Tuple([id, Type.Integer({ minimum: 0 })]),
   memoryDeselect: Type.Tuple([id, Type.Integer({ minimum: 0 })]),

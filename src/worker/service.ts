@@ -221,6 +221,7 @@ export class Service {
       }),
       workerExtension({
         db: this.db,
+        scopes: this.scopes,
         wake: async (notification) => {
           this.db.queueNotification(notification);
           await this.deliverNotifications();
@@ -1338,6 +1339,14 @@ export class Service {
     // A user editing in the Memory panel is the source of the correction.
     const result = this.data.revise(scopeId, seq, text, reason, 'user', {
       sourceRef: 'ui:memory-panel',
+      confirmation: { sourceRef: 'ui:memory-panel', method: 'review' },
+      evidence: {
+        sourceRef: 'ui:memory-panel',
+        excerpt: text,
+        actor: 'user',
+        relation: 'direct',
+        observedAt: new Date().toISOString(),
+      },
       trustLevel: 'user_confirmed',
       sourceType: 'user',
     });
@@ -1352,8 +1361,18 @@ export class Service {
   memoryForget(scopeId: string, seq: number, reason: string): void {
     this.data.forget(scopeId, seq, reason, 'user');
   }
-  memoryPromote(scopeId: string, seq: number): void {
-    this.data.promote(scopeId, seq);
+  memoryPromote(
+    scopeId: string,
+    seq: number,
+    replacement?: { seq: number; content: string },
+  ): void {
+    this.data.promote(
+      scopeId,
+      seq,
+      undefined,
+      { sourceRef: 'ui:memory-panel', method: 'review' },
+      replacement,
+    );
   }
   memoryDismiss(scopeId: string, seq: number): void {
     this.data.dismiss(scopeId, seq);

@@ -5,6 +5,15 @@ import type { Db } from './db.js';
 import { atomicWrite } from './files.js';
 import { escapeLike, planSearch, tokenCost } from './search.js';
 import type { MemoryDump, MemoryItem } from '../shared/types.js';
+import {
+  addMemoryEvidence,
+  confirmMemory,
+  memoryEvidence,
+  memoryConfirmations,
+  type EvidenceInput,
+  type ConfirmationInput,
+} from './memory-evidence.js';
+import { similarity } from './memory-worker.js';
 
 /**
  * SQLite-backed memory with provenance, versions, and an explicitly selected
@@ -71,6 +80,12 @@ export interface MemoryRow {
   sourceRef: string | null;
   trustLevel: MemoryTrustLevel;
   confidence: number | null;
+  conditions?: string;
+  observedAt?: string | null;
+  verifiedAt?: string | null;
+  validUntil?: string | null;
+  evidence?: import('../shared/types.js').MemoryEvidence[];
+  confirmations?: import('../shared/types.js').MemoryConfirmation[];
   status: MemoryStatus;
   /** Explicitly selected into the Core Memory view. */
   core: boolean;
@@ -100,6 +115,12 @@ export interface RememberInput {
   core?: boolean;
   actor?: MemoryActor;
   reason?: string | null;
+  evidence?: EvidenceInput;
+  confirmation?: ConfirmationInput;
+  conditions?: string;
+  validUntil?: string | null;
+  status?: 'active' | 'candidate';
+  supersedes?: number | null;
 }
 
 export interface RememberResult {
@@ -135,9 +156,9 @@ const NO_MATCHES = '(no matches)';
 const recallLine = (memory: MemoryRow): string =>
   `#${memory.seq} [${memory.kind}] ${memory.trustLevel}${
     memory.core ? ' core' : ''
-  } ${memory.updatedAt.slice(0, 10)}${
+  } ${(memory.observedAt ?? memory.createdAt).slice(0, 10)}${
     memory.sourceRef ? ` ${memory.sourceRef}` : ''
-  } — ${memory.content}${memory.status === 'active' ? '' : ` (${memory.status})`}`;
+  } — ${memory.content}${memory.conditions ? ` [conditions: ${memory.conditions}]` : ''}${memory.validUntil ? ` [valid until: ${memory.validUntil}]` : ''}${memory.status === 'active' ? '' : ` (${memory.status})`}`;
 
 const newId = () => `mem-${randomUUID()}`;
 
@@ -151,7 +172,11 @@ const toMemory = (value: Record<string, unknown>): MemoryRow => ({
   sourceType: value.source_type as MemorySourceType,
   sourceRef: (value.source_ref as string | null) ?? null,
   trustLevel: value.trust_level as MemoryTrustLevel,
-  confidence: (value.confidence as number | null) ?? null,
+  confidence: null,
+  conditions: (value.conditions as string) ?? '',
+  observedAt: (value.observed_at as string | null) ?? null,
+  verifiedAt: (value.verified_at as string | null) ?? null,
+  validUntil: (value.valid_until as string | null) ?? null,
   status: value.status as MemoryStatus,
   core: Number(value.core ?? 0) === 1,
   supersededBy: (value.superseded_by as string | null) ?? null,
@@ -187,7 +212,7 @@ const dedupeKey = (text: string) => text.replace(/\s+/g, ' ').trim();
  * is part of the measured budget.
  */
 const renderLine = (memory: MemoryRow): string =>
-  `#${memory.seq} [${memory.kind}] ${memory.trustLevel} ${memory.updatedAt.slice(0, 10)}${memory.sourceRef ? ` ${memory.sourceRef}` : ''} — ${memory.content}`;
+  `#${memory.seq} [${memory.kind}] ${memory.trustLevel} ${(memory.observedAt ?? memory.createdAt).slice(0, 10)}${memory.sourceRef ? ` ${memory.sourceRef}` : ''} — ${memory.content}${memory.conditions ? ` [conditions: ${memory.conditions}]` : ''}${memory.validUntil ? ` [valid until: ${memory.validUntil}]` : ''}`;
 
 interface CoreRender {
   /** Exactly what wake() emits. */
@@ -289,13 +314,13 @@ export class MemoryStore {
   }
   private activeTx(): MemoryRow[] {
     return this.all(
-      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' ORDER BY seq",
+      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ORDER BY seq",
       this.scopeId,
     ).map(toMemory);
   }
   private selectedTx(): MemoryRow[] {
     return this.all(
-      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' AND core = 1 ORDER BY seq",
+      "SELECT * FROM memories WHERE scope_id = ? AND status = 'active' AND core = 1 AND (valid_until IS NULL OR valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) ORDER BY seq",
       this.scopeId,
     ).map(toMemory);
   }
@@ -338,6 +363,14 @@ export class MemoryStore {
       memory.updatedAt,
     );
     this.run(
+      'UPDATE memories SET conditions = ?, observed_at = ?, verified_at = ?, valid_until = ? WHERE id = ?',
+      memory.conditions ?? '',
+      memory.observedAt ?? null,
+      memory.verifiedAt ?? null,
+      memory.validUntil ?? null,
+      memory.id,
+    );
+    this.run(
       'INSERT INTO memory_fts (content, mem_id) VALUES (?, ?)',
       memory.content,
       memory.id,
@@ -363,10 +396,10 @@ export class MemoryStore {
     );
   }
   private setCoreTx(seq: number, core: boolean): void {
+    // Core selection is a view preference, not a fact update: updated_at stays.
     this.run(
-      'UPDATE memories SET core = ?, updated_at = ? WHERE scope_id = ? AND seq = ?',
+      'UPDATE memories SET core = ? WHERE scope_id = ? AND seq = ?',
       core ? 1 : 0,
-      new Date().toISOString(),
       this.scopeId,
       seq,
     );
@@ -416,197 +449,196 @@ export class MemoryStore {
    */
   remember(input: RememberInput): RememberResult {
     const content = normalizeLine(input.text, 'memory');
-    const key = dedupeKey(content);
+    const conditions = input.conditions?.trim() ?? '';
+    if (conditions.length > 300)
+      throw new Error('Conditions must be at most 300 characters');
+    if (input.validUntil && !Number.isFinite(Date.parse(input.validUntil)))
+      throw new Error('validUntil must be an ISO date');
     const actor = input.actor ?? 'chief';
-    const sourceType = input.sourceType ?? 'agent';
-    const trustLevel = input.trustLevel ?? 'agent_inferred';
     const result = this.db.transaction((): RememberResult => {
-      const active = this.activeByTextTx(key);
-      const candidate = active ? undefined : this.candidateByTextTx(key);
-      const existing = active ?? candidate;
-      if (existing) {
-        // A candidate is never promoted implicitly by a repeat: only the user
-        // approval path moves it to active. New evidence is still recorded.
-        const pending = existing.status === 'candidate';
-        const upgraded =
-          !pending &&
-          trustLevel === 'user_confirmed' &&
-          existing.trustLevel !== 'user_confirmed';
-        // An unconfirmed write never overwrites the evidence of an already
-        // confirmed row: a passing mention is not a new confirmation.
-        const mayAddEvidence =
-          trustLevel === 'user_confirmed' ||
-          existing.trustLevel !== 'user_confirmed';
-        const newEvidence =
-          mayAddEvidence &&
-          input.sourceRef !== null &&
-          input.sourceRef !== undefined &&
-          input.sourceRef !== existing.sourceRef;
-        let updated = existing;
-        let coreDropped = false;
-        if (pending) {
-          // The candidate keeps its status and trust. New evidence is recorded
-          // for the user's later decision, never applied to the row.
-          if (newEvidence)
-            this.recordVersionTx(
-              existing.id,
-              'evidence',
-              actor,
-              [
-                input.reason ?? 'duplicate remember',
-                `source ${input.sourceRef}`,
-                'candidate kept pending for user approval',
-              ].join('; '),
-              existing,
-              existing,
-            );
-          if (input.core)
-            throw new Error(
-              `memory #${existing.seq} is a candidate; promote it before selecting it into Core`,
-            );
-          return {
-            memory: existing,
-            created: false,
-            evidenceAdded: newEvidence,
-            coreDropped: false,
-          };
-        }
-        if (upgraded || newEvidence) {
-          updated = {
-            ...existing,
-            trustLevel: upgraded ? 'user_confirmed' : existing.trustLevel,
-            sourceType:
-              upgraded && sourceType === 'user' ? 'user' : existing.sourceType,
-            sourceRef: newEvidence ? input.sourceRef! : existing.sourceRef,
-            updatedAt: new Date().toISOString(),
-          };
-          this.run(
-            'UPDATE memories SET trust_level = ?, source_type = ?, source_ref = ?, updated_at = ? WHERE id = ?',
-            updated.trustLevel,
-            updated.sourceType,
-            updated.sourceRef,
-            updated.updatedAt,
-            existing.id,
-          );
-          this.recordVersionTx(
-            existing.id,
-            'evidence',
-            actor,
-            [
-              input.reason ?? 'duplicate remember',
-              newEvidence ? `source ${input.sourceRef}` : null,
-              upgraded ? 'trust upgraded to user_confirmed' : null,
-            ]
-              .filter(Boolean)
-              .join('; '),
-            existing,
-            updated,
-          );
-          // Metadata can grow (e.g. a longer trust label), so re-check the
-          // rendered selection; never leave Core in an overflowing state.
-          if (updated.core) {
-            const projected = this.selectedTx().map((item) =>
-              item.seq === updated.seq ? updated : item,
-            );
-            if (
-              renderCore(projected, CORE_BUDGET, this.activeTx().length)
-                .overflow
-            ) {
-              this.setCoreTx(updated.seq, false);
-              updated = { ...updated, core: false };
-              coreDropped = true;
-              this.recordVersionTx(
-                updated.id,
-                'deselect',
-                actor,
-                'evidence made the rendered Core exceed its budget',
-                existing,
-                updated,
-              );
-            }
-          }
-        }
-        if (input.core && !updated.core) {
-          // The projected set is the current selection minus this row, plus
-          // this row selected. Over budget rejects the whole write — evidence
-          // updates included — inside the same transaction.
-          this.assertCoreFitsTx(
-            [
-              ...this.selectedTx().filter((item) => item.seq !== updated.seq),
-              { ...updated, core: true },
-            ],
-            CORE_BUDGET,
-          );
-          this.setCoreTx(updated.seq, true);
-          updated = { ...updated, core: true };
-          this.recordVersionTx(
-            updated.id,
-            'select',
-            actor,
-            input.reason ?? 'selected on remember',
-            existing,
-            updated,
-          );
-        }
-        return {
-          memory: updated,
-          created: false,
-          evidenceAdded: Boolean(
-            upgraded || newEvidence || (input.core && !existing.core),
-          ),
-          coreDropped,
-        };
-      }
-
+      const existing = this.all(
+        "SELECT * FROM memories WHERE scope_id = ? AND status IN ('active', 'candidate') ORDER BY status, seq",
+        this.scopeId,
+      )
+        .map(toMemory)
+        .find(
+          (row) =>
+            dedupeKey(row.content) === content &&
+            (row.conditions ?? '') === conditions &&
+            (row.validUntil ?? null) === (input.validUntil ?? null),
+        );
       const now = new Date().toISOString();
-      const memory: MemoryRow = {
+      let memory: MemoryRow = existing ?? {
         id: newId(),
         scopeId: this.scopeId,
         seq: this.seqCountTx(),
         goalId: input.goalId ?? null,
         kind: input.kind ?? 'fact',
         content,
-        sourceType,
+        sourceType: input.sourceType ?? 'agent',
         sourceRef: input.sourceRef ?? null,
-        trustLevel,
-        confidence: input.confidence ?? null,
-        status: 'active',
+        trustLevel: input.confirmation
+          ? 'user_confirmed'
+          : (input.trustLevel ?? 'agent_inferred'),
+        confidence: null,
+        conditions,
+        observedAt: input.evidence?.observedAt ?? null,
+        verifiedAt: input.confirmation ? now : null,
+        validUntil: input.validUntil ?? null,
+        status: input.status ?? 'active',
         core: false,
         supersededBy: null,
-        supersedes: null,
+        supersedes: input.supersedes ?? null,
         createdAt: now,
         updatedAt: now,
       };
-      if (input.core)
-        this.assertCoreFitsTx([...this.selectedTx(), memory], CORE_BUDGET);
-      memory.core = input.core === true;
-      this.insertMemoryTx(memory);
-      this.recordVersionTx(
-        memory.id,
-        'create',
-        actor,
-        input.reason ?? null,
-        null,
+      if (!existing) {
+        if (
+          memory.supersedes !== null &&
+          this.bySeqTx(memory.supersedes)?.status !== 'active'
+        )
+          throw new Error('Supersede target is not an active memory');
+        this.insertMemoryTx(memory);
+        this.recordVersionTx(
+          memory.id,
+          'create',
+          actor,
+          input.reason ?? null,
+          null,
+          memory,
+        );
+      }
+      const evidenceAdded = this.attachEvidenceTx(
         memory,
+        input,
+        actor,
+        Boolean(existing),
       );
-      if (memory.core)
+      memory = this.bySeqTx(memory.seq)!;
+      if (input.confirmation && memory.status === 'candidate') {
+        this.promote(memory.seq, actor, 'verified explicit user confirmation');
+        memory = this.bySeqTx(memory.seq)!;
+      }
+      let coreDropped = false;
+      if (
+        memory.core &&
+        renderCore(this.selectedTx(), CORE_BUDGET, this.activeTx().length)
+          .overflow
+      ) {
+        this.setCoreTx(memory.seq, false);
+        memory = { ...memory, core: false };
+        coreDropped = true;
+        this.recordVersionTx(
+          memory.id,
+          'deselect',
+          actor,
+          'evidence exceeded Core budget',
+          existing ?? null,
+          memory,
+        );
+      }
+      if (input.core && !memory.core) {
+        if (memory.status !== 'active')
+          throw new Error(
+            'memory is a candidate; promote it before selecting it into Core',
+          );
+        this.assertCoreFitsTx(
+          [...this.selectedTx(), { ...memory, core: true }],
+          CORE_BUDGET,
+        );
+        this.setCoreTx(memory.seq, true);
+        memory = { ...memory, core: true };
         this.recordVersionTx(
           memory.id,
           'select',
           actor,
-          input.reason ?? 'selected on remember',
-          null,
+          'selected on remember',
+          existing ?? null,
           memory,
         );
+      }
       return {
-        memory,
-        created: true,
-        evidenceAdded: false,
-        coreDropped: false,
+        memory: this.withEvidence(this.bySeqTx(memory.seq)!),
+        created: !existing,
+        evidenceAdded,
+        coreDropped,
       };
     });
-    if (result.created || result.evidenceAdded) this.publish();
+    if (result.created || result.evidenceAdded || input.core) this.publish();
     return result;
+  }
+
+  private withEvidence(memory: MemoryRow): MemoryRow {
+    return {
+      ...memory,
+      evidence: memoryEvidence(this.db, memory.id),
+      confirmations: memoryConfirmations(this.db, memory.id),
+    };
+  }
+
+  private attachEvidenceTx(
+    memory: MemoryRow,
+    input: Pick<
+      RememberInput,
+      'evidence' | 'confirmation' | 'sourceRef' | 'sourceType' | 'trustLevel'
+    >,
+    actor: MemoryActor,
+    recordVersion = true,
+  ): boolean {
+    const evidence =
+      input.evidence ??
+      (input.sourceRef
+        ? {
+            sourceRef: input.sourceRef,
+            excerpt: memory.content,
+            actor: input.sourceType ?? 'agent',
+            relation: 'inference' as const,
+            observedAt: memory.createdAt,
+          }
+        : undefined);
+    const added = evidence
+      ? addMemoryEvidence(this.db, memory.id, evidence)
+      : false;
+    const confirmed = input.confirmation
+      ? confirmMemory(this.db, memory.id, memory.content, input.confirmation)
+      : false;
+    const upgraded =
+      confirmed ||
+      (input.trustLevel === 'user_confirmed' &&
+        memory.trustLevel !== 'user_confirmed');
+    const sourceRef = upgraded
+      ? (evidence?.sourceRef ??
+        input.confirmation?.sourceRef ??
+        memory.sourceRef)
+      : (memory.sourceRef ?? evidence?.sourceRef ?? null);
+    // A duplicate with only a different source is evidence, not a state change:
+    // keep the first source_ref stable so a replay cannot rewrite provenance.
+    const observed = memory.observedAt ?? evidence?.observedAt ?? null;
+    if (added || upgraded) {
+      this.run(
+        'UPDATE memories SET source_ref = COALESCE(?, source_ref), trust_level = ?, source_type = ?, observed_at = COALESCE(observed_at, ?), verified_at = COALESCE(?, verified_at) WHERE id = ?',
+        sourceRef,
+        upgraded ? 'user_confirmed' : memory.trustLevel,
+        upgraded
+          ? evidence?.actor === 'user'
+            ? 'user'
+            : memory.sourceType
+          : memory.sourceType,
+        observed,
+        input.confirmation ? new Date().toISOString() : null,
+        memory.id,
+      );
+      if (recordVersion)
+        this.recordVersionTx(
+          memory.id,
+          'evidence',
+          actor,
+          `source evidence recorded: ${evidence?.sourceRef ?? input.confirmation?.sourceRef}`,
+          memory,
+          this.bySeqTx(memory.seq)!,
+        );
+    }
+    return Boolean(added || upgraded);
   }
 
   /**
@@ -618,54 +650,19 @@ export class MemoryStore {
   candidate(input: {
     text: string;
     kind: MemoryKind;
-    confidence: number | null;
+    confidence?: number | null;
     sourceRef: string | null;
-    /** Active memory this candidate contradicts; applied on promote. */
     supersedes?: number | null;
     reason?: string;
+    evidence?: EvidenceInput;
   }): MemoryRow | null {
-    const content = normalizeLine(input.text, 'memory');
-    const key = dedupeKey(content);
-    const result = this.db.transaction((): MemoryRow | null => {
-      if (this.activeByTextTx(key) || this.candidateByTextTx(key)) return null;
-      const memory: MemoryRow = {
-        id: newId(),
-        scopeId: this.scopeId,
-        seq: this.seqCountTx(),
-        goalId: null,
-        kind: input.kind,
-        content,
-        sourceType: 'agent',
-        sourceRef: input.sourceRef,
-        trustLevel: 'agent_inferred',
-        confidence: input.confidence,
-        status: 'candidate',
-        core: false,
-        supersededBy: null,
-        supersedes: input.supersedes ?? null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      if (memory.supersedes !== null) {
-        const target = this.bySeqTx(memory.supersedes);
-        if (!target || target.status !== 'active')
-          throw new Error(
-            `supersede target #${memory.supersedes} is not an active memory`,
-          );
-      }
-      this.insertMemoryTx(memory);
-      this.recordVersionTx(
-        memory.id,
-        'create',
-        'worker',
-        input.reason ?? 'auto-extracted from history',
-        null,
-        memory,
-      );
-      return memory;
+    const result = this.remember({
+      ...input,
+      actor: 'worker',
+      status: 'candidate',
+      trustLevel: 'agent_inferred',
     });
-    if (result) this.publish();
-    return result;
+    return result.created ? result.memory : null;
   }
 
   /**
@@ -684,6 +681,11 @@ export class MemoryStore {
       sourceRef?: string | null;
       trustLevel?: MemoryTrustLevel;
       sourceType?: MemorySourceType;
+      evidence?: EvidenceInput;
+      confirmation?: ConfirmationInput;
+      conditions?: string;
+      validUntil?: string | null;
+      replacement?: { seq: number; content: string };
     } = {},
   ): ReviseResult {
     const content = normalizeLine(text, 'memory');
@@ -691,91 +693,53 @@ export class MemoryStore {
       const superseded = this.bySeqTx(seq);
       if (!superseded)
         throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+      if (superseded.status === 'candidate' && options.confirmation) {
+        const evidenceAdded = this.attachEvidenceTx(
+          superseded,
+          options,
+          actor,
+          false,
+        );
+        this.promote(
+          seq,
+          actor,
+          reason,
+          options.confirmation,
+          options.replacement,
+        );
+        return {
+          memory: this.withEvidence(this.bySeqTx(seq)!),
+          superseded: this.withEvidence(this.bySeqTx(seq)!),
+          changed: false,
+          evidenceAdded,
+          coreDropped: false,
+        };
+      }
+      if (superseded.status === 'candidate')
+        throw new Error(
+          `memory #${seq} is candidate; only active memories can be revised without a verified user confirmation`,
+        );
       if (superseded.status !== 'active')
         throw new Error(
           `memory #${seq} is ${superseded.status}; only active memories can be revised`,
         );
       if (dedupeKey(content) === dedupeKey(superseded.content)) {
-        // Same fact: "content unchanged" is not "nothing changed". New user
-        // confirmation or a new source ref is recorded, published, and
-        // re-checked against the rendered Core budget like any evidence update.
-        const upgraded =
-          (options.trustLevel === 'user_confirmed' || actor === 'user') &&
-          superseded.trustLevel !== 'user_confirmed';
-        const mayAddEvidence =
-          options.trustLevel === 'user_confirmed' ||
-          actor === 'user' ||
-          superseded.trustLevel !== 'user_confirmed';
-        const newEvidence =
-          mayAddEvidence &&
-          options.sourceRef !== null &&
-          options.sourceRef !== undefined &&
-          options.sourceRef !== superseded.sourceRef;
-        let updated = superseded;
-        let evidenceAdded = false;
-        let coreDropped = false;
-        if (upgraded || newEvidence) {
-          evidenceAdded = true;
-          updated = {
-            ...superseded,
-            trustLevel: upgraded ? 'user_confirmed' : superseded.trustLevel,
-            sourceType: upgraded ? 'user' : superseded.sourceType,
-            sourceRef: newEvidence ? options.sourceRef! : superseded.sourceRef,
-            updatedAt: new Date().toISOString(),
-          };
-          this.run(
-            'UPDATE memories SET trust_level = ?, source_type = ?, source_ref = ?, updated_at = ? WHERE id = ?',
-            updated.trustLevel,
-            updated.sourceType,
-            updated.sourceRef,
-            updated.updatedAt,
-            superseded.id,
-          );
-          this.recordVersionTx(
-            superseded.id,
-            'evidence',
-            actor,
-            [
-              reason,
-              newEvidence ? `source ${options.sourceRef}` : null,
-              upgraded ? 'trust upgraded to user_confirmed' : null,
-            ]
-              .filter(Boolean)
-              .join('; '),
-            superseded,
-            updated,
-          );
-          // New metadata renders wider: keep Core inside its budget.
-          if (updated.core) {
-            const projected = this.selectedTx().map((item) =>
-              item.seq === updated.seq ? updated : item,
-            );
-            if (
-              renderCore(projected, CORE_BUDGET, this.activeTx().length)
-                .overflow
-            ) {
-              this.setCoreTx(updated.seq, false);
-              updated = { ...updated, core: false };
-              coreDropped = true;
-              this.recordVersionTx(
-                updated.id,
-                'deselect',
-                actor,
-                'evidence made the rendered Core exceed its budget',
-                superseded,
-                updated,
-              );
-            }
-          }
-        }
+        const result = this.remember({
+          text: content,
+          ...options,
+          actor,
+          conditions: options.conditions ?? superseded.conditions,
+          validUntil: options.validUntil ?? superseded.validUntil,
+        });
         return {
-          memory: updated,
-          superseded: updated,
+          memory: result.memory,
+          superseded: result.memory,
           changed: false,
-          evidenceAdded,
-          coreDropped,
+          evidenceAdded: result.evidenceAdded,
+          coreDropped: result.coreDropped,
         };
       }
+
       const duplicate = this.activeByTextTx(dedupeKey(content));
       if (duplicate && duplicate.seq !== seq)
         throw new Error(
@@ -794,7 +758,11 @@ export class MemoryStore {
         // Never inherit the old source: a correction points at its own evidence.
         sourceRef: options.sourceRef ?? null,
         trustLevel,
-        confidence: superseded.confidence,
+        confidence: null,
+        conditions: options.conditions ?? superseded.conditions,
+        observedAt: options.evidence?.observedAt ?? null,
+        verifiedAt: options.confirmation ? now : null,
+        validUntil: options.validUntil ?? null,
         status: 'active',
         core: false,
         supersededBy: null,
@@ -820,6 +788,7 @@ export class MemoryStore {
         updatedAt: now,
       };
       this.insertMemoryTx(memory);
+      this.attachEvidenceTx(memory, options, actor);
       this.run(
         'UPDATE memories SET status = ?, core = 0, superseded_by = ?, updated_at = ? WHERE id = ?',
         'superseded',
@@ -846,7 +815,7 @@ export class MemoryStore {
         revisedOld,
       );
       return {
-        memory,
+        memory: this.withEvidence(this.bySeqTx(memory.seq)!),
         superseded: revisedOld,
         changed: true,
         evidenceAdded: false,
@@ -894,6 +863,12 @@ export class MemoryStore {
           memory,
           updated,
         );
+        if (memory.status === 'candidate')
+          this.run(
+            'INSERT OR REPLACE INTO memory_meta (key, value) VALUES (?, ?)',
+            `dismissed:${dedupeKey(memory.content).toLowerCase()}`,
+            JSON.stringify({ seq, reason }),
+          );
         return { memory: updated, changed: true };
       },
     );
@@ -987,6 +962,8 @@ export class MemoryStore {
     seq: number,
     actor: MemoryActor = 'user',
     reason = 'promoted from candidates',
+    confirmation?: ConfirmationInput,
+    replacement?: { seq: number; content: string },
   ): { memory: MemoryRow; superseded: MemoryRow | null } {
     const result = this.db.transaction(
       (): {
@@ -996,6 +973,8 @@ export class MemoryStore {
         const memory = this.bySeqTx(seq);
         if (!memory)
           throw new Error(`no memory #${seq} in scope ${this.scopeId}`);
+        if (memory.status === 'active' && confirmation)
+          return { memory, superseded: null };
         if (memory.status !== 'candidate')
           throw new Error(
             `memory #${seq} is ${memory.status}; only candidates can be promoted`,
@@ -1007,11 +986,14 @@ export class MemoryStore {
           );
         const now = new Date().toISOString();
         let superseded: MemoryRow | null = null;
-        if (memory.supersedes !== null) {
-          const target = this.bySeqTx(memory.supersedes);
+        const targetSeq = replacement?.seq ?? memory.supersedes;
+        if (targetSeq !== null && targetSeq !== undefined) {
+          const target = this.bySeqTx(targetSeq);
+          if (replacement && target?.content !== replacement.content)
+            throw new Error('Replacement target changed; review it again');
           if (!target || target.status !== 'active')
             throw new Error(
-              `memory #${memory.supersedes} is ${target?.status ?? 'missing'} since this candidate was extracted; dismiss it and revise the current memory instead`,
+              `memory #${targetSeq} is ${target?.status ?? 'missing'} since this candidate was extracted; dismiss it and revise the current memory instead`,
             );
           superseded = {
             ...target,
@@ -1048,6 +1030,15 @@ export class MemoryStore {
           now,
           memory.id,
         );
+        if (confirmation) {
+          confirmMemory(this.db, memory.id, memory.content, confirmation);
+          this.run(
+            'UPDATE memories SET trust_level = ?, verified_at = ? WHERE id = ?',
+            'user_confirmed',
+            now,
+            memory.id,
+          );
+        }
         this.recordVersionTx(
           memory.id,
           'promote',
@@ -1056,7 +1047,7 @@ export class MemoryStore {
           memory,
           updated,
         );
-        return { memory: updated, superseded };
+        return { memory: this.withEvidence(this.bySeqTx(seq)!), superseded };
       },
     );
     this.publish();
@@ -1111,10 +1102,13 @@ export class MemoryStore {
     const limit = Math.min(Math.max(options?.limit ?? 20, 1), 100);
     const statusFilter = options?.includeHistory
       ? ''
-      : ` AND status = 'active'`;
+      : ` AND m.status = 'active' AND (m.valid_until IS NULL OR m.valid_until > ?)`;
     const rows = this.db.transaction(() => {
       const clauses = [`m.scope_id = ?${statusFilter}`];
-      const args: (string | number)[] = [this.scopeId];
+      const args: (string | number)[] = [
+        this.scopeId,
+        ...(options?.includeHistory ? [] : [new Date().toISOString()]),
+      ];
       if (plan.match) clauses.push('memory_fts MATCH ?');
       for (let index = 0; index < plan.short.length; index++) {
         clauses.push("m.content LIKE ? ESCAPE '\\'");
@@ -1195,7 +1189,27 @@ export class MemoryStore {
       const items: MemoryItem[] = this.all(
         'SELECT * FROM memories WHERE scope_id = ? ORDER BY seq',
         this.scopeId,
-      ).map(toMemory);
+      )
+        .map(toMemory)
+        .map((memory) => ({
+          ...memory,
+          evidence: memoryEvidence(this.db, memory.id),
+          confirmations: memoryConfirmations(this.db, memory.id),
+          related:
+            memory.status === 'candidate'
+              ? this.activeTx()
+                  .filter(
+                    (active) =>
+                      similarity(memory.content, active.content) >= 0.3,
+                  )
+                  .slice(0, 5)
+                  .map(({ seq, content, sourceRef }) => ({
+                    seq,
+                    content,
+                    sourceRef,
+                  }))
+              : [],
+        }));
       return {
         scopeId: this.scopeId,
         items,
@@ -1352,7 +1366,11 @@ export class MemoryStore {
   /** Regenerate the read-only MEMORY.md export; the DB is never read back from it. */
   exportFile(): void {
     const { items, core } = this.dump();
-    const active = items.filter((item) => item.status === 'active');
+    const active = items.filter(
+      (item) =>
+        item.status === 'active' &&
+        (!item.validUntil || item.validUntil > new Date().toISOString()),
+    );
     const lines = [
       `# Memory（${this.scopeId}）`,
       '',
@@ -1365,7 +1383,7 @@ export class MemoryStore {
         ? ['（暂无有效记忆）']
         : active.map(
             (item) =>
-              `- ${item.core ? '[core] ' : ''}#${item.seq} [${item.kind}] ${item.trustLevel}${item.sourceRef ? ` ${item.sourceRef}` : ''} ${item.createdAt.slice(0, 10)} — ${item.content}`,
+              `- ${item.core ? '[core] ' : ''}#${item.seq} [${item.kind}] ${item.trustLevel}${item.sourceRef ? ` ${item.sourceRef}` : ''} ${item.createdAt.slice(0, 10)} — ${item.content}${item.conditions ? ` [conditions: ${item.conditions}]` : ''}${item.validUntil ? ` [valid until: ${item.validUntil}]` : ''}\n  Evidence: ${JSON.stringify(item.evidence)}\n  Confirmations: ${JSON.stringify(item.confirmations)}\n  Observed: ${item.observedAt ?? 'unknown'}; verified: ${item.verifiedAt ?? 'unknown'}`,
           )),
       '',
     ];

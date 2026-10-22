@@ -4,6 +4,7 @@ import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
 import type { Db } from './db.js';
 import type { DataService } from './data.js';
 import { verifyUserEvidence, type InputEvidence } from './provenance.js';
+import { resolveMemoryEvidence } from './memory-evidence.js';
 
 /** What memory tools and the Core snapshot actually need — shared by chief and manager. */
 export interface MemoryToolDeps {
@@ -128,6 +129,27 @@ export function memoryTools(
             '"user" only when the statement equals Tian\'s current input (whitespace-normalized); excerpts, rewrites and translations are stored agent_inferred. Default: agent.',
         }),
       ),
+      evidence_ref: Type.Optional(
+        Type.String({
+          description:
+            'Actual conv:<id>#<entry> or event:<id> source in this scope. Validated by the service.',
+        }),
+      ),
+      excerpt: Type.Optional(
+        Type.String({ description: 'Exact excerpt from the cited source.' }),
+      ),
+      conditions: Type.Optional(
+        Type.String({
+          maxLength: 300,
+          description:
+            'Applicable environment, object, or version. Part of fact identity.',
+        }),
+      ),
+      valid_until: Type.Optional(
+        Type.String({
+          description: 'ISO expiry, only when the fact has an explicit expiry.',
+        }),
+      ),
       core: Type.Optional(
         Type.Boolean({
           description:
@@ -144,11 +166,43 @@ export function memoryTools(
           args.source === 'user'
             ? verifyUserEvidence(args.text, input)
             : { confirmed: false, reason: 'recorded as agent inference' };
+        const ref = args.evidence_ref ?? evidenceRef(conversationId, input);
+        const evidence =
+          input || args.evidence_ref
+            ? resolveMemoryEvidence(
+                deps.db,
+                scope,
+                args.text,
+                ref,
+                args.excerpt,
+                { conversationId, input },
+              )
+            : undefined;
+        const explicit = verdict.confirmed && verdict.saveRequested;
+        if (
+          args.evidence_ref &&
+          args.evidence_ref !== evidenceRef(conversationId, input) &&
+          verdict.confirmed
+        )
+          throw new Error(
+            'A historical citation cannot authorize current user confirmation',
+          );
         const result = data.remember(scope, args.text, {
           kind: args.kind,
           sourceType: verdict.confirmed ? 'user' : 'agent',
           trustLevel: verdict.confirmed ? 'user_confirmed' : 'agent_inferred',
-          sourceRef: evidenceRef(conversationId, input),
+          sourceRef: evidence?.sourceRef ?? null,
+          evidence,
+          confirmation: explicit
+            ? {
+                sourceRef: evidenceRef(conversationId, input),
+                method: 'explicit-save',
+              }
+            : undefined,
+          supersedes: null,
+          status: verdict.confirmed ? 'active' : 'candidate',
+          conditions: args.conditions,
+          validUntil: args.valid_until,
           core: args.core ?? false,
           actor,
           operationId: `remember:${api.taskId}:${api.callId}`,
@@ -195,6 +249,10 @@ export function memoryTools(
         description: 'The corrected one line, <=1000 characters.',
       }),
       reason: Type.String({ description: 'Why the memory is being replaced.' }),
+      evidence_ref: Type.Optional(Type.String()),
+      excerpt: Type.Optional(Type.String()),
+      conditions: Type.Optional(Type.String({ maxLength: 300 })),
+      valid_until: Type.Optional(Type.String()),
       source: Type.Optional(
         Type.Union([Type.Literal('user'), Type.Literal('agent')], {
           description:
@@ -211,6 +269,45 @@ export function memoryTools(
           args.source === 'user'
             ? verifyUserEvidence(args.text, input)
             : { confirmed: false, reason: 'recorded as agent inference' };
+        const ref = args.evidence_ref ?? evidenceRef(conversationId, input);
+        const evidence =
+          input || args.evidence_ref
+            ? resolveMemoryEvidence(
+                deps.db,
+                scope,
+                args.text,
+                ref,
+                args.excerpt,
+                { conversationId, input },
+              )
+            : undefined;
+        if (!verdict.confirmed) {
+          const pending = data.remember(scope, args.text, {
+            kind: deps.scopes
+              .memory(scope)
+              .dump()
+              .items.find((row) => row.seq === args.seq)?.kind as
+              | import('./memory.js').MemoryKind
+              | undefined,
+            actor,
+            status: 'candidate',
+            supersedes:
+              deps.scopes
+                .memory(scope)
+                .dump()
+                .items.find((row) => row.seq === args.seq)?.status === 'active'
+                ? args.seq
+                : null,
+            evidence,
+            sourceRef: evidence?.sourceRef,
+            conditions: args.conditions,
+            validUntil: args.valid_until,
+            operationId: `revise-review:${api.taskId}:${api.callId}`,
+          });
+          return toolText(
+            `Saved agent-inferred candidate #${pending.memory.seq} for review; #${args.seq} remains active because the correction is not verified.`,
+          );
+        }
         const result = data.revise(
           scope,
           args.seq,
@@ -218,7 +315,14 @@ export function memoryTools(
           args.reason,
           actor,
           {
-            sourceRef: evidenceRef(conversationId, input),
+            sourceRef: evidence?.sourceRef ?? null,
+            evidence,
+            confirmation: {
+              sourceRef: evidenceRef(conversationId, input),
+              method: 'explicit-save',
+            },
+            conditions: args.conditions,
+            validUntil: args.valid_until,
             trustLevel: verdict.confirmed ? 'user_confirmed' : 'agent_inferred',
             sourceType: verdict.confirmed ? 'user' : 'agent',
             operationId: `revise:${api.taskId}:${api.callId}`,
@@ -325,7 +429,45 @@ export function memoryTools(
     },
   });
 
-  return [remember, revise, forget, select, deselect];
+  const promote = defineTool({
+    name: 'promote',
+    replay: 'safe',
+    description:
+      'Activate a pending candidate only when the current genuine user input explicitly says "记住：<exact candidate>" or "remember: <exact candidate>". Review in the Memory panel also confirms it. Core selection remains separate.',
+    parameters: Type.Object({ seq: Type.Integer({ minimum: 0 }) }),
+    execute: async (args, api) => {
+      try {
+        const conversationId = String(api.conversationId);
+        const scope = writeScope(conversationId);
+        const candidate = deps.scopes
+          .memory(scope)
+          .dump()
+          .items.find((row) => row.seq === args.seq);
+        if (!candidate) return toolErr('Unknown candidate');
+        const input = await deps.currentInput(conversationId);
+        const verdict = verifyUserEvidence(candidate.content, input);
+        if (!verdict.confirmed || !verdict.saveRequested)
+          return toolErr(
+            'Promotion needs a verified explicit user save request or Memory panel review',
+          );
+        const result = data.promote(
+          scope,
+          args.seq,
+          `promote:${api.taskId}:${api.callId}`,
+          {
+            sourceRef: evidenceRef(conversationId, input),
+            method: 'explicit-save',
+          },
+        );
+        return toolText(
+          `#${result.memory.seq} active; Core selection is separate.`,
+        );
+      } catch (error) {
+        return toolErr(String(error));
+      }
+    },
+  });
+  return [remember, revise, promote, forget, select, deselect];
 }
 
 /**
