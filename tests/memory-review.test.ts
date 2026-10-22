@@ -15,6 +15,7 @@ import { EventLog } from '../src/worker/events';
 import { HistoryIndex } from '../src/worker/history';
 import { relevantContext } from '../src/worker/relevant-context';
 import { verifyUserEvidence } from '../src/worker/provenance';
+import { coreMemorySection } from '../src/worker/tools-memory';
 
 const temporary = (t: TestContext) => {
   const path = mkdtempSync(join(tmpdir(), 'tian-memory-review-'));
@@ -584,16 +585,39 @@ test('promotion compares conditions, so prod and test facts coexist', (t) => {
 });
 
 test('an expired Core memory refreshes the stable snapshot without a write', async (t) => {
-  const { memory } = store(t);
-  const soon = new Date(Date.now() + 40).toISOString();
+  const { db, scopes } = store(t);
+  const now = Date.parse('2030-01-01T00:00:00.000Z');
+  t.mock.timers.enable({ apis: ['Date'], now });
+  // SQLite has its own clock; keep its expiry queries on the same controlled time.
+  db.sqlite.function('strftime', { varargs: true }, () =>
+    new Date().toISOString(),
+  );
+  db.mapConversation('expiry-review', 'global');
+  const memory = scopes.memory('global');
+  const expires = new Date(now + 1_000).toISOString();
   memory.remember({
     text: 'Temporary deploy freeze',
     kind: 'fact',
     core: true,
-    validUntil: soon,
+    validUntil: expires,
   });
-  assert.match(memory.wake(), /Temporary deploy freeze/);
-  assert.equal(memory.nextCoreExpiry(), soon);
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  let turn = '1';
+  const section = coreMemorySection(
+    { db, scopes, latestInputEntry: async () => turn },
+    { withProject: false },
+  );
+  const render = () =>
+    section.render({ conversationId: 'expiry-review' } as never, {} as never);
+  const first = String(await render());
+  const version = memory.version();
+  assert.match(first, /Temporary deploy freeze/);
+  assert.equal(memory.nextCoreExpiry(), expires);
+  assert.equal(String(await render()), first);
+
+  t.mock.timers.setTime(now + 2_000);
+  assert.equal(memory.version(), version);
   assert.doesNotMatch(memory.wake(), /Temporary deploy freeze/);
+  assert.doesNotMatch(String(await render()), /Temporary deploy freeze/);
+  turn = '2';
+  assert.doesNotMatch(String(await render()), /Temporary deploy freeze/);
 });
