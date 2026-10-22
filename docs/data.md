@@ -23,7 +23,7 @@ Pi transcript 是会话内容的唯一来源；`tian.db` 里只有可丢弃重�
 - `events`：`id`（尽量由调用派生，重放幂等）、`at`、`type`、`actor`、`scope_id`、`goal_id`、`task_id`、`run_id`、`conversation_id`、`summary`、`payload`。API 只有 `record(event)`（INSERT OR IGNORE）、`get(id)`、`list(filter)`；其他功能直接调用 `record`。
 - `history_entries`：`(conversation_id, entry_id)` 为主键，保存 scope、kind、role、时间与文本。用户输入、助手文本、工具调用与工具结果都入索引；tool args / results 以完整源单元入索引（每条 call / result 一行，不设截断阈值），多消息 entry 以 `:msg:<n>`、tool call 以 `:call:<n>` 区分；空内容与 thinking 跳过。事件以 `conversation_id = ''` 存储，引用为 `event:<id>`。
 - `history_fts`：FTS5 trigram 分词，中文可直接检索；少于 3 字符的词回退 `LIKE`，多词查询按 AND 组合。
-- `history_cursors`：每个会话的同步游标（事件与 Memory Worker 用单独游标），按 entry id 升序分页补齐，重启只补新增部分，重复同步不产生重复行。索引格式版本记录在 `memory_meta`；升级时只清空派生表与 per-conversation 游标，保留事件与 Memory Worker 游标，由下一次同步从 Pi 重建。
+- `history_cursors`：每个会话的同步游标（事件与 Memory Worker 用单独游标），按 entry id 升序分页补齐，重启只补新增部分，重复同步不产生重复行。索引格式版本记录在 `memory_meta`；升级时清空派生表与全部游标（重建后 entry 的 rowid 变了，所有游标都失效），由下一次同步从 Pi 与事件日志重建，Memory Worker 从头重收并靠去重不产生重复候选。
 
 同步时机：启动后后台补齐（不阻塞启动）；会话有新输入、watch 推送变化或空闲后延迟补同步；每次检索前对目标 scope 惰性补齐。维护模式下后台同步暂停。
 

@@ -10,7 +10,7 @@
 
 ## 功能一览
 
-- **三栏工作台**：导航 / 对话 / 上下文检查器（Tasks / Runs / Memory）三栏布局；Streamdown Markdown 与按需懒加载的 Mermaid 图表，全局 ⌘K 命令面板，无缝折叠与暗色/亮色外观。
+- **三栏工作台**：导航 / 对话 / 上下文检查器（Tasks / Runs；Memory 面板已实现但标签当前隐藏）三栏布局；Streamdown Markdown 与按需懒加载的 Mermaid 图表，全局 ⌘K 命令面板，无缝折叠与暗色/亮色外观。
 - **模型与网关**：从本机 Magpie 网关自动发现模型（`/v1/models`）并在 App 内切换；离线时使用缓存目录；用量按天统计并以热力图展示。支持在派发 Run 时单独钉选 worker 模型与思考强度（D13）。
 - **项目与 Scope**：手动注册本地目录为项目；每个项目恰好一位管理者，注册时名称必填（D18）；任务默认在隔离 Git worktree 中执行。
 - **分层记忆系统**：SQLite 存储，区分来源（用户确认、Agent 推断、第三方数据）、可信度与版本历史；显式 Core Memory token 预算控制；后台 Memory Worker 自动提取候选记忆，App 内一键晋升、驳回、选入/移出或修订。Global 记忆与 Notes 归总管，项目记忆与 Notes 归该项目管理者；总管会话只注入 Global Core，管理者会话注入 Global 与本项目 Core（D4, D18）。

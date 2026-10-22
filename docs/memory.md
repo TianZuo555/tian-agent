@@ -86,6 +86,6 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 - 首次打开某 scope 时，若存在旧版 `LOG.txt`，一次性事务导入（seq = 行号，来源 legacy、可信度 agent_inferred）；导入提交后才把源文件移入 `memory/legacy/`，回滚不会消耗导入源。旧 `TREE/` 同样移入 legacy 但不再导入。此后数据库是唯一写入来源。
 - 初始化（遗留导入、初始 Core 选择）在进入可失败的业务写入事务之前完成并独立提交；`Scopes` 不缓存事务内构造的 store，外层回滚后重载会从已提交状态重新初始化。
 - 数据库升级时对旧数据做一次确定性 Core 选择：用户确认优先，其次 preference/decision，再次其余，按 seq 顺序逐条校验最终渲染预算；其余 active 全部保留可检索。迁移结果可在 Memory 面板与导出中看到。
-- App 的 Context Pane 里有 Memory 面板：区分候选、Core 与"可检索未常驻"，显示 Core 用量，用户可直接晋升、驳回、选入/移出、修订（操作者为 user），全部历史保留在版本记录中。
+- App 的 Context Pane 里有 Memory 面板：区分候选、Core 与"可检索未常驻"，显示 Core 用量，用户可直接晋升、驳回、选入/移出、修订（操作者为 user），全部历史保留在版本记录中。该面板当前在 UI 中隐藏（`ContextPane.tsx` 把 `memory` 标签从 tab strip 过滤掉，面板组件与 `memoryPromote` / `memoryDismiss` / `memorySelect` / `memoryDeselect` / `memoryRevise` 命令保留待恢复），隐藏期间候选只能经 Agent 工具审阅。
 
 记什么、选什么由总管模型与用户决定。当前没有向量索引，也没有后台 Dreaming；Notes 检索与 Memory / History 共用同一套查询计划（`worker/search.ts`：AND、大小写不敏感子串），返回有界 snippet 与 `file.md:<line>` 命中，`read_note` 可展开命中行附近的窗口。

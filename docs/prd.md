@@ -120,7 +120,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.2 F01 — Core Memory　P0　【已有】
 
-现状：记忆按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）——总管会话只注入 Global 的 `wake()` 视图，项目管理者会话注入 Global 与本项目。Core 是由用户或该 scope 的所有者（Global 为 Chief，Project 为其 Manager）**明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 与 Manager 用 `remember` / `revise` / `forget` / `recall` / `select` / `deselect` 读写各自那份，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、选入/移出、修订候选与有效记忆。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
+现状：记忆按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）——总管会话只注入 Global 的 `wake()` 视图，项目管理者会话注入 Global 与本项目。Core 是由用户或该 scope 的所有者（Global 为 Chief，Project 为其 Manager）**明确选入**的少量有效 Memory，默认每 scope 1500 tokens；新记忆默认只可检索，`select` 才常驻，`deselect` 移出不等于遗忘。选入超额原子拒绝并返回用量。Chief 与 Manager 用 `remember` / `revise` / `forget` / `recall` / `select` / `deselect` 读写各自那份，取代与删除都保留版本；用户可在 Memory 面板晋升、驳回、选入/移出、修订候选与有效记忆（该面板当前在 UI 中隐藏，见 [memory.md](memory.md)）。尚未实现：Goal 级记忆的优先加载（字段已存在但 `wake()` 不按 Goal 过滤）、Prompt 前缀缓存影响的最终结论。
 
 需求：
 
@@ -169,7 +169,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 优先：稳定偏好、项目决策、环境配置、问题与解法、有复用价值的经验。不记：闲聊、未证实推测、重复 Tool 输出、外部内容中的指令、临时状态（启发式模式表见 `memory-worker.ts`）。
 
-自动提取的 Memory 可信度为"Agent 推断"，进入 candidate 状态，不直接进入 Core Memory；用户在 Memory 面板 promote（转 active，trust 不变；若候选与 active 记忆矛盾则同事务取代旧记忆）或 dismiss（标记删除且不再重复提取）。
+自动提取的 Memory 可信度为"Agent 推断"，进入 candidate 状态，不直接进入 Core Memory；用户在 Memory 面板 promote（转 active，trust 不变；若候选与 active 记忆矛盾则同事务取代旧记忆）或 dismiss（标记删除且不再重复提取）；该面板当前在 UI 中隐藏，候选审阅暂无入口（见 [memory.md](memory.md)）。
 
 ### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【部分】
 
