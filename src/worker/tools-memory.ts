@@ -5,6 +5,7 @@ import type { Db } from './db.js';
 import type { DataService } from './data.js';
 import { verifyUserEvidence, type InputEvidence } from './provenance.js';
 import { resolveMemoryEvidence } from './memory-evidence.js';
+import type { MemoryKind } from './memory.js';
 
 /** What memory tools and the Core snapshot actually need — shared by chief and manager. */
 export interface MemoryToolDeps {
@@ -165,7 +166,11 @@ export function memoryTools(
         const verdict =
           args.source === 'user'
             ? verifyUserEvidence(args.text, input)
-            : { confirmed: false, reason: 'recorded as agent inference' };
+            : {
+                confirmed: false,
+                saveRequested: false,
+                reason: 'recorded as agent inference',
+              };
         const ref = args.evidence_ref ?? evidenceRef(conversationId, input);
         const evidence =
           input || args.evidence_ref
@@ -187,10 +192,13 @@ export function memoryTools(
           throw new Error(
             'A historical citation cannot authorize current user confirmation',
           );
+        // Only an anchored save request confirms the stored text. A statement
+        // equal to the user turn confirms the source only: it stays a
+        // candidate so that ordinary conversation never skips review.
         const result = data.remember(scope, args.text, {
           kind: args.kind,
           sourceType: verdict.confirmed ? 'user' : 'agent',
-          trustLevel: verdict.confirmed ? 'user_confirmed' : 'agent_inferred',
+          trustLevel: explicit ? 'user_confirmed' : 'agent_inferred',
           sourceRef: evidence?.sourceRef ?? null,
           evidence,
           confirmation: explicit
@@ -200,10 +208,10 @@ export function memoryTools(
               }
             : undefined,
           supersedes: null,
-          status: verdict.confirmed ? 'active' : 'candidate',
+          status: explicit ? 'active' : 'candidate',
           conditions: args.conditions,
           validUntil: args.valid_until,
-          core: args.core ?? false,
+          core: explicit ? (args.core ?? false) : false,
           actor,
           operationId: `remember:${api.taskId}:${api.callId}`,
         });
@@ -217,8 +225,12 @@ export function memoryTools(
             `evidence recorded: trust ${result.memory.trustLevel}, source ${result.memory.sourceRef ?? 'none'}`,
           );
         parts.push(
-          `stored trust ${result.memory.trustLevel}; this write is ${verdict.confirmed ? 'user-confirmed' : 'agent-inferred'}: ${verdict.reason}`,
+          `stored trust ${result.memory.trustLevel}; this write is ${explicit ? 'user-confirmed' : 'agent-inferred'}: ${verdict.reason}`,
         );
+        if (result.memory.status === 'candidate')
+          parts.push(
+            'it stays a candidate until Tian saves or reviews it in the Memory panel; Core selection waits for that review',
+          );
         parts.push(
           result.memory.core
             ? `in Core${coreNote(deps, scope)}`
@@ -239,7 +251,7 @@ export function memoryTools(
     name: 'revise',
     replay: 'safe',
     description:
-      'Replace memory #seq with a corrected line (never append a contradicting line). Use this whenever Tian corrects something; the old memory stays as history but leaves Core Memory. If the correction cannot fit Core, it is still saved outside Core and the result says so.',
+      'Replace memory #seq with a corrected line (never append a contradicting line). Use this whenever Tian corrects something; the old memory stays as history but leaves Core Memory. If the correction cannot fit Core, it is still saved outside Core and the result says so. A correction that is not an explicit verified save is stored as a candidate for review and does not replace anything.',
     parameters: Type.Object({
       seq: Type.Integer({
         minimum: 0,
@@ -268,7 +280,11 @@ export function memoryTools(
         const verdict =
           args.source === 'user'
             ? verifyUserEvidence(args.text, input)
-            : { confirmed: false, reason: 'recorded as agent inference' };
+            : {
+                confirmed: false,
+                saveRequested: false,
+                reason: 'recorded as agent inference',
+              };
         const ref = args.evidence_ref ?? evidenceRef(conversationId, input);
         const evidence =
           input || args.evidence_ref
@@ -281,23 +297,32 @@ export function memoryTools(
                 { conversationId, input },
               )
             : undefined;
-        if (!verdict.confirmed) {
+        // Confirmation means an anchored save request. Verbatim user wording
+        // confirms the source only, exactly as in `remember`: an unconfirmed
+        // correction must not replace a fact on its own.
+        const explicit = verdict.confirmed && verdict.saveRequested;
+        if (!explicit) {
+          // Validate the target first: a stale or mistyped #seq must fail here,
+          // not turn into an unrelated standalone candidate.
+          const target = deps.scopes
+            .memory(scope)
+            .dump()
+            .items.find((row) => row.seq === args.seq);
+          if (!target)
+            throw new Error(
+              `no memory #${args.seq} in scope ${scopeLabel(scope)}`,
+            );
+          if (target.status !== 'active' && target.status !== 'candidate')
+            throw new Error(
+              `memory #${args.seq} is ${target.status}; only active memories can be revised`,
+            );
           const pending = data.remember(scope, args.text, {
-            kind: deps.scopes
-              .memory(scope)
-              .dump()
-              .items.find((row) => row.seq === args.seq)?.kind as
-              | import('./memory.js').MemoryKind
-              | undefined,
+            kind: target.kind as MemoryKind,
             actor,
             status: 'candidate',
-            supersedes:
-              deps.scopes
-                .memory(scope)
-                .dump()
-                .items.find((row) => row.seq === args.seq)?.status === 'active'
-                ? args.seq
-                : null,
+            // The target is only a review hint; promotion replaces it solely
+            // when Tian explicitly chooses the replacement.
+            supersedes: target.status === 'active' ? target.seq : null,
             evidence,
             sourceRef: evidence?.sourceRef,
             conditions: args.conditions,
@@ -305,7 +330,7 @@ export function memoryTools(
             operationId: `revise-review:${api.taskId}:${api.callId}`,
           });
           return toolText(
-            `Saved agent-inferred candidate #${pending.memory.seq} for review; #${args.seq} remains active because the correction is not verified.`,
+            `Saved agent-inferred candidate #${pending.memory.seq} for review; #${target.seq} stays active and is replaced only when Tian confirms this revision in the Memory panel or with an explicit save request.`,
           );
         }
         const result = data.revise(
@@ -323,15 +348,15 @@ export function memoryTools(
             },
             conditions: args.conditions,
             validUntil: args.valid_until,
-            trustLevel: verdict.confirmed ? 'user_confirmed' : 'agent_inferred',
-            sourceType: verdict.confirmed ? 'user' : 'agent',
+            trustLevel: explicit ? 'user_confirmed' : 'agent_inferred',
+            sourceType: explicit ? 'user' : 'agent',
             operationId: `revise:${api.taskId}:${api.callId}`,
           },
         );
         const head = result.changed
           ? `superseded #${args.seq} with #${result.memory.seq} in [${scopeLabel(scope)}]`
           : `#${result.memory.seq} already said that in [${scopeLabel(scope)}]; no new revision written`;
-        const trust = `stored trust ${result.memory.trustLevel}; this write is ${verdict.confirmed ? 'user-confirmed' : 'agent-inferred'}: ${verdict.reason}`;
+        const trust = `stored trust ${result.memory.trustLevel}; this write is ${explicit ? 'user-confirmed' : 'agent-inferred'}: ${verdict.reason}`;
         const core = result.memory.core
           ? `in Core${coreNote(deps, scope)}`
           : `outside Core${coreNote(deps, scope)}`;
@@ -433,7 +458,7 @@ export function memoryTools(
     name: 'promote',
     replay: 'safe',
     description:
-      'Activate a pending candidate only when the current genuine user input explicitly says "记住：<exact candidate>" or "remember: <exact candidate>". Review in the Memory panel also confirms it. Core selection remains separate.',
+      'Activate a pending candidate only when the current genuine user input explicitly says "记住：<exact candidate>" or "remember: <exact candidate>". Review in the Memory panel also confirms it. Activation never replaces another memory: replacing is a separate choice. Core selection remains separate.',
     parameters: Type.Object({ seq: Type.Integer({ minimum: 0 }) }),
     execute: async (args, api) => {
       try {
@@ -450,13 +475,8 @@ export function memoryTools(
           return toolErr(
             'Promotion needs a verified explicit user save request or Memory panel review',
           );
-        const target =
-          candidate.supersedes === null
-            ? null
-            : deps.scopes
-                .memory(scope)
-                .dump()
-                .items.find((row) => row.seq === candidate.supersedes);
+        // Activation is not replacement: the candidate's supersede hint stays
+        // inert. Tian replaces a fact through the panel's replacement action.
         const result = data.promote(
           scope,
           args.seq,
@@ -465,17 +485,13 @@ export function memoryTools(
             sourceRef: evidenceRef(conversationId, input),
             method: 'explicit-save',
           },
-          target
-            ? {
-                seq: target.seq,
-                content: target.content,
-                conditions: target.conditions,
-                validUntil: target.validUntil,
-              }
-            : undefined,
         );
+        const note =
+          candidate.supersedes === null
+            ? ''
+            : ` #${candidate.supersedes} stays active; use the Memory panel to confirm that this revision replaces it.`;
         return toolText(
-          `#${result.memory.seq} active; Core selection is separate.`,
+          `#${result.memory.seq} active; Core selection is separate.${note}`,
         );
       } catch (error) {
         return toolErr(String(error));

@@ -1014,18 +1014,39 @@ test('a Tian turn still reports up when a delegated task closes', async (t) => {
   assert.equal(wake.taskId, task.id);
 });
 
-test('remember source:user in a Tian turn stores user_confirmed', async (t) => {
+test('remember source:user in a Tian turn records the source but waits for review', async (t) => {
   const f = fixture(t);
   f.turn = { entryId: '9', kind: 'user', text: '我们周五发布' };
   const result = await f
     .tool('remember')
     .execute({ text: '我们周五发布', source: 'user' }, api(f.managerConv));
-  assert.match(toolText(result), /user-confirmed/);
+  assert.match(toolText(result), /agent-inferred/);
   const row = f.db.sqlite
-    .prepare('SELECT trust_level, source_ref FROM memories WHERE seq = 0')
-    .get() as { trust_level: string; source_ref: string };
-  assert.equal(row.trust_level, 'user_confirmed');
+    .prepare(
+      'SELECT trust_level, source_ref, status FROM memories WHERE seq = 0',
+    )
+    .get() as { trust_level: string; source_ref: string; status: string };
+  // Verbatim user wording confirms the source, not the stored text: ordinary
+  // conversation must not activate a memory without review.
+  assert.equal(row.trust_level, 'agent_inferred');
+  assert.equal(row.status, 'candidate');
   assert.equal(row.source_ref, `conv:${f.managerConv}#9`);
+
+  // An anchored save request is the tool-side confirmation. A new call id is
+  // used because the durable operation id is derived from taskId and callId.
+  f.turn = { entryId: '10', kind: 'user', text: '记住：我们周五发布' };
+  const saved = await f
+    .tool('remember')
+    .execute(
+      { text: '我们周五发布', source: 'user' },
+      api(f.managerConv, 'c2'),
+    );
+  assert.match(toolText(saved), /user-confirmed/);
+  const reviewed = f.db.sqlite
+    .prepare('SELECT trust_level, status FROM memories WHERE seq = 0')
+    .get() as { trust_level: string; status: string };
+  assert.equal(reviewed.trust_level, 'user_confirmed');
+  assert.equal(reviewed.status, 'active');
 });
 
 // ---- service-level tests ----------------------------------------------------

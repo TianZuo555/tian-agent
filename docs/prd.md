@@ -199,7 +199,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 - `memory_evidence` 保存多条证据：实际 `source_ref`、原文片段、来源 actor、`direct`/`paraphrase`/`inference` 关系与观察时间。`memory_confirmations` 保存独立确认记录（`explicit-save` / `review` / `legacy`）。
 - `memory_versions` 追加记录每次写入、取代、删除（操作者、原因、前后内容），支持审计。Evidence 表达事实依据；版本记录表达操作审计。
-- 操作者（谁执行写入）、来源（谁陈述事实）与确认（谁审核存储正文）分开；`source: "user"` 需要当前请求确实由真实用户轮次发起的 Runtime 证据，系统唤醒/通知不算，否则降为 `agent_inferred`。确认必须是真实用户操作或经服务校验的明确保存请求；历史引用只提供证据，不能授权确认。
+- 操作者（谁执行写入）、来源（谁陈述事实）与确认（谁审核存储正文）分开；`source: "user"` 需要当前请求确实由真实用户轮次发起的 Runtime 证据，系统唤醒/通知不算，否则降为 `agent_inferred`。确认只来自真实用户操作（Memory 面板审核）或经服务校验的明确保存请求（锚定的 `记住：<正文>`）；用户原话与模型提炼的正文相同只证明来源，不构成确认，条目仍是候选。历史引用只提供证据，不能授权确认。
 - 证据引用由服务校验存在、属于写入 scope 且片段确在原文中；模型不能伪造引用。
 - 外部工具结果和第三方内容不得以高优先级指令的形式进入 Prompt。
 - 现有 `LOG.txt` 一次性导入；旧 `TREE/` 只移入 legacy、不再读取；之后单向导出供 Worker 与人阅读。升级时旧记录获得 `legacy` 证据（原 `user_confirmed` 另有 `legacy` 确认记录），原有正文、状态、版本与候选全部保留。

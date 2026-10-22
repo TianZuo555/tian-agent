@@ -258,7 +258,7 @@ export const zh: Partial<Messages> = {
   'memory.forgetReasonPlaceholder': '为什么要遗忘这条记忆？',
   'memory.forgetReasonAria': '遗忘原因',
   'memory.forgetSubmit': '遗忘',
-  'memory.replaces': '取代 #{seq}',
+  'memory.replaces': '建议取代 #{seq}',
   'memory.statusDeleted': '已删除',
   'memory.statusSuperseded': '已被取代',
   'memory.savedDropped':

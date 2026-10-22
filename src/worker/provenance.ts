@@ -22,8 +22,12 @@ export interface InputEvidence {
 export interface EvidenceVerdict {
   confirmed: boolean;
   reason: string;
-  /** Explicit intent permits activation; source authorship alone does not. */
-  saveRequested?: boolean;
+  /**
+   * An anchored save request (`记住：…` / `remember: …`) is the only tool-side
+   * confirmation. A statement equal to the whole user turn confirms only the
+   * source: the memory stays a candidate until Tian reviews it.
+   */
+  saveRequested: boolean;
 }
 
 /** Whitespace-only normalization; case and punctuation are preserved. */
@@ -41,6 +45,7 @@ export function verifyUserEvidence(
   if (!input || input.kind !== 'user')
     return {
       confirmed: false,
+      saveRequested: false,
       reason:
         'the current request was not started by Tian (system wake or worker input), so it is agent_inferred',
     };
@@ -49,6 +54,7 @@ export function verifyUserEvidence(
   if (!normalizedClaim || !normalizedTurn)
     return {
       confirmed: false,
+      saveRequested: false,
       reason: 'the current user input is empty, so it is agent_inferred',
     };
   // Only a complete, anchored save command may shed its command prefix.
@@ -71,10 +77,12 @@ export function verifyUserEvidence(
     return {
       confirmed: true,
       saveRequested: false,
-      reason: 'Tian stated exactly this in the current user turn',
+      reason:
+        'Tian stated exactly this in the current user turn, so the source is confirmed',
     };
   return {
     confirmed: false,
+    saveRequested: false,
     reason:
       "the current user turn is not this exact statement, so it is agent_inferred — record Tian's exact words (or ask Tian to confirm) to have it confirmed",
   };

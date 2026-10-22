@@ -332,6 +332,11 @@ export class MemoryStore {
       this.scopeId,
     ).map(toMemory);
   }
+  private isExpired(memory: MemoryRow): boolean {
+    return memory.validUntil !== null && memory.validUntil !== undefined
+      ? memory.validUntil <= new Date().toISOString()
+      : false;
+  }
   private matchingTx(
     identity: MemoryIdentity,
     statuses: MemoryStatus[],
@@ -568,7 +573,12 @@ export class MemoryStore {
       );
       memory = this.bySeqTx(memory.seq)!;
       if (input.confirmation && memory.status === 'candidate') {
-        this.promote(memory.seq, actor, 'verified explicit user confirmation');
+        this.promote(
+          memory.seq,
+          actor,
+          'verified explicit user confirmation',
+          input.confirmation,
+        );
         memory = this.bySeqTx(memory.seq)!;
       }
       let coreDropped = false;
@@ -593,6 +603,10 @@ export class MemoryStore {
         if (memory.status !== 'active')
           throw new Error(
             'memory is a candidate; promote it before selecting it into Core',
+          );
+        if (this.isExpired(memory))
+          throw new Error(
+            `memory #${memory.seq} expired on ${memory.validUntil}; expired memories cannot enter Core`,
           );
         this.assertCoreFitsTx(
           [...this.selectedTx(), { ...memory, core: true }],
@@ -916,6 +930,10 @@ export class MemoryStore {
           throw new Error(
             `memory #${seq} is ${memory.status}; only active memories can enter Core`,
           );
+        if (this.isExpired(memory))
+          throw new Error(
+            `memory #${seq} expired on ${memory.validUntil}; expired memories cannot enter Core`,
+          );
         if (memory.core) return { memory, changed: false };
         this.assertCoreFitsTx(
           [...this.selectedTx(), memory],
@@ -978,10 +996,12 @@ export class MemoryStore {
 
   /**
    * Promote a candidate: status becomes active, trust stays agent_inferred,
-   * and it does not enter Core automatically. If the candidate contradicts an
-   * active memory (`supersedes`), that memory is superseded in the same
-   * transaction. A target the user changed while the candidate was pending is
-   * not silently overwritten: promotion fails and the user must re-evaluate.
+   * and it does not enter Core automatically. Replacement happens only through
+   * an explicit `replacement` (the Memory panel's "confirm this replaces #seq"
+   * action); the candidate's `supersedes` is a review hint and stays inert, so
+   * ordinary activation lets both facts coexist. A target the user changed
+   * while the candidate was pending is not silently overwritten: promotion
+   * fails and the user must re-evaluate.
    */
   promote(
     seq: number,
@@ -1006,15 +1026,7 @@ export class MemoryStore {
           throw new Error(
             `active memory #${duplicate.seq} already says that; dismiss this candidate instead`,
           );
-        const target = replacement
-          ? this.replacementTx(replacement)
-          : memory.supersedes === null
-            ? null
-            : this.bySeqTx(memory.supersedes);
-        if (!replacement && target && target.status !== 'active')
-          throw new Error(
-            `memory #${target.seq} is ${target.status} since this candidate was extracted; dismiss it and revise the current memory instead`,
-          );
+        const target = replacement ? this.replacementTx(replacement) : null;
         const now = new Date().toISOString();
         this.run(
           'UPDATE memories SET status = ?, updated_at = ? WHERE id = ?',

@@ -262,7 +262,7 @@ export const en = {
   'memory.forgetReasonPlaceholder': 'Why should this be forgotten?',
   'memory.forgetReasonAria': 'Forget reason',
   'memory.forgetSubmit': 'Forget',
-  'memory.replaces': 'replaces #{seq}',
+  'memory.replaces': 'suggests replacing #{seq}',
   'memory.statusDeleted': 'deleted',
   'memory.statusSuperseded': 'superseded',
   'memory.savedDropped':

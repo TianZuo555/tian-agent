@@ -359,7 +359,7 @@ test('exact duplicates reuse the row and append evidence without reviving histor
   assert.equal(reAdded.memory.seq, 3);
 });
 
-test('candidates stay out of Core, are never auto-promoted by repeats, and stale supersede targets fail', (t) => {
+test('candidates stay out of Core, are never auto-promoted by repeats, and activation never replaces', (t) => {
   const f = fixture(t);
   const memory = f.scopes.memory('p1');
   const old = memory.remember({
@@ -393,27 +393,29 @@ test('candidates stay out of Core, are never auto-promoted by repeats, and stale
     'candidate',
   );
 
-  // The user revises the target while the candidate is pending: promotion must
-  // not silently supersede the newer fact.
+  // The user revises the target while the candidate is pending.
   memory.revise(
     old.memory.seq,
     'We decided to deploy on Sundays',
     'user corrected the day',
     'user',
   );
-  assert.throws(
-    () => memory.promote(candidate.seq),
-    /since this candidate was extracted/,
-  );
+
+  // Ordinary activation ignores the supersede hint: both facts coexist and the
+  // current one keeps Core. Only the explicit replacement action supersedes.
+  const activated = memory.promote(candidate.seq);
+  assert.equal(activated.memory.status, 'active');
+  assert.equal(activated.superseded, null);
   assert.equal(
     dump(f.scopes, 'p1').items.find((item) => item.seq === candidate.seq)
       ?.status,
-    'candidate',
+    'active',
   );
-  // The current fact is intact and still selected.
   assert.match(memory.wake(), /Sundays/);
+  assert.match(memory.recall('Mondays'), /Mondays/);
 
-  // Promoting a candidate with a live target keeps it out of Core.
+  // Promoting a candidate with a live target keeps it out of Core, and the
+  // explicit replacement is the only path that supersedes.
   const other = memory.candidate({
     text: 'We decided to deploy on Tuesdays',
     kind: 'decision',
@@ -426,7 +428,7 @@ test('candidates stay out of Core, are never auto-promoted by repeats, and stale
   const promoted = memory.promote(other.seq, 'user');
   assert.equal(promoted.memory.status, 'active');
   assert.equal(promoted.memory.core, false);
-  assert.equal(promoted.superseded?.status, 'superseded');
+  assert.equal(promoted.superseded, null);
   assert.doesNotMatch(memory.wake(), /Tuesdays/);
   assert.match(memory.recall('Tuesdays'), /Tuesdays/);
 });
