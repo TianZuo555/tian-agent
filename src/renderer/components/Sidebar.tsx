@@ -572,7 +572,7 @@ function AddProjectDialog({
           className="contents"
           onSubmit={async (e) => {
             e.preventDefault();
-            if (!name.trim() || !path.trim()) return;
+            if (!name.trim() || !path.trim() || !managerName.trim()) return;
             await actions.addProject(
               name.trim(),
               path.trim(),
@@ -622,6 +622,7 @@ function AddProjectDialog({
                 id={`${id}-manager-name`}
                 value={managerName}
                 maxLength={200}
+                required
                 placeholder={t('project.managerNamePlaceholder')}
                 aria-describedby={`${id}-manager-name-hint`}
                 onChange={(e) => setManagerName(e.target.value)}
@@ -635,7 +636,10 @@ function AddProjectDialog({
             <DialogClose render={<Button variant="ghost" />}>
               {t('common.cancel')}
             </DialogClose>
-            <Button type="submit" disabled={!name.trim() || !path.trim()}>
+            <Button
+              type="submit"
+              disabled={!name.trim() || !path.trim() || !managerName.trim()}
+            >
               {t('sidebar.addProject')}
             </Button>
           </DialogFooter>

@@ -125,6 +125,7 @@ function fixture(t: TestContext): Fixture {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: '阿七',
   });
   db.addProject({
     id: 'p-2',
@@ -136,6 +137,7 @@ function fixture(t: TestContext): Fixture {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: '小七',
   });
   scopes.ensureDirs('p-1');
   scopes.ensureDirs('p-2');
@@ -612,19 +614,65 @@ test('manager memory writes are locked to its own project', async (t) => {
     .tool('remember')
     .execute({ text: 'release branch is cut on Mondays' }, api(f.managerConv));
   assert.match(toolText(ok), /\[p-1\]/);
-  const other = await f
-    .tool('remember')
-    .execute({ text: 'beta uses pnpm', scope: 'p-2' }, api(f.managerConv));
-  assert.match(toolText(other), /only this project/);
-  const global = await f
+  // The write tools have no scope or target: extra arguments change nothing.
+  await f
     .tool('remember')
     .execute(
-      { text: 'Tian likes dark mode', target: 'global' },
-      api(f.managerConv),
+      { text: 'beta uses pnpm', scope: 'p-2', target: 'global' },
+      api(f.managerConv, 'c2'),
     );
-  assert.match(toolText(global), /only this project/);
+  assert.deepEqual(
+    f.scopes
+      .memory('p-1')
+      .dump()
+      .items.map((item) => item.content),
+    ['release branch is cut on Mondays', 'beta uses pnpm'],
+  );
+  assert.equal(f.scopes.memory('global').dump().items.length, 0);
+  assert.equal(f.scopes.memory('p-2').dump().items.length, 0);
+  // General is read-only context: readable, marked, and never a write target.
+  f.scopes.memory('global').remember({ text: 'Tian likes dark mode' });
+  const general = await f
+    .tool('recall')
+    .execute({ query: 'dark mode', scope: 'global' }, api(f.managerConv));
+  assert.match(toolText(general), /read-only, kept by the chief/);
+  assert.match(toolText(general), /Tian likes dark mode/);
+  await f
+    .tool('forget')
+    .execute({ seq: 0, reason: 'test' }, api(f.managerConv, 'c3'));
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'active');
+  assert.equal(f.scopes.memory('p-1').dump().items[0].status, 'deleted');
+  const other = await f
+    .tool('recall')
+    .execute({ query: 'pnpm', scope: 'beta' }, api(f.managerConv));
+  assert.match(toolText(other), /only this project's and global memory/);
 });
 
+test("the manager's Core holds General and its project; the chief's holds General only", async (t) => {
+  const f = fixture(t);
+  f.scopes
+    .memory('global')
+    .remember({ text: 'Tian prefers Chinese', core: true });
+  f.scopes
+    .memory('p-1')
+    .remember({ text: 'alpha ships on Fridays', core: true });
+  const managerCore = managerExtension(f.deps).sections?.find(
+    (entry) => entry.key === 'memory',
+  );
+  assert.ok(managerCore);
+  const managed = String(
+    await managerCore.render(
+      { conversationId: f.managerConv } as never,
+      {} as never,
+    ),
+  );
+  assert.match(managed, /\[global\][\s\S]*Tian prefers Chinese/);
+  assert.match(managed, /\[project: alpha\][\s\S]*alpha ships on Fridays/);
+  const chief = chiefSurface(f);
+  const chiefCore = String(await chief.memory('chief-conv'));
+  assert.match(chiefCore, /Tian prefers Chinese/);
+  assert.doesNotMatch(chiefCore, /alpha ships on Fridays/);
+});
 test('manager history stays inside its own project', async (t) => {
   const f = fixture(t);
   await f
@@ -712,11 +760,15 @@ function chiefSurface(f: Fixture) {
   });
   const state = chief.sections?.find((entry) => entry.key === 'state');
   if (!state) throw new Error('Missing state section');
+  const memory = chief.sections?.find((entry) => entry.key === 'memory');
+  if (!memory) throw new Error('Missing memory section');
   const listScopes = chief.tools?.find((entry) => entry.name === 'list_scopes');
   if (!listScopes) throw new Error('Missing list_scopes');
   return {
     state: (conversationId: string) =>
       String(state.render({ conversationId } as never, {} as never) as unknown),
+    memory: async (conversationId: string) =>
+      String(await memory.render({ conversationId } as never, {} as never)),
     listScopes: async () =>
       toolText(
         await (listScopes as unknown as ExecutableTool).execute(
@@ -727,95 +779,33 @@ function chiefSurface(f: Fixture) {
   };
 }
 
-test('a named manager appears in <state> and list_scopes; an unnamed one reads (未命名)', async (t) => {
+test('every project lists its manager by name in <state> and list_scopes', async (t) => {
   const f = fixture(t);
   const chief = chiefSurface(f);
-  f.db.updateProject('p-1', { managerName: '阿七' });
   const state = await chief.state('chief-conv');
-  // Both projects are listed; the one without a manager says 无.
   assert.match(state, /- alpha \(.*\) — manager: 阿七/);
-  assert.match(state, /- beta \(.*\) — manager: 无/);
+  assert.match(state, /- beta \(.*\) — manager: 小七/);
   // The current scope header carries the manager too.
   assert.match(state, /scope: alpha \(.*\) — manager: 阿七/);
   const scopes = await chief.listScopes();
   assert.match(scopes, /alpha \(.*\) — manager: 阿七/);
-  assert.match(scopes, /beta \(.*\) — manager: 无/);
-  // A name with no bound manager is marked (未配置): it is a label, not one.
-  f.db.updateProject('p-2', { managerName: '小七' });
-  assert.match(
-    await chief.state('chief-conv'),
-    /- beta \(.*\) — manager: 小七 \(未配置\)/,
-  );
-  assert.equal(f.db.hasManager('p-2'), false);
-  // Once the manager is opened, a bound but unnamed project reads (未命名).
-  f.db.mapConversation('mgr-beta', 'p-2');
-  f.db.bindSession(
-    { channel: 'manager', externalId: 'p-2', scopeId: 'p-2' },
-    'mgr-beta',
-  );
-  f.db.updateProject('p-2', { managerName: null });
-  assert.match(
-    await chief.state('chief-conv'),
-    /- beta \(.*\) — manager: \(未命名\)/,
-  );
-  // A bound and named manager reads its name.
-  f.db.updateProject('p-2', { managerName: '小七' });
-  assert.match(
-    await chief.state('chief-conv'),
-    /- beta \(.*\) — manager: 小七/,
-  );
-  // General has no manager line of its own.
-  assert.doesNotMatch(await chief.state('mgr-beta'), /scope: General.*manager/);
+  assert.match(scopes, /beta \(.*\) — manager: 小七/);
+  assert.doesNotMatch(state, /无|未配置|未命名/);
 });
-
-test('delegate and send_manager_msg refuse a project with no manager, even when named', async (t) => {
-  const f = fixture(t);
-  f.db.updateProject('p-2', { managerName: '阿七' });
-  // p-2 has a name but no bound manager conversation: no empty task appears.
-  const before = f.db.listTasks('p-2').length;
-  const delegated = await f
-    .chiefTool('delegate')
-    .execute(
-      { project: 'beta', title: 'triage', briefing: 'look at CI' },
-      api('chief-conv'),
-    );
-  assert.equal(delegated.isError, true);
-  assert.match(
-    toolText(delegated),
-    /project 'beta' has no manager configured — open its manager first/,
-  );
-  const sent = await f
-    .chiefTool('send_manager_msg')
-    .execute({ project: 'beta', body: 'hi' }, api('chief-conv'));
-  assert.equal(sent.isError, true);
-  assert.match(
-    toolText(sent),
-    /project 'beta' has no manager configured — open its manager first/,
-  );
-  assert.equal(f.db.listTasks('p-2').length, before);
-  assert.equal(f.db.listManagerMessages('p-2').length, 0);
-});
-
 test('list_manager_msgs names the manager instead of a bare (no messages)', async (t) => {
   const f = fixture(t);
-  f.db.updateProject('p-1', { managerName: '阿七' });
   const named = await f
     .chiefTool('list_manager_msgs')
     .execute({ project: 'alpha' }, api('chief-conv'));
   assert.match(toolText(named), /no messages with 阿七 yet/);
-  const unnamed = await f
-    .chiefTool('list_manager_msgs')
-    .execute({ project: 'beta' }, api('chief-conv'));
-  assert.match(toolText(unnamed), /has no manager configured/);
   const unknown = await f
     .chiefTool('list_manager_msgs')
     .execute({ project: 'eta' }, api('chief-conv'));
   assert.match(toolText(unknown), /Unknown project: eta/);
 });
-
 // ---- manager_name storage (D14) -------------------------------------------
 
-test('a v6 database gains an optional manager_name without losing projects', (t) => {
+test('a v6 database gains a manager_name, backfilled from the project name', (t) => {
   const root = temporary(t);
   const dataDir = join(root, 'data');
   mkdirSync(dataDir, { recursive: true });
@@ -844,7 +834,8 @@ test('a v6 database gains an optional manager_name without losing projects', (t)
   const migrated = db.getProject('p-old')!;
   assert.equal(migrated.name, 'legacy');
   assert.equal(migrated.rootPath, '/tmp/legacy');
-  assert.equal(migrated.managerName, null);
+  // D18: every project has a named manager; old rows take the project name.
+  assert.equal(migrated.managerName, 'legacy');
   db.updateProject('p-old', { managerName: '阿七' });
   db.close();
 
@@ -876,37 +867,43 @@ test('a v6 database gains an optional manager_name without losing projects', (t)
   }
 });
 
-test('add and update project carry the manager name through the command surface', async (t) => {
+test('adding a project requires a manager name and opens its manager', async (t) => {
   const f = await serviceFixture(t);
   const service = f.service as unknown as {
     addProject: (
       name: string,
       rootPath: string,
-      managerName?: string | null,
-    ) => { id: string; name: string; managerName?: string | null }[];
+      managerName: string,
+    ) => Promise<{ id: string; name: string; managerName?: string }[]>;
     updateProject: (
       id: string,
-      patch: { managerName?: string | null },
-    ) => Promise<{ id: string; name: string; managerName?: string | null }[]>;
-    listScopes: () => {
-      id: string;
-      name: string;
-      managerName?: string | null;
-    }[];
+      patch: { managerName?: string },
+    ) => Promise<{ id: string; name: string; managerName?: string }[]>;
+    removeProject: (id: string) => Promise<unknown>;
+    listScopes: () => { id: string; name: string; managerName?: string }[];
   };
   const projectDir = join(f.root, 'named');
   mkdirSync(projectDir, { recursive: true });
-  const added = service.addProject('named', projectDir, '  阿七  ');
-  const created = added.find((scope) => scope.name === 'named')!;
-  // Trimmed on write; naming does not create a manager.
-  assert.equal(created.managerName, '阿七');
-  assert.equal(f.db.hasManager(created.id), false);
-  const cleared = await service.updateProject(created.id, {
-    managerName: '   ',
-  });
+  await assert.rejects(
+    service.addProject('named', projectDir, '   '),
+    /needs a manager name/,
+  );
   assert.equal(
-    cleared.find((scope) => scope.id === created.id)!.managerName,
-    null,
+    service.listScopes().some((scope) => scope.name === 'named'),
+    false,
+  );
+  const added = await service.addProject('named', projectDir, '  阿七  ');
+  const created = added.find((scope) => scope.name === 'named')!;
+  // Trimmed on write, and the manager exists from the start.
+  assert.equal(created.managerName, '阿七');
+  const manager = f.db.managerConversation(created.id);
+  assert.ok(manager);
+  assert.equal(manager.role, 'manager');
+  // A blank rename keeps the name: a manager is never unnamed.
+  const kept = await service.updateProject(created.id, { managerName: '   ' });
+  assert.equal(
+    kept.find((scope) => scope.id === created.id)!.managerName,
+    '阿七',
   );
   const renamed = await service.updateProject(created.id, {
     managerName: '小七',
@@ -915,10 +912,26 @@ test('add and update project carry the manager name through the command surface'
     renamed.find((scope) => scope.id === created.id)!.managerName,
     '小七',
   );
+  // An untouched manager goes with its project.
+  await service.removeProject(created.id);
+  assert.equal(f.db.getProject(created.id), undefined);
+  assert.equal(f.db.managerConversation(created.id), undefined);
   assert.equal(
-    service.listScopes().find((scope) => scope.id === created.id)!.managerName,
-    '小七',
+    f.db
+      .listConversations()
+      .some((row) => row.conversationId === manager.conversationId),
+    false,
   );
+});
+
+test('service start gives every older project its manager', async (t) => {
+  const f = await serviceFixture(t);
+  // serviceFixture inserts p-1 straight into the database after start.
+  assert.equal(f.db.managerConversation('p-1'), undefined);
+  await (
+    f.server.service as unknown as { ensureManagers(): Promise<void> }
+  ).ensureManagers();
+  assert.equal(f.db.managerConversation('p-1')?.role, 'manager');
 });
 
 // ---- Tian turns -------------------------------------------------------------
@@ -1069,6 +1082,7 @@ async function serviceFixture(t: TestContext): Promise<ServiceFixture> {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: '阿七',
   });
   const service = server.service as unknown as ServiceFixture['service'];
   return { server, service, db, root };

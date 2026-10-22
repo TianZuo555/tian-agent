@@ -5,8 +5,8 @@ export interface ScopeInfo {
   kind: 'global' | 'project';
   name: string;
   rootPath: string;
-  /** Tian's name for this project's manager; null/absent = unnamed. */
-  managerName?: string | null;
+  /** The project's manager name (D18); absent for General. */
+  managerName?: string;
   settings?: ProjectSettings | null;
 }
 
@@ -23,8 +23,8 @@ export type ProjectPatch = Partial<
   ProjectSettings & {
     name: string;
     rootPath: string;
-    /** Trimmed by the service; null or blank clears the name. */
-    managerName: string | null;
+    /** Trimmed by the service; a blank rename keeps the current name. */
+    managerName: string;
   }
 >;
 

@@ -91,7 +91,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 runTimeoutMin: Number(timeoutMin),
                 baseBranch: baseBranch.trim(),
                 promptPreamble: preamble,
-                managerName: managerName.trim() || null,
+                managerName: managerName.trim(),
               });
               setOpen(false);
             } catch (reason) {
@@ -174,6 +174,7 @@ export function ProjectSettingsDialog({ scope }: { scope: ScopeInfo }) {
                 id={`${id}-manager-name`}
                 value={managerName}
                 maxLength={200}
+                required
                 placeholder={t('project.managerNamePlaceholder')}
                 aria-describedby={`${id}-manager-name-hint`}
                 onChange={(event) => setManagerName(event.target.value)}

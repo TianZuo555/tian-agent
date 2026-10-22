@@ -47,6 +47,7 @@ function fixture(t: TestContext) {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   const scopes = new Scopes(join(dir, 'data', 'global'), db);
   return { dir, db, scopes, projectPath };
@@ -445,6 +446,7 @@ test('a failing first write cannot consume legacy import or cache an uncommitted
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   const data = new DataService(db, scopes, () => {});
   // First business write is invalid and must roll back cleanly.

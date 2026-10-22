@@ -19,6 +19,19 @@
 
 旧版的 `memory_nodes` 摘要树在数据库升级事务里改名为 `memory_nodes_retired`：只是保留现场，不参与任何读取，也不会在新数据库里创建。
 
+## 归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）
+
+| 角色    | 写入        | 注入的 Core              | 按需只读                              |
+| ------- | ----------- | ------------------------ | ------------------------------------- |
+| Chief   | 只写 Global | 只有 Global              | 任意项目的记忆与 Notes（带 `scope`）  |
+| Manager | 只写本项目  | Global + 本项目          | Global 记忆（`recall scope=global`）  |
+| Worker  | 不写        | 无（读导出的 MEMORY.md） | 本项目 `memory/MEMORY.md` 与 `notes/` |
+
+- 写工具（`remember` / `revise` / `forget` / `select` / `deselect`）没有 `scope` / `target` 参数：目标由角色固定，`#seq` 永远指向自己那份记忆，不会误改别人的条目。
+- 总管在项目会话里学到的项目事实不自己记，转交该项目的管理者（`send_manager_msg` 或 `delegate` 简报）；管理者在 Tian 直连时听到与项目无关的个人信息也不写——由 Tian 直接告诉总管。
+- 跨 scope 的只读结果带 `read-only` 头，标明所有者，避免模型把对方的 `#seq` 当成自己的去修订。
+- 自动提取（Memory Worker）与 Memory 面板仍按 scope 工作，不受角色限制：候选落在来源会话所在的 scope，用户在面板上的操作视为 user。
+
 ## Core Memory
 
 Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的小集合：
@@ -40,7 +53,7 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 
 ## 来源（Provenance）
 
-操作者（谁执行写入：user / chief / manager / worker）与来源（事实由谁陈述）分开记录。项目管理者的写入被锁定到其项目 scope——它可以读取 Global 记忆，但 `remember` / `revise` / `select` 等写操作只落在自己的项目里：
+操作者（谁执行写入：user / chief / manager / worker）与来源（事实由谁陈述）分开记录；写入目标由角色决定（见上方「归属」）：
 
 - 服务在真实用户 `submit` 时记录普通 `pi.user` 条目；Goal / Schedule / Run / Inbox 的唤醒用 `system.notification` 条目，Worker 输入用 `worker.input`。所有输入都可分页定位，不受最近 30 条限制。
 - `remember` / `revise` 的 `source: "user"` 只在存储语句与**当前用户输入整体**在规范化空白后**完全相等**时确认（大小写、否定、标点、路径都保留）。系统唤醒、Worker 输入、以及历史上以通知正文写入的 `pi.user` 条目都不算；截取、改写、翻译、概括一律降为 `agent_inferred`，工具结果说明原因并提示记录用户原话。确认与否和 `sourceRef` 绑定是两件事：即使不确认，也会绑定当前输入 entry 便于追溯。

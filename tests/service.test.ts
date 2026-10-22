@@ -144,7 +144,11 @@ test('the same external chat can bind separate sessions to different scopes', as
   const client = f.client();
   const project = join(f.root, 'project');
   mkdirSync(project);
-  const scopes = await client.invoke('addProject', ['project', project]);
+  const scopes = await client.invoke('addProject', [
+    'project',
+    project,
+    'Manager',
+  ]);
   const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
   const binding = {
     channel: 'telegram',
@@ -193,7 +197,11 @@ test('usage stats bucket assistant tokens by local day for each scope', async (t
   const client = f.client();
   const project = join(f.root, 'project');
   mkdirSync(project);
-  const scopes = await client.invoke('addProject', ['project', project]);
+  const scopes = await client.invoke('addProject', [
+    'project',
+    project,
+    'Manager',
+  ]);
   const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
   const agents = (
     f.server.service as unknown as {
@@ -348,7 +356,11 @@ test('openManager exposes the project manager conversation to Tian directly', as
   const client = f.client();
   const project = join(f.root, 'project');
   mkdirSync(project);
-  const scopes = await client.invoke('addProject', ['alpha', project]);
+  const scopes = await client.invoke('addProject', [
+    'alpha',
+    project,
+    'Manager',
+  ]);
   const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
   const manager = await client.invoke('openManager', [projectId]);
   assert.equal(manager.role, 'manager');

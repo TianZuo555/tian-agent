@@ -72,8 +72,8 @@ const DEFAULT_WAIT_SECONDS = 300;
  * The project manager's extension: one persistent conversation per project,
  * bound via channel 'manager'. It manages this project's tasks, memory,
  * notes and coding runs — no shell, no coding tools — and reports to the
- * chief over the durable manager_messages thread. Memory writes are locked
- * to this project; global memory is read-only context.
+ * chief over the durable manager_messages thread. It owns this project's
+ * memory and notes (D18); General memory is read-only context.
  */
 export function managerExtension(deps: ManagerDeps) {
   const { db, scopes, data } = deps;
@@ -105,7 +105,7 @@ DELEGATED TASKS. A wake starting '[delegated task #N from chief]' assigns task #
 
 REPORTING UP. The chief cannot see your work unless you say so. report_chief(text, task?) posts a status or decision — finished milestones, choices you took, blockers worth escalating. ask_chief(question, task?) blocks until the chief answers — only for decisions you genuinely cannot make (cross-project tradeoffs, missing credentials, an ambiguous delegation). Chief messages that are not answers wake you directly.
 
-MEMORY. You read global and this project's memory (injected below), but you write ONLY this project's — remember/revise/forget/select/deselect always target this project; global stays the chief's domain. Record project decisions, conventions and outcomes.
+MEMORY. You own this project's memory — the chief does not see it unless it looks it up, so everything detailed about the project lives with you: conventions, architecture, decisions, environment, outcomes, lessons. Both Cores are injected below: General (about Tian, kept by the chief) is read-only for you; remember/revise/forget/select/deselect always act on this project's memory. When the chief passes on a project fact, record it. A fact about Tian himself that is not about this project is the chief's: do not store it here and do not write it anywhere — Tian tells the chief directly.
 
 RUNS. dispatch gets a full briefing (the worker sees nothing else); dispatch(prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state>. send_run_msg answers a waiting worker or steers a run; list_runs, run_progress, read_run_report, read_run_diff and list_run_msgs follow progress. run_progress shows a live run's elapsed time, deadline, last words and recent tool calls — check it before dispatching a duplicate when a run goes quiet. stop_run(id, reason) ends an attempt going the wrong way and keeps its worktree for review or a follow-up; discarding stays Tian's call. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
 
@@ -256,11 +256,18 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
               "a project manager reads only this project's and global memory",
             );
         }
+        // General #seq numbers are not this project's: say so, so revise /
+        // forget are never aimed at them.
+        const header =
+          scope === GLOBAL_SCOPE
+            ? "[General — read-only, kept by the chief; these #seq are not this project's.]\n"
+            : '';
         return text(
-          scopes.memory(scope).recall(args.query, {
-            includeHistory: args.include_history ?? false,
-            limit: args.limit,
-          }),
+          header +
+            scopes.memory(scope).recall(args.query, {
+              includeHistory: args.include_history ?? false,
+              limit: args.limit,
+            }),
         );
       } catch (e) {
         return err(String(e));
@@ -782,7 +789,11 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
 
   return defineExtension({
     name: 'tian-manager',
-    sections: [preamble, coreMemorySection(deps), stateSection],
+    sections: [
+      preamble,
+      coreMemorySection(deps, { withProject: true }),
+      stateSection,
+    ],
     tools: [
       addTask,
       listTasks,
@@ -806,7 +817,11 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
           );
         },
       }),
-      ...memoryTools(deps, { lockToOwnScope: true, actor: 'manager' }),
+      ...memoryTools(deps, {
+        actor: 'manager',
+        ownScope: own,
+        owner: "this project's memory",
+      }),
       recall,
       listNotes,
       readNote,

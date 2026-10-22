@@ -76,6 +76,7 @@ function fixture(
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   return {
     dir,

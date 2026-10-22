@@ -32,6 +32,14 @@ export const ScopeParam = Type.Optional(
   }),
 );
 
+/** Scope for the chief's memory and notes reads: General unless named. */
+export const ReadScopeParam = Type.Optional(
+  Type.String({
+    description:
+      'Default: General. A project name or id reads that project read-only — its manager owns it.',
+  }),
+);
+
 export function resolveScope(
   deps: { db: Db },
   conversationId: string,
@@ -74,42 +82,32 @@ function droppedNote(coreDropped: boolean): string {
 }
 
 /**
- * Memory-writing tools shared by chief and manager. With `lockToOwnScope`
- * (the project manager), writes resolve to the calling conversation's own
- * scope only — never global, never another project. Reading tools (recall,
- * select, deselect) live in the role's extension.
+ * Memory-writing tools shared by chief and manager. Each role owns exactly
+ * one write target (D18): the chief writes General memory, a project manager
+ * writes its own project's memory. `ownScope` resolves that target for the
+ * calling conversation; the tools take no scope parameter, so neither role
+ * can write the other's memory. Reading tools (recall) live in the role's
+ * extension.
  */
 export function memoryTools(
   deps: MemoryToolDeps,
-  opts: { lockToOwnScope?: boolean; actor?: 'chief' | 'manager' } = {},
+  opts: {
+    actor: 'chief' | 'manager';
+    /** The one scope this role writes, for the calling conversation. */
+    ownScope: (conversationId: string) => string;
+    /** How descriptions name that memory, e.g. "General memory". */
+    owner: string;
+  },
 ) {
   const { data } = deps;
-  const actor = opts.actor ?? 'chief';
-
-  /** Resolve a write target; managers are confined to their own scope. */
-  const writeScope = (
-    conversationId: string,
-    param: string | undefined,
-    target?: 'global' | 'project',
-  ): string => {
-    const own = deps.db.conversationScope(conversationId);
-    if (!opts.lockToOwnScope)
-      return target === 'global'
-        ? GLOBAL_SCOPE
-        : resolveScope(deps, conversationId, param);
-    if (target === 'global')
-      throw new Error("a project manager writes only this project's memory");
-    const resolved = resolveScope(deps, conversationId, param);
-    if (resolved !== own)
-      throw new Error("a project manager writes only this project's memory");
-    return own;
-  };
+  const { actor, owner } = opts;
+  const writeScope = (conversationId: string): string =>
+    opts.ownScope(conversationId);
 
   const remember = defineTool({
     name: 'remember',
     replay: 'safe',
-    description:
-      "Record one memory: a single line (<=1000 characters) of a lasting fact, decision, preference or outcome. New memories are searchable but do NOT enter Core Memory unless you pass core=true; select them explicitly when they must be visible every turn. Choose target 'global' for facts about Tian, 'project' for facts about the current or a named project.",
+    description: `Record one memory in ${owner}: a single line (<=1000 characters) of a lasting fact, decision, preference or outcome. New memories are searchable but do NOT enter Core Memory unless you pass core=true; select them explicitly when they must be visible every turn.`,
     parameters: Type.Object({
       text: Type.String({ description: 'One line, <=1000 characters.' }),
       kind: Type.Optional(
@@ -136,18 +134,11 @@ export function memoryTools(
             'Also select into Core Memory. Over budget is rejected without writing anything.',
         }),
       ),
-      target: Type.Optional(
-        Type.Union([Type.Literal('global'), Type.Literal('project')], {
-          description:
-            'Default: this conversation\'s scope; "global" for the General memory.',
-        }),
-      ),
-      scope: ScopeParam,
     }),
     execute: async (args, api) => {
       try {
         const conversationId = String(api.conversationId);
-        const scope = writeScope(conversationId, args.scope, args.target);
+        const scope = writeScope(conversationId);
         const input = await deps.currentInput(conversationId);
         const verdict =
           args.source === 'user'
@@ -210,12 +201,11 @@ export function memoryTools(
             '"user" only when the correction equals Tian\'s current input (whitespace-normalized); excerpts and rewrites are stored agent_inferred. Default: agent.',
         }),
       ),
-      scope: ScopeParam,
     }),
     execute: async (args, api) => {
       try {
         const conversationId = String(api.conversationId);
-        const scope = writeScope(conversationId, args.scope);
+        const scope = writeScope(conversationId);
         const input = await deps.currentInput(conversationId);
         const verdict =
           args.source === 'user'
@@ -261,11 +251,10 @@ export function memoryTools(
         description: 'Memory number, as shown by #seq.',
       }),
       reason: Type.String({ description: 'Why the memory is being removed.' }),
-      scope: ScopeParam,
     }),
     execute: async (args, api) => {
       try {
-        const scope = writeScope(String(api.conversationId), args.scope);
+        const scope = writeScope(String(api.conversationId));
         data.forget(
           scope,
           args.seq,
@@ -287,11 +276,10 @@ export function memoryTools(
       'Select an active memory into Core Memory so it is injected every turn. Selection is explicit and bounded: if the rendered Core would exceed its token budget the call is rejected with current usage and nothing changes. Removing a memory from Core is deselect, not forget.',
     parameters: Type.Object({
       seq: Type.Integer({ minimum: 0 }),
-      scope: ScopeParam,
     }),
     execute: async (args, api) => {
       try {
-        const scope = writeScope(String(api.conversationId), args.scope);
+        const scope = writeScope(String(api.conversationId));
         const { memory, changed } = data.select(
           scope,
           args.seq,
@@ -316,11 +304,10 @@ export function memoryTools(
       'Remove a memory from Core Memory without forgetting it: it stays active and searchable with recall, and frees budget for other selections.',
     parameters: Type.Object({
       seq: Type.Integer({ minimum: 0 }),
-      scope: ScopeParam,
     }),
     execute: async (args, api) => {
       try {
-        const scope = writeScope(String(api.conversationId), args.scope);
+        const scope = writeScope(String(api.conversationId));
         const { memory, changed } = data.deselect(
           scope,
           args.seq,
@@ -342,36 +329,43 @@ export function memoryTools(
 }
 
 /**
- * The Core Memory snapshot section shared by chief and manager: global plus
- * the conversation's own scope, rendered once per conversation and refreshed
- * only when a new input turn starts AND the scope's memory version changed.
- * The rendered text lands in the cacheable system-prompt prefix; writes
- * within a turn reach the model through the tool results instead.
+ * The Core Memory snapshot section shared by chief and manager. The chief
+ * sees General Core only; a manager sees General plus its own project's Core
+ * (D18) — project detail lives with the project's manager, not in every
+ * chief prompt. Rendered once per conversation and refreshed only when a new
+ * input turn starts AND a rendered scope's memory version changed. The text
+ * lands in the cacheable system-prompt prefix; writes within a turn reach
+ * the model through the tool results instead.
  */
-export function coreMemorySection(deps: {
-  scopes: Scopes;
-  db: Db;
-  latestInputEntry: (conversationId: string) => Promise<string | null>;
-}) {
+export function coreMemorySection(
+  deps: {
+    scopes: Scopes;
+    db: Db;
+    latestInputEntry: (conversationId: string) => Promise<string | null>;
+  },
+  opts: { withProject: boolean },
+) {
   const snapshots = new Map<
     string,
     { text: string; version: string; turn: string | null }
   >();
-  const renderMemory = (scope: string): string => {
-    const parts: string[] = [];
-    parts.push(`[global]\n${deps.scopes.memory(GLOBAL_SCOPE).wake()}`);
-    if (scope !== GLOBAL_SCOPE) {
-      const project = deps.db.getProject(scope);
-      parts.push(
-        `[project: ${project?.name ?? scope}]\n${deps.scopes.memory(scope).wake()}`,
-      );
-    }
-    return parts.join('\n\n');
+  /** The scopes this role's Core renders, General first. */
+  const rendered = (conversationId: string): string[] => {
+    const scope = deps.db.conversationScope(conversationId);
+    return opts.withProject && scope !== GLOBAL_SCOPE
+      ? [GLOBAL_SCOPE, scope]
+      : [GLOBAL_SCOPE];
   };
+  const label = (scope: string): string =>
+    scope === GLOBAL_SCOPE
+      ? 'global'
+      : `project: ${deps.db.getProject(scope)?.name ?? scope}`;
   return section('memory', async (input) => {
     const conversationId = String(input.conversationId);
-    const scope = deps.db.conversationScope(conversationId);
-    const version = `${deps.scopes.memory(GLOBAL_SCOPE).version()}/${scope === GLOBAL_SCOPE ? '' : deps.scopes.memory(scope).version()}`;
+    const scopes = rendered(conversationId);
+    const version = scopes
+      .map((scope) => deps.scopes.memory(scope).version())
+      .join('/');
     let turn: string | null;
     try {
       turn = await deps.latestInputEntry(conversationId);
@@ -384,9 +378,11 @@ export function coreMemorySection(deps: {
       cached.turn = turn; // new turn but unchanged memory: keep the snapshot
       return cached.text;
     }
-    const rendered = renderMemory(scope);
+    const text = scopes
+      .map((scope) => `[${label(scope)}]\n${deps.scopes.memory(scope).wake()}`)
+      .join('\n\n');
     if (snapshots.size > 200) snapshots.clear();
-    snapshots.set(conversationId, { text: rendered, version, turn });
-    return rendered;
+    snapshots.set(conversationId, { text, version, turn });
+    return text;
   });
 }

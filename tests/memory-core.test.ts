@@ -80,6 +80,7 @@ async function harness(t: TestContext): Promise<Harness> {
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
+    managerName: 'Manager',
   });
   scopes.ensureDirs('p1');
   const events = new EventLog(db);
@@ -213,7 +214,7 @@ test('remember binds the exact current input and confirms only verbatim user wor
   );
   // Core renders provenance (kind, trust, date, source) inside the budget.
   assert.match(
-    f.scopes.memory('p1').wake(),
+    f.scopes.memory('global').wake(),
     /#0 \[fact\] user_confirmed \d{4}-\d{2}-\d{2} conv:/,
   );
 
@@ -249,15 +250,15 @@ test('remember binds the exact current input and confirms only verbatim user wor
     toolText(await call(deselect, id, { seq: 0 })),
     /removed from Core; still active and searchable/,
   );
-  assert.doesNotMatch(f.scopes.memory('p1').wake(), /release 分支/);
-  assert.match(f.scopes.memory('p1').recall('release'), /release 分支/);
+  assert.doesNotMatch(f.scopes.memory('global').wake(), /release 分支/);
+  assert.match(f.scopes.memory('global').recall('release'), /release 分支/);
 
   const select = f.tool('select');
   assert.match(
     toolText(await call(select, id, { seq: 0 })),
     /selected into Core/,
   );
-  assert.match(f.scopes.memory('p1').wake(), /release 分支/);
+  assert.match(f.scopes.memory('global').wake(), /release 分支/);
 });
 
 test('provenance stays conservative: wakes and paraphrases never confirm', async (t) => {
@@ -422,9 +423,9 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
   assert.equal(row.source_ref, `conv:${id}#21`);
   assert.equal(row.core, 1);
   // The original fact is history, not Core, and never comes back.
-  assert.doesNotMatch(f.scopes.memory('p1').wake(), /我喝咖啡/);
+  assert.doesNotMatch(f.scopes.memory('global').wake(), /我喝咖啡/);
   assert.match(
-    f.scopes.memory('p1').recall('我喝咖啡', { includeHistory: true }),
+    f.scopes.memory('global').recall('我喝咖啡', { includeHistory: true }),
     /\(superseded\)/,
   );
 });
@@ -581,7 +582,7 @@ test('metadata growth can push a selected memory out of Core, reported not overf
 test('select replays are deduplicated: a replayed agent select cannot undo a user deselect', async (t) => {
   const f = await harness(t);
   const conversation = await f.openConversation('p1');
-  const memory = f.scopes.memory('p1');
+  const memory = f.scopes.memory('global');
   memory.remember({ text: 'Resident fact' });
   // Agent selects (its durable call id), the user then deselects via IPC.
   await call(
@@ -590,7 +591,7 @@ test('select replays are deduplicated: a replayed agent select cannot undo a use
     { seq: 0 },
     'agent-call',
   );
-  f.data.deselect('p1', 0, 'user');
+  f.data.deselect('global', 0, 'user');
   assert.equal(memory.dump().items[0].core, false);
   // The agent call replays (durable retry): the user's result stands.
   await call(
@@ -671,10 +672,10 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
   // The budget covers the WHOLE returned string. Too small for even the
   // omission footer is an explicit argument error, never an over-budget body.
   assert.throws(
-    () => f.scopes.memory('p1').recall('memory', { budget: 1 }),
+    () => f.scopes.memory('global').recall('memory', { budget: 1 }),
     /too small for this result/,
   );
-  const tight = f.scopes.memory('p1').recall('memory', { budget: 40 });
+  const tight = f.scopes.memory('global').recall('memory', { budget: 40 });
   assert.ok(
     Math.ceil(Buffer.byteLength(tight, 'utf8') / 3) <= 40,
     `recall exceeded its budget: ${tight}`,
@@ -686,11 +687,13 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
     toolText(await call(recall, id, { query: '不存在的词汇' })),
     '(no matches)',
   );
-  // Scope isolation: the project memory is invisible from global.
-  assert.equal(
-    toolText(await call(recall, id, { query: 'SQLite', scope: 'global' })),
-    '(no matches)',
+  // Ownership: the chief wrote General, so the project's memory has none of
+  // it, and a project recall is marked read-only.
+  const projectRecall = toolText(
+    await call(recall, id, { query: 'SQLite', scope: 'p1' }),
   );
+  assert.match(projectRecall, /read-only/);
+  assert.match(projectRecall, /\(no matches\)$/);
 });
 
 test('long history: middle and tail of a tool result are searchable and pageable', async (t) => {
@@ -840,7 +843,7 @@ test('memory writes are idempotent under a replayed operation and duplicates add
   // The same durable call replayed: operationId is derived from task+callId, so
   // the second execution is a no-op rather than a second row.
   await call(remember, id, args, 'same-call');
-  assert.equal(f.scopes.memory('p1').dump().items.length, 1);
+  assert.equal(f.scopes.memory('global').dump().items.length, 1);
 
   // A different call with the same text returns the same id and records the
   // new evidence without duplicating the row.
@@ -851,7 +854,7 @@ test('memory writes are idempotent under a replayed operation and duplicates add
   });
   assert.match(toolText(again), /already says that/);
   assert.match(toolText(again), /evidence recorded/);
-  assert.equal(f.scopes.memory('p1').dump().items.length, 1);
+  assert.equal(f.scopes.memory('global').dump().items.length, 1);
   assert.equal(
     f.db.sqlite
       .prepare(
@@ -902,22 +905,30 @@ test('candidates never enter Core automatically, and a stale supersede target bl
   assert.doesNotMatch(memory.wake(), /Mondays/);
 });
 
-test('scope isolation covers memory, candidates and Core rendering', async (t) => {
+test('the chief owns General memory: writes land there, Core renders only General', async (t) => {
   const f = await harness(t);
   const project = await f.openConversation('p1');
   const general = await f.openConversation('global');
-  f.turn = { entryId: '1', kind: 'user', text: '项目用 SQLite' };
-  await call(f.tool('remember'), String(project.id), {
+  // A project's memory is its manager's; seed it directly.
+  f.scopes.memory('p1').remember({
     text: '项目用 SQLite',
+    core: true,
+    actor: 'manager',
+  });
+  // Even from a project conversation, the chief writes General memory.
+  f.turn = { entryId: '1', kind: 'user', text: 'Tian 偏好中文' };
+  const written = await call(f.tool('remember'), String(project.id), {
+    text: 'Tian 偏好中文',
     core: true,
     source: 'user',
   });
-  f.turn = { entryId: '2', kind: 'user', text: '全局偏好中文' };
+  assert.match(toolText(written), /\[global\]/);
+  // There is no scope or target escape hatch on the write tools.
+  f.turn = { entryId: '2', kind: 'user', text: '项目改用 pnpm' };
   await call(f.tool('remember'), String(general.id), {
-    text: '全局偏好中文',
-    target: 'global',
-    core: true,
-    source: 'user',
+    text: '项目改用 pnpm',
+    scope: 'p1',
+    target: 'project',
   });
   f.scopes.memory('p1').candidate({
     text: 'A project-only candidate',
@@ -926,33 +937,87 @@ test('scope isolation covers memory, candidates and Core rendering', async (t) =
     sourceRef: 'conv:1#3',
   });
 
-  assert.match(f.scopes.memory('p1').wake(), /项目用 SQLite/);
-  assert.doesNotMatch(f.scopes.memory('p1').wake(), /全局偏好中文/);
   assert.deepEqual(
     f.scopes
       .memory('global')
       .dump()
       .items.map((item) => item.content),
-    ['全局偏好中文'],
+    ['Tian 偏好中文', '项目改用 pnpm'],
   );
-  assert.match(f.scopes.memory('global').wake(), /全局偏好中文/);
-  assert.doesNotMatch(f.scopes.memory('global').wake(), /项目用 SQLite/);
+  assert.deepEqual(
+    f.scopes
+      .memory('p1')
+      .dump()
+      .items.map((item) => item.content),
+    ['项目用 SQLite', 'A project-only candidate'],
+  );
   assert.equal(
     f.scopes.memory('global').recall('project-only candidate'),
     '(no matches)',
   );
-  assert.match(
-    f.scopes.memory('p1').recall('project-only', { includeHistory: true }),
-    /\(candidate\)/,
+  // revise / forget / select act on General #seq, never the project's #0.
+  await call(f.tool('forget'), String(project.id), {
+    seq: 0,
+    reason: 'test',
+  });
+  assert.equal(f.scopes.memory('p1').dump().items[0].status, 'active');
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'deleted');
+  // The chief reads a project's memory only on demand, marked read-only.
+  const read = toolText(
+    await call(f.tool('recall'), String(general.id), {
+      query: 'SQLite',
+      scope: 'proj',
+    }),
   );
-  // The memory section renders Global and the project separately.
+  assert.match(read, /read-only; owned by Manager/);
+  assert.match(read, /项目用 SQLite/);
+  // The chief's Core is General only, even in a project conversation.
   const sections = f.chief.sections?.find((s) => s.key === 'memory');
   assert.ok(sections);
   const rendered = String(
     await sections.render({ conversationId: project.id } as never, {} as never),
   );
-  assert.match(rendered, /\[global\][\s\S]*全局偏好中文/);
-  assert.match(rendered, /\[project: proj\][\s\S]*项目用 SQLite/);
+  assert.match(rendered, /\[global\]/);
+  assert.doesNotMatch(rendered, /\[project/);
+  assert.doesNotMatch(rendered, /项目用 SQLite/);
+});
+
+test('the chief writes only General notes and reads project notes read-only', async (t) => {
+  const f = await harness(t);
+  const project = await f.openConversation('p1');
+  const id = String(project.id);
+  f.scopes.writeNote('p1', 'plan', 'project plan: ship M4');
+  await call(f.tool('write_note'), id, {
+    name: 'people',
+    content: 'Tian works with 阿七',
+    scope: 'p1',
+  });
+  assert.deepEqual(f.scopes.listNotes('global'), ['people.md']);
+  assert.deepEqual(f.scopes.listNotes('p1'), ['plan.md']);
+  await call(f.tool('append_note'), id, { name: 'people', content: '\nmore' });
+  assert.match(f.scopes.readNote('global', 'people'), /more/);
+  // Default reads are General; a scope reads the project, marked read-only.
+  assert.match(
+    toolText(await call(f.tool('list_notes'), id, {})),
+    /^people\.md$/,
+  );
+  const listed = toolText(
+    await call(f.tool('list_notes'), id, { scope: 'p1' }),
+  );
+  assert.match(listed, /read-only/);
+  assert.match(listed, /plan\.md/);
+  assert.match(
+    toolText(
+      await call(f.tool('read_note'), id, { name: 'plan', scope: 'p1' }),
+    ),
+    /read-only[\s\S]*ship M4/,
+  );
+  assert.match(
+    toolText(
+      await call(f.tool('search_notes'), id, { query: 'M4', scope: 'p1' }),
+    ),
+    /plan\.md:1/,
+  );
 });
 
 test('notifications drive Core snapshot refreshes while provenance stays system', async (t) => {
@@ -979,7 +1044,7 @@ test('notifications drive Core snapshot refreshes while provenance stays system'
 
   // A system wake after a revision from ANOTHER channel must not keep serving
   // the stale snapshot: any input kind is a turn marker.
-  f.scopes.memory('p1').deselect(0);
+  f.scopes.memory('global').deselect(0);
   f.turn = {
     entryId: '77',
     kind: 'system.notification',

@@ -23,11 +23,11 @@ export interface ProjectRow {
   baseBranch: string;
   promptPreamble: string;
   /**
-   * What Tian calls this project's manager ("阿七"). Display only: the manager
-   * exists iff a `channel_sessions` row with channel 'manager' is bound, so a
-   * name never implies a manager. NULL = not named yet.
+   * What Tian calls this project's manager ("阿七"). Required: every project
+   * has exactly one manager (D18), named when the project is added. Its bound
+   * conversation is created on first use.
    */
-  managerName: string | null;
+  managerName: string;
   createdAt: string;
 }
 export type ConversationRow = ConversationInfo;
@@ -178,9 +178,8 @@ export class Db {
     `);
       this.ensureColumns('projects', {
         allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
-        // D14: the chief addresses a project's manager by this name. Optional
-        // and display-only — the manager's existence is still the channel
-        // binding below, never this column.
+        // D14/D18: the chief and Tian address a project's manager by this
+        // name. Required by the service; older rows are backfilled below.
         manager_name: 'TEXT',
       });
       this.ensureColumns('conversations', {
@@ -242,6 +241,8 @@ export class Db {
       UPDATE tasks SET updated_at = COALESCE(updated_at, created_at);
       UPDATE runs SET execution_mode = 'in-place' WHERE branch IS NULL;
       UPDATE runs SET status = 'interrupted', review_status = 'discarded' WHERE status = 'discarded';
+      -- D18: every project has a named manager; unnamed projects take their own name.
+      UPDATE projects SET manager_name = name WHERE manager_name IS NULL OR trim(manager_name) = '';
     `);
       // Memory schema changes live in the same versioned transaction, so a
       // failure rolls back the version bump instead of marking an old schema
@@ -422,17 +423,8 @@ export class Db {
   close(): void {
     this.db.close();
   }
-  /**
-   * `managerName` is optional at the call sites (internal fixtures, older
-   * callers); an absent name is stored as NULL, meaning "not named yet".
-   */
-  addProject(
-    project: Omit<ProjectRow, 'createdAt' | 'managerName'> & {
-      managerName?: string | null;
-    },
-  ): void {
+  addProject(project: Omit<ProjectRow, 'createdAt'>): void {
     this.insert('projects', {
-      managerName: null,
       ...project,
       createdAt: new Date().toISOString(),
     });
@@ -449,8 +441,22 @@ export class Db {
       )
       .run(...entries.map(([, value]) => value as string | number), id);
   }
+  /** Drop a project with its (untouched) manager binding and conversation row. */
   removeProject(id: string): void {
-    this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `DELETE FROM conversations WHERE conversation_id IN
+            (SELECT conversation_id FROM channel_sessions WHERE channel = 'manager' AND external_id = ?)`,
+        )
+        .run(id);
+      this.db
+        .prepare(
+          "DELETE FROM channel_sessions WHERE channel = 'manager' AND external_id = ?",
+        )
+        .run(id);
+      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
   }
   getProject(id: string): ProjectRow | undefined {
     const value = this.db
@@ -567,16 +573,6 @@ export class Db {
       externalId: projectId,
       scopeId: projectId,
     });
-  }
-  /**
-   * Whether this project has a manager at all — the real criterion behind
-   * delegate / send_manager_msg and the state block. A manager exists only
-   * once a `channel_sessions` row with channel 'manager' is bound (created by
-   * openManager); `projects.manager_name` is a display label and never
-   * substitutes for this check.
-   */
-  hasManager(projectId: string): boolean {
-    return this.managerConversation(projectId) !== undefined;
   }
   isManagerConversation(conversationId: string): boolean {
     return Boolean(
