@@ -26,6 +26,44 @@ export function relevantQueries(input: string): string[] {
   ].slice(0, 12);
 }
 
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * A superseded or deleted statement must not return through its old
+ * transcript evidence, but the other statements in the same entry stay
+ * retrievable. Only sentences that carry an obsolete assertion are removed;
+ * when the assertion cannot be located in the entry (a rewritten claim citing
+ * the whole entry), the entry is dropped. Returns null when nothing remains.
+ */
+function withoutObsolete(
+  db: Db,
+  scopeId: string,
+  sourceRef: string,
+  text: string,
+): string | null {
+  const obsolete = db.sqlite
+    .prepare(`SELECT m.content, e.excerpt FROM memories m JOIN memory_evidence e ON e.memory_id = m.id
+      WHERE m.scope_id = ? AND m.status IN ('superseded', 'deleted') AND e.source_ref = ?`)
+    .all(scopeId, sourceRef) as { content: string; excerpt: string }[];
+  let sentences = squash(text)
+    .split(/(?<=[.!?。！？])\s*/)
+    .filter(Boolean);
+  for (const row of obsolete) {
+    const whole = squash(text);
+    const fragment = [row.content, row.excerpt]
+      .map(squash)
+      .find((part) => part && part !== whole && whole.includes(part));
+    if (!fragment) return null;
+    const kept = sentences.filter(
+      (sentence) =>
+        !sentence.includes(fragment) && !fragment.includes(sentence),
+    );
+    if (kept.length === sentences.length) return null;
+    sentences = kept;
+  }
+  return sentences.length ? sentences.join(' ') : null;
+}
+
 /** Complete output, including headers, always fits the independent token budget. */
 export function relevantContext(
   deps: { db: Db; scopes: Scopes },
@@ -89,14 +127,15 @@ export function relevantContext(
             }
           })();
       for (const row of rows) {
-        // A superseded statement must not return through its old transcript evidence.
-        const obsolete = deps.db.sqlite
-          .prepare(`SELECT 1 FROM memories m JOIN memory_evidence e ON e.memory_id = m.id
-          WHERE m.scope_id = ? AND m.status IN ('superseded', 'deleted') AND e.source_ref = ? LIMIT 1`)
-          .get(scopeId, `conv:${row.conversation_id}#${row.entry_id}`);
-        if (!obsolete)
+        const text = withoutObsolete(
+          deps.db,
+          scopeId,
+          `conv:${row.conversation_id}#${row.entry_id}`,
+          row.text,
+        );
+        if (text && text.toLowerCase().includes(query.toLowerCase()))
           add(
-            `[${scopeId}/history] conv:${row.conversation_id}#${row.entry_id} ${row.role}: ${[...row.text].slice(0, 300).join('')}`,
+            `[${scopeId}/history] conv:${row.conversation_id}#${row.entry_id} ${row.role}: ${[...text].slice(0, 300).join('')}`,
           );
       }
     }

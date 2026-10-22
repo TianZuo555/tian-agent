@@ -85,6 +85,7 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 - 候选一律为 `candidate`、trust = `agent_inferred`，绝不进入 `wake()` 渲染与只读导出；提取与入库在同一事务，提取器抛异常则整体回滚、游标不动。
 - 候选可以列出相关 active 事实；只有用户在 Memory 面板选择“确认此条取代 #seq”时，promote 才在同一事务内取代该事实，并用完整的旧事实身份做乐观校验（正文/条件/有效期任一变化都失败）。普通确认与晋升（含 `promote` 工具）只把候选转为 active，候选记录上的 `supersedes` 只是审核提示，不会自动取代任何事实。promote 不自动进入 Core。
 - 用户审核修订候选时，旧候选保留为 `superseded` 历史并链接新版本；新正文成为 active 候选版本。返回的 `superseded` 是旧候选，不是新版本。
+- 提取到与 active 记忆完全相同的事实时不再生成候选，但把新的来源追加为该记忆的证据（不提升可信度：提取不是确认）。
 - dismiss 后相同完整事实（含 scope、正文大小写、条件与有效期）不再重复提取；抑制 key 含 scope，不用全历史相似度永久压制新的纠正。
 - 提取器是可注入接口 `MemoryExtractor`，默认为确定性启发式（`Intl.Segmenter` 多语言分词，中英文模式表见源码），可离线测试；接 Magpie 模型的位置已预留但未接（PRD 问题 6 未决）。
 
@@ -93,7 +94,7 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 - Core 是按轮次稳定的显式快照；另有一条独立预算的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索本 Scope 的 Memory、Notes 与 History，默认 1200 tokens。它不会加载全量记忆，也不会跨越项目隔离。
 - 检索使用共享 `planSearch` 与少量显式同义词（如 `中文`↔`Chinese`、`postgres`↔`PostgreSQL`）；这是可解释的词法检索，不是语义理解。
 - Worker 得到本项目的任务相关上下文，并可用只读 `recall` 继续查询、用 `read_history` 展开原始证据；Worker 从不写记忆。
-- 被取代/删除记忆的旧 transcript 证据不会经任务相关 History 重新进入默认上下文。
+- 被取代/删除记忆的旧 transcript 证据不会经任务相关 History 重新进入默认上下文：只去掉 History 条目中承载该旧断言的句子，同一条目里其他无关的句子仍可检索；若旧断言无法在条目中定位（例如改写后的断言引用整条），则整条不返回。
 - 每轮提取记录在 `memory_worker_runs`（触发原因、来源数、候选数、去重数），并写入 `events`（`memory.extracted`）。
 
 ## 位置与用户审阅

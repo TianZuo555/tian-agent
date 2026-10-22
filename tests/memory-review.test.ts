@@ -16,6 +16,8 @@ import { HistoryIndex } from '../src/worker/history';
 import { relevantContext } from '../src/worker/relevant-context';
 import { verifyUserEvidence } from '../src/worker/provenance';
 import { coreMemorySection } from '../src/worker/tools-memory';
+import { commandHandlers } from '../src/worker/commands';
+import type { Service } from '../src/worker/service';
 
 const temporary = (t: TestContext) => {
   const path = mkdtempSync(join(tmpdir(), 'tian-memory-review-'));
@@ -620,4 +622,96 @@ test('an expired Core memory refreshes the stable snapshot without a write', asy
   assert.doesNotMatch(String(await render()), /Temporary deploy freeze/);
   turn = '2';
   assert.doesNotMatch(String(await render()), /Temporary deploy freeze/);
+});
+
+test('a confirmed promotion records the confirmed state in its version', (t) => {
+  const { db, memory } = store(t);
+  const pending = memory.candidate({
+    text: 'Releases ship on Tuesdays',
+    kind: 'decision',
+    sourceRef: 'conv:1#1',
+  })!;
+  memory.promote(pending.seq, 'user', 'reviewed', {
+    sourceRef: 'ui:memory-panel',
+    method: 'review',
+  });
+  const live = memory.dump().items.find((row) => row.seq === pending.seq)!;
+  const version = db.sqlite
+    .prepare(
+      "SELECT v.after FROM memory_versions v JOIN memories m ON m.id = v.memory_id WHERE m.scope_id = 'p1' AND m.seq = ? AND v.action = 'promote'",
+    )
+    .get(pending.seq) as { after: string };
+  const after = JSON.parse(version.after) as typeof live;
+  assert.equal(after.status, 'active');
+  assert.equal(after.trustLevel, 'user_confirmed');
+  assert.equal(after.verifiedAt, live.verifiedAt);
+});
+
+test('an obsolete fact hides only its own sentence of a history entry', (t) => {
+  const { db, scopes } = store(t);
+  db.addProject({
+    id: 'p1',
+    name: 'project',
+    rootPath: join(temporary(t), 'project'),
+    autoLand: 0,
+    allowInPlace: 0,
+    agentKind: 'durable-worker',
+    runTimeoutMin: 30,
+    baseBranch: 'main',
+    promptPreamble: '',
+    managerName: 'Manager',
+  });
+  const events = new EventLog(db);
+  const history = new HistoryIndex(
+    db,
+    { conversation: () => Promise.reject(new Error('no conversations')) },
+    events,
+  );
+  t.after(() => history.stop());
+  history.indexRows([
+    {
+      conversationId: '1',
+      entryId: '9',
+      scopeId: 'p1',
+      kind: 'message',
+      role: 'user',
+      at: '2026-10-18T08:00:00.000Z',
+      text: 'I prefer tabs for indentation. The staging cluster runs in Frankfurt.',
+    },
+  ]);
+  const memory = scopes.memory('p1');
+  const old = memory.remember({
+    text: 'I prefer tabs for indentation.',
+    sourceRef: 'conv:1#9',
+    evidence: {
+      sourceRef: 'conv:1#9',
+      excerpt: 'I prefer tabs for indentation.',
+      actor: 'user',
+      relation: 'direct',
+      observedAt: '2026-10-18T08:00:00.000Z',
+    },
+  });
+  memory.forget(old.memory.seq, 'obsolete', 'user');
+  const staging = relevantContext({ db, scopes }, ['p1'], 'staging Frankfurt');
+  assert.match(
+    staging,
+    /conv:1#9 user: The staging cluster runs in Frankfurt\./,
+  );
+  assert.doesNotMatch(staging, /tabs/);
+  assert.doesNotMatch(
+    relevantContext({ db, scopes }, ['p1'], 'indentation'),
+    /conv:1#9/,
+  );
+});
+
+test('the memory panel replacement is forwarded through the command bridge', async () => {
+  const calls: unknown[][] = [];
+  const service = {
+    memoryPromote: (...args: unknown[]) => {
+      calls.push(args);
+    },
+  } as unknown as Service;
+  const replacement = { seq: 1, content: 'Old fact', conditions: '' };
+  await commandHandlers(service, 1).memoryPromote('global', 2, replacement);
+  assert.deepEqual(calls, [['global', 2, replacement]]);
 });

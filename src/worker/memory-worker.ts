@@ -690,10 +690,11 @@ export class MemoryWorker {
       return { ...emptyResult(scopeId), sources: sources.length, ran: false };
     }
 
-    const result = this.deps.db.transaction(() => {
+    const outcome = this.deps.db.transaction(() => {
       const memory = this.deps.scopes.memory(scopeId);
       let candidates = 0;
       let duplicates = 0;
+      let evidenceAdded = 0;
       const sourcesByRef = new Map(sources.map((row) => [row.ref, row]));
       for (const item of extracted) {
         const text = normalize(item.text);
@@ -708,18 +709,6 @@ export class MemoryWorker {
           duplicates++;
           continue;
         }
-        if (
-          memory
-            .dump()
-            .items.some(
-              (row) =>
-                row.status === 'active' &&
-                memoryIdentityKey(row) === memoryIdentityKey(identity),
-            )
-        ) {
-          duplicates++;
-          continue;
-        }
         // Evidence is the original source text, never the extractor's rewrite.
         const evidence = {
           sourceRef: item.sourceRef,
@@ -731,6 +720,30 @@ export class MemoryWorker {
               : ('inference' as const),
           observedAt: source.at,
         };
+        if (
+          memory
+            .dump()
+            .items.some(
+              (row) =>
+                row.status === 'active' &&
+                memoryIdentityKey(row) === memoryIdentityKey(identity),
+            )
+        ) {
+          // No new candidate, but the repeated statement is new evidence for
+          // the active fact (no trust upgrade: extraction is not confirmation).
+          if (
+            memory.remember({
+              text,
+              actor: 'worker',
+              sourceRef: item.sourceRef,
+              evidence,
+              reason: `memory worker: ${trigger}`,
+            }).evidenceAdded
+          )
+            evidenceAdded++;
+          duplicates++;
+          continue;
+        }
         const stored = memory.candidate({
           text,
           kind: item.kind,
@@ -754,15 +767,18 @@ export class MemoryWorker {
         duplicates,
       });
       return {
-        scopeId,
-        ran: true,
-        sources: sources.length,
-        candidates,
-        duplicates,
+        result: {
+          scopeId,
+          ran: true,
+          sources: sources.length,
+          candidates,
+          duplicates,
+        },
+        changed: candidates > 0 || evidenceAdded > 0,
       };
     });
-    if (result.candidates > 0) this.deps.emitMemory?.(scopeId);
-    return result;
+    if (outcome.changed) this.deps.emitMemory?.(scopeId);
+    return outcome.result;
   }
 
   private recordRun(

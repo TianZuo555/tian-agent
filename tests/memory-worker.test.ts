@@ -722,3 +722,24 @@ test('lexical similarity never auto-selects a replacement', () => {
   );
   assert.equal(similarity('完全不同的一条记忆', 'We deploy on Fridays'), 0);
 });
+
+test('a repeated active fact gains the new source as evidence, not a candidate', async (t) => {
+  const f = fixture(t, { minIntervalMs: 0 });
+  f.seed('p1', row('1', '10', 'We decided to standardize on pnpm workspaces'));
+  await f.worker.trigger('p1', 'task-completed');
+  const memory = f.scopes.memory('p1');
+  const pending = memory.dump().items[0];
+  memory.promote(pending.seq, 'user');
+  f.seed('p1', row('2', '20', 'We decided to standardize on pnpm workspaces'));
+  const again = await f.worker.trigger('p1', 'manual', { force: true });
+  assert.equal(again.candidates, 0);
+  assert.equal(again.duplicates, 1);
+  const items = memory.dump().items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, 'active');
+  assert.equal(items[0].trustLevel, 'agent_inferred');
+  assert.deepEqual(items[0].evidence?.map((item) => item.sourceRef).sort(), [
+    'conv:1#10',
+    'conv:2#20',
+  ]);
+});

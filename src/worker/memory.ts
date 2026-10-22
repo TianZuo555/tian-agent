@@ -1034,11 +1034,6 @@ export class MemoryStore {
           now,
           memory.id,
         );
-        const updated: MemoryRow = {
-          ...memory,
-          status: 'active',
-          updatedAt: now,
-        };
         if (confirmation) {
           confirmMemory(this.db, memory.id, memory.content, confirmation);
           this.run(
@@ -1048,6 +1043,8 @@ export class MemoryStore {
             memory.id,
           );
         }
+        // Reread so the version snapshot matches the live row (status and trust).
+        const updated = this.bySeqTx(seq)!;
         this.recordVersionTx(
           memory.id,
           'promote',
