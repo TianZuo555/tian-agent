@@ -1377,3 +1377,45 @@ test('the shared search plan keeps one rule set for memory, history and notes', 
   assert.equal(planSearch('中文').match, null);
   assert.deepEqual(planSearch('  ').terms, []);
 });
+
+test('a staged revise inherits the target conditions and expiry', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const id = String(conversation.id);
+  const memory = f.scopes.memory('global');
+  memory.remember({
+    text: 'Production uses PostgreSQL',
+    kind: 'environment',
+    conditions: 'production',
+    validUntil: '2030-01-01',
+  });
+  f.turn = { entryId: '50', kind: 'user', text: 'we moved to SQLite' };
+  const staged = await call(f.tool('revise'), id, {
+    seq: 0,
+    text: 'Production uses SQLite',
+    reason: 'user corrected the database',
+  });
+  assert.match(toolText(staged), /candidate/);
+  const pending = memory
+    .dump()
+    .items.find((item) => item.status === 'candidate')!;
+  assert.equal(pending.conditions, 'production');
+  assert.equal(pending.validUntil, '2030-01-01T00:00:00.000Z');
+  // The hinted target is always offered for replacement, even when the
+  // wording is too different to pass the similarity threshold.
+  for (let i = 0; i < 6; i++)
+    memory.remember({ text: `Production uses SQLite replica ${i}` });
+  const reworded = await call(f.tool('revise'), id, {
+    seq: 0,
+    text: 'Switch the database layer over to embedded storage',
+    reason: 'user corrected the database',
+  });
+  assert.match(toolText(reworded), /candidate/);
+  const items = memory
+    .dump()
+    .items.filter((item) => item.status === 'candidate');
+  for (const item of items) {
+    assert.equal(item.related?.[0]?.seq, 0);
+    assert.ok((item.related?.length ?? 0) <= 5);
+  }
+});

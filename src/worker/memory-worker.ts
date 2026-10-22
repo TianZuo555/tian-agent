@@ -5,7 +5,6 @@ import type { MemoryKind } from './memory.js';
 import { GLOBAL_SCOPE, type Scopes } from './scopes.js';
 import { MAX_MEMORY_CHARS } from './memory.js';
 import { codePointLength } from './search.js';
-import { memoryIdentityKey } from './memory-identity.js';
 
 /**
  * Memory Worker (PRD §4.4 F03): background candidate extraction inside the
@@ -720,41 +719,22 @@ export class MemoryWorker {
               : ('inference' as const),
           observedAt: source.at,
         };
-        if (
-          memory
-            .dump()
-            .items.some(
-              (row) =>
-                row.status === 'active' &&
-                memoryIdentityKey(row) === memoryIdentityKey(identity),
-            )
-        ) {
-          // No new candidate, but the repeated statement is new evidence for
-          // the active fact (no trust upgrade: extraction is not confirmation).
-          if (
-            memory.remember({
-              text,
-              actor: 'worker',
-              sourceRef: item.sourceRef,
-              evidence,
-              reason: `memory worker: ${trigger}`,
-            }).evidenceAdded
-          )
-            evidenceAdded++;
-          duplicates++;
-          continue;
-        }
-        const stored = memory.candidate({
+        // An exact active or candidate duplicate is not written twice, but the
+        // repeated source is appended as evidence (no trust upgrade:
+        // extraction is not confirmation).
+        const stored = memory.remember({
           text,
           kind: item.kind,
-          confidence: null,
           sourceRef: item.sourceRef,
           evidence,
           supersedes: null,
           reason: `memory worker: ${trigger}`,
+          actor: 'worker',
+          status: 'candidate',
+          trustLevel: 'agent_inferred',
         });
-        if (!stored) {
-          // Another row already carries this normalized text (exact dedupe).
+        if (stored.evidenceAdded) evidenceAdded++;
+        if (!stored.created) {
           duplicates++;
           continue;
         }

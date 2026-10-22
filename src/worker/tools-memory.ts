@@ -325,10 +325,16 @@ export function memoryTools(
             supersedes: target.status === 'active' ? target.seq : null,
             evidence,
             sourceRef: evidence?.sourceRef,
-            conditions: args.conditions,
-            validUntil: args.valid_until,
+            // Omitted metadata is inherited, as in the direct revision path:
+            // a confirmed replacement must not drop conditions or expiry.
+            conditions: args.conditions ?? target.conditions,
+            validUntil: args.valid_until ?? target.validUntil,
             operationId: `revise-review:${api.taskId}:${api.callId}`,
           });
+          if (pending.memory.seq === target.seq)
+            return toolText(
+              `#${target.seq} already says that in [${scopeLabel(scope)}]; no revision staged.`,
+            );
           return toolText(
             `Saved agent-inferred candidate #${pending.memory.seq} for review; #${target.seq} stays active and is replaced only when Tian confirms this revision in the Memory panel or with an explicit save request.`,
           );

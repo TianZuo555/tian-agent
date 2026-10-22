@@ -1197,6 +1197,23 @@ export class MemoryStore {
     return assemble(hits, 0);
   }
 
+  /**
+   * Active facts a candidate may replace. The `supersedes` hint comes first
+   * and is never dropped by the similarity threshold or the cap, so the panel
+   * always offers "confirm this replaces" for the fact under review.
+   */
+  private relatedTx(memory: MemoryRow): MemoryRow[] {
+    const active = this.activeTx();
+    const hinted = active.find((row) => row.seq === memory.supersedes);
+    const similar = active
+      .filter(
+        (row) =>
+          row !== hinted && similarity(memory.content, row.content) >= 0.3,
+      )
+      .slice(0, hinted ? 4 : 5);
+    return hinted ? [hinted, ...similar] : similar;
+  }
+
   /** Dump for the UI: every memory with provenance plus Core usage. */
   dump(budget = CORE_BUDGET): MemoryDump {
     return this.db.transaction(() => {
@@ -1211,21 +1228,15 @@ export class MemoryStore {
           confirmations: memoryConfirmations(this.db, memory.id),
           related:
             memory.status === 'candidate'
-              ? this.activeTx()
-                  .filter(
-                    (active) =>
-                      similarity(memory.content, active.content) >= 0.3,
-                  )
-                  .slice(0, 5)
-                  .map(
-                    ({ seq, content, sourceRef, conditions, validUntil }) => ({
-                      seq,
-                      content,
-                      sourceRef,
-                      conditions,
-                      validUntil,
-                    }),
-                  )
+              ? this.relatedTx(memory).map(
+                  ({ seq, content, sourceRef, conditions, validUntil }) => ({
+                    seq,
+                    content,
+                    sourceRef,
+                    conditions,
+                    validUntil,
+                  }),
+                )
               : [],
         }));
       return {

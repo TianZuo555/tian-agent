@@ -182,13 +182,31 @@ export function workerExtension(deps: WorkerDeps) {
     }),
     execute: async (args, api) => {
       const run = runOf(String(api.conversationId));
-      const match = /^conv:([^#]+)#(.+)$/.exec(args.ref);
-      if (!run || !match) return err('Unknown evidence reference');
-      const row = db.sqlite
-        .prepare(
-          'SELECT text FROM history_entries WHERE scope_id = ? AND conversation_id = ? AND entry_id = ?',
-        )
-        .get(run.projectId, match[1], match[2]) as { text: string } | undefined;
+      const ref = args.ref.trim();
+      const match = /^conv:([^#]+)#(.+)$/.exec(ref);
+      const event = /^event:(.+)$/.exec(ref);
+      if (!run || (!match && !event)) return err('Unknown evidence reference');
+      // Events are project-scoped like transcript entries: the scope check is
+      // part of the lookup, so another project's event reads as unavailable.
+      let row: { text: string } | undefined;
+      try {
+        row = (
+          match
+            ? db.sqlite
+                .prepare(
+                  'SELECT text FROM history_entries WHERE scope_id = ? AND conversation_id = ? AND entry_id = ?',
+                )
+                .get(run.projectId, match[1], match[2])
+            : db.sqlite
+                .prepare(
+                  "SELECT summary || char(10) || 'payload: ' || payload AS text FROM events WHERE scope_id = ? AND id = ?",
+                )
+                .get(run.projectId, event![1])
+        ) as { text: string } | undefined;
+      } catch {
+        // The events table belongs to EventLog and may not exist yet.
+        row = undefined;
+      }
       if (!row) return err('Evidence is unavailable in this project');
       return text(
         [...row.text]

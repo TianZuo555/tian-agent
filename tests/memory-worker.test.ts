@@ -743,3 +743,42 @@ test('a repeated active fact gains the new source as evidence, not a candidate',
     'conv:2#20',
   ]);
 });
+
+test('a repeated candidate gains evidence and notifies the panel', async (t) => {
+  const emitted: string[] = [];
+  const dir = temporary(t);
+  const db = new Db(join(dir, 'data'));
+  t.after(() => db.close());
+  const scopes = new Scopes(join(dir, 'data', 'global'), db);
+  const events = new EventLog(db);
+  const history = new HistoryIndex(
+    db,
+    { conversation: () => Promise.reject(new Error('no conversations')) },
+    events,
+  );
+  t.after(() => history.stop());
+  const worker = new MemoryWorker({
+    db,
+    scopes,
+    history,
+    events,
+    minIntervalMs: 0,
+    emitMemory: (scopeId) => emitted.push(scopeId),
+  });
+  t.after(() => worker.stop());
+  const text = 'We decided to standardize on pnpm workspaces';
+  history.indexRows([{ ...row('1', '10', text), scopeId: 'global' }]);
+  await worker.trigger('global', 'manual', { force: true });
+  assert.deepEqual(emitted, ['global']);
+  history.indexRows([{ ...row('2', '20', text), scopeId: 'global' }]);
+  const again = await worker.trigger('global', 'manual', { force: true });
+  assert.equal(again.candidates, 0);
+  assert.equal(again.duplicates, 1);
+  assert.deepEqual(emitted, ['global', 'global']);
+  const items = scopes.memory('global').dump().items;
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].evidence?.map((item) => item.sourceRef).sort(), [
+    'conv:1#10',
+    'conv:2#20',
+  ]);
+});
