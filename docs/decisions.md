@@ -169,7 +169,7 @@ The Telegram adapter runs inside the service using long polling, allow-listed ch
 - Forwards assistant messages using persistent cursors (`telegram_forward_cursor`). Messages split along line boundaries under 4,096 characters. Streaming fragments, thinking traces, and tool calls are filtered out.
 - The adapter interface isolates network operations for testing with mock clients.
 
-**Consequences**: Reconnections and restarts resume message forwarding without omissions or duplicates. The adapter operates safely without public network exposure.
+**Consequences**: Approvals and Goal notifications can reuse this channel (command entry points are reserved in the adapter, and proactive push reuses the forwarding pipeline). Outbound forwarding achieves at-least-once delivery across process lifecycles: if the process crashes between a successful send and cursor persistence in the database, one duplicate message will be resent upon restart. Telegram provides no client-side deduplication key, which represents the theoretical lower bound of polling. Permanent remote errors (such as bot blockings) pause subsequent forwarding for that conversation and log errors on every trigger rather than skipping silently. Non-text messages and forum topics are unhandled. When the allow-list is empty, the adapter starts but admits no chats.
 
 ---
 
@@ -314,7 +314,7 @@ WeChat operates as an additional messaging channel via Tencent's official iLink 
 - 24-Hour Keepalive: Sends minimal single-character probes (`.`) during long periods of silence (after 11 hours of inactivity with >30 minutes remaining in the window) to preserve reply windows without exhausting message quotas.
 - Displays QR codes in Settings → Channels for easy pairing.
 
-**Consequences**: WeChat becomes an authorized communication channel sharing unified scope memory.
+**Consequences**: WeChat acts as an authorized channel alongside Desktop, Telegram, and Inbox, sharing unified scope memory. The keepalive strategy balances open reply windows against quota consumption: at worst, an approximate one-hour blind spot remains (11-hour interval + 30-minute margin), and the window inevitably closes if the user remains silent after two heartbeat probes, requiring an inbound user message to reopen. Limitations: No group chat or slash command menus. Whether probing truly extends the 24-hour reply window depends on Tencent backend server behavior (the developer community confirmed only that bot-originated messages do not refresh tokens; extending windows via probes remains unverified). Therefore, probe rejections are handled as normal execution branches rather than fatal errors.
 
 ---
 
@@ -330,6 +330,7 @@ The Chief writes Global memory only (facts about Tian and facts shared across pr
 - Core Memory injection: Chief sessions inject Global Core Memory only; Manager sessions inject Global Core Memory plus their project's Core Memory.
 - Cross-scope queries are read-only and marked with ownership headers.
 - Project creation requires a Manager name, instantly establishing the dedicated Manager conversation.
-- Project deletion requires removing associated conversations, protecting memory records from accidental loss.
+- Project deletion guards: because Manager conversations create with the project, `removeProject` deletes the project and binding only if the Manager conversation has zero entries and no other conversations exist. If any transcript content exists, the deletion request is explicitly rejected to protect transcripts and memory.
+- Protocol: `SERVICE_PROTOCOL` increases to 10 (mandatory `addProject` `managerName` argument and `ScopeInfo.managerName`).
 
-**Consequences**: Establishes single-agent memory ownership. Chief prompt overhead remains constant regardless of total registered projects.
+**Consequences**: Establishes a single agent owner for each scope's memory. Chief prompts do not grow with the number of registered projects, and project details concentrate inside the Manager context. Tian's preferences no longer get trapped inside a project scope. Trade-offs: The Chief must query read-only or ask the Manager when recalling project details (one extra hop); the Chief cannot fix project memory directly and must inform the Manager instead. Memory Worker candidate extraction and the UI Memory panel continue operating per scope without role restrictions.

@@ -277,9 +277,9 @@ Current State: Embedded inside the Goals view as a unified cross-scope board.
 
 Current State:
 
-- The Chief has no shell or code-editing tools. Land, Ship, and Discard actions require explicit user execution in the UI.
-- Workers operate inside isolated Git worktrees.
-- Idempotency records via `operations` table and `requestId` tokens.
+- The Chief has no shell or code-editing tools. Land, Ship, and Discard actions require explicit user execution in the UI, serving as manual approvals.
+- Workers possess full coding tools (including shell access). The Git worktree provides the only isolation boundary; "do not push" is merely an instruction, with no operating-system-level sandbox.
+- Idempotency records via the `operations` table, stable operation IDs, and `requestId` tokens. [Existing]
 
 Permission Tiers:
 
@@ -292,9 +292,12 @@ Permission Tiers:
 
 Requirements (M3):
 
-- `approvals` records operation types, target references, payload digests, requesters, statuses, deciders, channels, and timestamps.
-- Chief calls `request_land` / `request_ship` to create approval requests without executing directly. Approving in Desktop or Telegram triggers the service action.
-- Verification checks payload digests before execution. Rejected approvals cannot be reused.
+- `approvals` table records operation types, target references, payload digests, requesters, statuses (pending / approved / rejected / expired), deciders, channels, and timestamps.
+- Chief tools `request_land` and `request_ship` create approval requests without executing directly. Approving in Desktop or Telegram triggers service actions via `runs.land` and `runs.ship`.
+- Verification checks payload digests before execution. Rejected approvals cannot be reused; reapplying for the same object requires a new approval record.
+- The enforced boundary in MVP is the worktree plus approved Land/Ship actions. Worker-level Controlled Write in MVP achieves only "instructions plus post-execution review". Recommendation for further evaluation: disable push remotes or strip push credentials in worker worktrees, or use macOS sandboxing.
+- Approval granularity (answering v0.1 question 5, proposal): Goal Constraints declare permitted operation categories; each specific controlled operation requires individual approval.
+- Auditing: All Controlled and higher operations write to Events (actor, trigger, approval ID, result).
 
 ### 7.4 F14 — Conversation Archiving and Shell Collapse (P2) [Existing]
 
