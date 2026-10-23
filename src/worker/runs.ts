@@ -661,7 +661,7 @@ export class RunOrchestrator {
           });
         }
       }
-      const stopped = this.db.finishRun(id, 'interrupted', note, {
+      this.db.finishRun(id, 'interrupted', note, {
         id: `run:${id}:attempt:${run.attempt}:stopped`,
         scopeId: run.projectId,
         conversationId: run.chiefConversationId,
