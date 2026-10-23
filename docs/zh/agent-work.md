@@ -1,0 +1,84 @@
+# 目标、任务与 Run
+
+[English](../agent-work.md) | **简体中文**
+
+用户管理目标，Agent 管理任务。Goal 是长期跟进的结果；Task 是一件具体工作；Run 是工兵为代码类 Task 在隔离 worktree 中的一次执行。
+
+## Goal
+
+Goal 属于一个 scope，带 objective、success criteria、constraints、current state、next action、last execution 与每日预算，存于 `goals` 表。总管用 `create_goal` / `update_goal` / `list_goals` 维护；用户在 Goals 视图创建、编辑、暂停、恢复或取消。
+
+- **Goal 会话**：每个 Goal 通过 `openSession({ channel: 'goal', externalId: goalId, scopeId })` 获得一条专属总管会话，跨重启稳定，唤醒内容只投递到这条会话。
+- **用户提醒**：`notify_user(goal, fingerprint, text)` 把需要用户知道或决定的事写入 `user_notices`；同一 Goal 相同 fingerprint 在 24 小时窗口内只送达一次，`outcome = no_change` 的结果不通知。Goals 视图展示提醒列表；Telegram 投递留待后续。
+
+## Task
+
+Task 状态机：`pending → running → waiting_approval → completed`，另有 `paused / blocked / failed / cancelled`。转换集中在 `db.ts` 一处校验，非法转换抛错。结果单独记 `outcome`（achieved / not_achieved / no_change）与 summary。`trigger`（manual / schedule / event）与唯一 `dedupe_key` 记录来源，重启或重复触发不会生成第二个 Task。
+
+## 调度
+
+`schedules` 表保存 cron、时区与持久化的 `next_fire_at`；服务内定时器睡到最早的触发点（上限 60 秒，不阻塞退出）。每次触发在一个事务内完成：
+
+1. 创建 Task（`dedupe_key = sched:<schedule>:<触发时间>`）。
+2. 向 Goal 会话投递通知（内容只含 Goal 状态与本次 Task，不重建历史）。
+3. 从当下推进 `next_fire_at`——停机期间错过的触发合并为一次，不补跑。
+
+每个 Goal 的 `max_runs_per_day` 限制每日执行次数；超出后本次唤醒生成 `blocked` Task 并留下去重提醒，不默默丢弃。
+
+代码类任务由 `dispatch` 发起，可选 `task` 参数把 Run 关联到 Task（`runs.task_id`）。Run 完成不等于 Task 完成：派发方（总管或项目管理者）依据结果调用 `complete_task` / `fail_task` 收口，再 `update_goal` 写回状态。
+
+## 项目管理者
+
+项目管理者是介于总管与工兵之间的项目级角色：每项目恰好一条持久会话（`channel_sessions` 中 `channel = 'manager'`、`external_id = project_id`），`addProject` 时随项目创建（管理者名字必填），服务启动时为旧项目补建。除总管委派外，Tian 也能经 `openManager(projectId)`（侧栏的项目管理者按钮）直接打开这条会话派活。
+
+- **Tian 直连**：本轮输入的 `kind` 为 `'user'`（区别于唤醒用的 `'system.notification'` 与 `'worker.input'`）即为 Tian 轮次——他在此派的工作成为管理者自己的 Task（`add_task` → `start_task` → `complete_task` / `fail_task`），静默收口，不通知总管；`ask_chief` 被挡下并提示在答复里直接问 Tian；`report_chief` 只允许带一个 `assignee='manager'` 的委派 Task id（仍按该 Task 的 `report_to` 上报），否则返回提示语。这些守卫落在工具实现上：Tian 轮次里两个工具都不写 `manager_messages`、不唤醒总管。
+- **委派即 Task**：总管 `delegate(project, title, briefing, goal?)` 在一个事务内创建 `assignee='manager'`、`report_to=发起总管会话` 的 Task 与一条 `kind='delegation'` 的消息，然后唤醒管理者。管理者 `start_task` → `dispatch` → `complete_task` / `fail_task` 收口——关闭委派 Task 自动把结果通知回 `report_to` 的总管（Tian 轮次中亦然：归属仍属委派的 Task 照常上报）；总管对委派 Task 的 `start_task` / `complete_task` / `fail_task` 被拒绝，Goal 始终归总管。
+- **上行与问答**：管理者 `report_chief(text, task?)` 汇报，`ask_chief(question, task?, wait_seconds?)` 写 `kind='question'` 行并阻塞等待匹配 `reply_to` 的 `kind='answer'`；无关消息不会被当成答复，超时在事务内「关闭 + 复查」竞态答案。总管用 `send_manager_msg(project, body, reply_to?, task?)` 答复或发消息：仍在等待的答覆由 `ask_chief` 直接返回不唤醒，迟到答覆补一次唤醒，普通消息每次唤醒。上行通知按 Task 路由——本 Task 的 `report_to`、其次项目最新委派 Task 的 `report_to`、再回落 scope 最新非 Manager 会话。
+- **再分发**：管理者 `dispatch(prompt, task?)` 把代码工作派给工兵，`chief_conversation_id` 指向管理者会话——工兵的 `ask_chief` 与 Run 完成通知都回到管理者，由管理者收口 Task 并 `report_chief`。
+- **边界**：管理者工具锁定本项目 scope——任务、notes、history 与 Run 只许本项目，dispatch 只许本项目的 Task；它是本项目记忆与 notes 的唯一 Agent 写入者，Global 记忆只读（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）；没有 shell / 编码工具；总管 `send_run_msg` 拒绝管理者名下的 Run。
+
+## Run 生命周期
+
+```text
+执行状态（status）：
+dispatch → queued → running → collecting → done / failed
+            │         │
+            └── stop ─┴──→ interrupted
+
+验收状态（reviewStatus，独立记录）：
+pending → landing → landed
+       ↘ shipping → shipped
+       ↘ discarding → discarded
+```
+
+- Git 项目必须成功创建 worktree，隔离失败终止派发并保留记录；非 Git 项目默认拒绝，明确开启 `allowInPlace` 后才可修改原目录。
+- Run 保存派发时的目录、base branch、执行模式及截止时间。
+- follow-up 每轮有独立 attempt、输入、结果和报告，复用工兵会话与 worktree。
+- 派发用稳定操作 ID，各轮输入用稳定 `requestId`；成功依据 Durable submission 结果，空闲不代表成功，Git 提交失败会进入失败状态。
+- 同一 Run 的状态转换与验收串行；discard 先停止工兵，collector 不覆盖其结果。
+- Land 合入保存的 base branch，要求主 checkout 位于该分支且无已跟踪文件的未提交修改；land 后不能 follow-up。
+- Ship 推送分支，再查询或创建 PR，重复请求复用 PR URL。
+- 已开始的 land/ship/discard 先入库，启动时继续或核对。
+
+## 总管 ⇄ 工兵消息
+
+每个 Run 有一条持久消息线程（`agent_messages` 表），双向可达：
+
+- 工兵 `ask_chief(question, wait_seconds?)`：提问并阻塞等待答复。问题经通知管道立即唤醒总管（不等 Run 结束），总管用 `send_run_msg` 回复；等待窗口内无答复则工兵自行判断并在报告中记录。Run 被 discard 时提问立即返回并要求停止。
+- 工兵 `tell_chief(text)`：发送不等待的进度通知。
+- 工兵 `check_msgs`：读取总管发来的未读消息（答复之外的主动指令）。
+- 总管 `send_run_msg(run, body)`：回复提问中的工兵，或对运行中的 Run 主动下达指令；`list_run_msgs(run)` 查看完整线程。
+
+## 进度与中止
+
+总管与项目管理者都能读取 Run 的实时进度并中止当前 attempt——两者都不是 shell 权限，也不越过各自的 scope 边界。
+
+- **`run_progress(id)`**：返回状态、attempt、已用时间与截止时间（无超时时明说 `no deadline`）、工兵最后一段输出、最近 5 次工具调用（工具名 + 截断后的参数）。数据来自 `runs` 行与工兵会话的 `entries()`，只读；discarded 的 Run 只给行内信息。这是「它卡住了还是在干活」的判断依据，也是总管回答「进展如何」的唯一正当来源。
+- **`stop_run(id, reason?)`**：在 Run 锁内把 `status` 置为 `interrupted` 并写入 `error` 与 `finished_at`，记录 attempt 与 `run.stopped` 事件，然后 abort 工兵会话。**worktree 与分支保留**，`reviewStatus` 仍是 `pending`，因此之后仍可 `read_run_diff`、land、或 follow-up 开新一轮；它不是 discard，不删任何东西。
+- **不覆盖**：abort 让 collector 的 `submission.wait()` 返回，但 collector 在锁内复查 `status === 'interrupted'` 后直接返回，不会把结果写成 done/failed。`execute()` 只在 `reviewStatus === 'pending'` 时重启，因此中断的 attempt 不会被恢复流程续跑。
+- **边界**：总管只能中止非 Manager 名下的 Run（与 `send_run_msg` 同一规则，Manager 名下的由管理者自己收口）；管理者 `stop_run` 必须落在本项目，越界报 `belongs to another project`。
+- **经验审查**：中止也算一次 ending——`stop()` 在 abort 后读该 attempt 留下的报告，以 `stopped` 标记调用 `reviewExperience`。报告里有明确步骤段落仍可产候选（描述注明 stopped early 与原因），但**不会**把注入的 skill 标 `verification = failed`：主动收回不等于流程失效。
+
+消息 ID 与通知 ID 均由调用派生，Durable 重放不产生重复消息；已读状态持久化。工兵被要求优先自行决策，只在破坏性操作、缺失凭据或根本性歧义时提问。
+
+报告从 `TIAN_REPORT.md` 收集到 `<project root>/.tian/runs/`，每轮独立保留，报告不进入代码提交。

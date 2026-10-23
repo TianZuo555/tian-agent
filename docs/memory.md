@@ -1,91 +1,92 @@
-# 记忆
+# Memory
 
-记忆存储在 SQLite（`tian.db`，只有常驻服务写入），带来源、可信度与版本；文件只是单向只读导出（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)）：
+**English** | [简体中文](zh/memory.md)
+
+Memory persists inside SQLite (`tian.db`, written exclusively by the resident service) and tracks provenance, confidence, and versions. Files on disk serve as one-way read-only exports ([D4](decisions.md#d4--memory-uses-sqlite-as-single-source-of-writes-core-memory-changes-to-explicit-selection)):
 
 ```text
 <scope root>/memory/
-  MEMORY.md        每次写入提交后原子重写的只读视图（有效记忆 + 是否选入 Core + 用量）
-  legacy/          一次性导入后的旧 LOG.txt 与 TREE/（旧摘要树已退役，不再读取）
+  MEMORY.md        Atomic read-only view rewritten after commits (active memories, Core flags, usage)
+  legacy/          Imported legacy LOG.txt and TREE/ files (retired; not read at runtime)
 ```
 
-## 表结构
+## Schema
 
-| 表                | 内容                                                                                                                                                                                                                        |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `memories`        | 每条记忆带 `seq`（scope 内不可变序号）、`kind`、来源、可信度、`core`（是否显式选入 Core）、`status`（candidate/active/superseded/deleted）。正文单行，最多 1000 个 Unicode 字符；candidate 另有 `supersedes` 指向被取代目标 |
-| `memory_versions` | 追加式版本记录（create/promote/supersede/delete/import/select/deselect/evidence，含操作者、原因与前后内容），支持审计与恢复                                                                                                 |
-| `memory_meta`     | 一次性迁移标记（初始 Core 选择、History 索引格式）                                                                                                                                                                          |
-| `memory_fts`      | FTS5 trigram 全文索引（中文可检索；少于 3 字符的词回退为 LIKE 子串匹配），默认只查有效记忆，`include_history` 查历史                                                                                                        |
+| Table             | Content                                                                                                                                                                                                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memories`        | Each record has `seq` (immutable index per scope), `kind`, provenance, confidence, `core` (explicit selection flag), and `status` (candidate / active / superseded / deleted). Body text is single-line with a maximum of 1,000 Unicode characters. Candidates include `supersedes` pointing to target entries. |
+| `memory_versions` | Append-only audit records (create / promote / supersede / delete / import / select / deselect / evidence), recording actors, reasons, and previous and updated text.                                                                                                                                            |
+| `memory_meta`     | One-time migration markers (initial Core selection, History index format).                                                                                                                                                                                                                                      |
+| `memory_fts`      | FTS5 trigram full-text index. Chinese is searchable directly. Words shorter than 3 characters fall back to `LIKE`. Defaults to active memories; `include_history` queries historical records.                                                                                                                   |
 
-旧版的 `memory_nodes` 摘要树在数据库升级事务里改名为 `memory_nodes_retired`：只是保留现场，不参与任何读取，也不会在新数据库里创建。
+The legacy `memory_nodes` summary tree was renamed to `memory_nodes_retired` during migration. It remains on disk for forensic inspection, is never queried, and is not created in new databases.
 
-## 归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）
+## Ownership ([D18](decisions.md#d18--memory-ownership-by-role-chief-owns-global-managers-own-projects))
 
-| 角色    | 写入        | 注入的 Core              | 按需只读                              |
-| ------- | ----------- | ------------------------ | ------------------------------------- |
-| Chief   | 只写 Global | 只有 Global              | 任意项目的记忆与 Notes（带 `scope`）  |
-| Manager | 只写本项目  | Global + 本项目          | Global 记忆（`recall scope=global`）  |
-| Worker  | 不写        | 无（读导出的 MEMORY.md） | 本项目 `memory/MEMORY.md` 与 `notes/` |
+| Role    | Writes           | Injected Core            | On-Demand Queries                            |
+| ------- | ---------------- | ------------------------ | -------------------------------------------- |
+| Chief   | Global only      | Global only              | Any project's memory and notes (via `scope`) |
+| Manager | Own project only | Global + Own project     | Global memory (`recall scope=global`)        |
+| Worker  | None             | None (reads `MEMORY.md`) | Project `memory/MEMORY.md` and `notes/`      |
 
-- 写工具（`remember` / `revise` / `forget` / `select` / `deselect`）没有 `scope` / `target` 参数：目标由角色固定，`#seq` 永远指向自己那份记忆，不会误改别人的条目。
-- 总管在项目会话里学到的项目事实不自己记，转交该项目的管理者（`send_manager_msg` 或 `delegate` 简报）；管理者在 Tian 直连时听到与项目无关的个人信息也不写——由 Tian 直接告诉总管。
-- 跨 scope 的只读结果带 `read-only` 头，标明所有者，避免模型把对方的 `#seq` 当成自己的去修订。
-- 自动提取（Memory Worker）与 Memory 面板仍按 scope 工作，不受角色限制：候选落在来源会话所在的 scope，用户在面板上的操作视为 user。
+- Writing tools (`remember`, `revise`, `forget`, `select`, `deselect`) omit `scope` and `target` parameters. Roles fix the write destination. The `#seq` identifier always addresses the agent's owned memory.
+- Project facts learned by the Chief route to the Project Manager (`send_manager_msg` or `delegate` briefings). Manager sessions ignore unrelated personal user facts, leaving Tian to tell the Chief directly.
+- Cross-scope read-only results include a header indicating the owner. This prevents agents from confusing external sequence numbers with their own.
+- Candidate extraction (Memory Worker) and the UI Memory panel operate by scope without role restrictions. Candidates attach to the origin scope, and UI actions register as user operations.
 
 ## Core Memory
 
-Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的小集合：
+Core Memory is an explicitly selected subset of active facts rather than a truncated summary:
 
-- 新 `remember` 默认可检索、`core=false`；需要常驻时显式 `core=true` 或稍后 `select #seq`。
-- `deselect #seq` 只是移出 Core，不等于 `forget`：条目仍 active、仍可 `recall`。
-- 预算默认每个 Scope 1500 tokens，按**最终渲染文本**估算（`ceil(UTF-8 字节 / 3)`），包含序号、类型、可信度、日期、来源引用、换行与 `core: N selected · X/1500 tokens` 用量页脚。`coreUsage.tokens` 等于 `wake()` 输出的估算值。
-- 选入若超额会**原子拒绝**并返回当前用量与超出量；运行时不会静默裁剪、驱逐或把 Core 变成按时间截断的日志。
-- 修订优先保证纠正生效：替换文本放得下就继承原 Core 位置；放不下则新事实仍保存、旧事实离开 Core，结果明确提示需要重新选择或释放预算。
-- 同一 Conversation 内使用稳定快照：只在新的用户轮次开始且记忆版本变化时刷新，避免 Prompt 前缀缓存失效；轮次内的写入通过工具返回值告知模型。
+- New memories recorded via `remember` default to searchable (`core = false`). Marking an item persistent requires setting `core = true` or running `select #seq`.
+- Running `deselect #seq` removes an item from Core Memory without deleting it. The item stays active and searchable via `recall`.
+- Scope budgets default to 1,500 tokens, calculated from the fully rendered text (`ceil(UTF-8 bytes / 3)`). This covers sequence numbers, types, confidence tiers, timestamps, provenance, line breaks, and usage footers (`core: N selected · X/1500 tokens`).
+- Selection requests exceeding budgets reject atomically and return current usage and overflow counts. Runtime memory does not silently evict or truncate facts.
+- Revisions prioritize correction. If revised text fits, it retains its Core position. If it overflows, the new fact saves while leaving Core Memory, prompting manual reselection or budget cleanup.
+- Snapshots remain stable within conversations. Core Memory refreshes only when a new user turn starts and memory versions have changed. In-conversation writes communicate status via tool return values.
 
-## 工具
+## Tools
 
-- `remember`：新增记忆；`core` 可选；`source: "user"` 只在当前请求确实由用户轮次发起时才确认（见下）。
-- `revise`：取代旧记忆（新 `seq`，旧记忆保留为历史并指向新记忆）；用户纠正一律 revise，不追加矛盾行。修订不继承旧 `sourceRef`，证据指向本次纠正。
-- `forget`：标记删除，从不物理删除。
-- `select` / `deselect`：显式管理 Core；移出不等于遗忘。二者同样以 durable `taskId:callId` 幂等，重放不会撤销用户之后的选择。
-- `recall`：关键词检索。多个词按 AND 组合、非连续也命中；少于 3 字符的词（如两字中文）走子串匹配；按 FTS 相关性排序；每行带 `#seq`、类型、可信度、日期与来源引用。`limit` 限制命中条数，Token 预算按**完整返回字符串**（含元数据、换行、截断标记、省略页脚，以及空查询/无命中时的 `(no matches)`）计算；预算连最小输出都放不下时明确报参数错误，而不是输出超预算内容。无命中（含空查询）在预算足够时明确返回 `(no matches)`。
+- `remember`: Inserts a new memory; `core` is optional; `source: "user"` confirms only when the request originates from a real user turn.
+- `revise`: Supersedes an existing memory (creates a new `seq`, marks the older memory superseded, and links to the new entry). Corrections use `revise` instead of creating contradictory active entries. Revisions reference the current correction rather than old sources.
+- `forget`: Soft-deletes memories; physical deletion never occurs.
+- `select` / `deselect`: Manages Core status explicitly. Operations are idempotent via durable `taskId:callId`.
+- `recall`: Keyword search. Multi-word queries match non-consecutive words with AND logic. Queries under 3 characters use substring matching. Results rank by FTS relevance and include metadata. The `limit` caps result count, and token budgets enforce boundaries across full output strings. Queries returning no results return `(no matches)`.
 
-## 来源（Provenance）
+## Provenance
 
-操作者（谁执行写入：user / chief / manager / worker）与来源（事实由谁陈述）分开记录；写入目标由角色决定（见上方「归属」）：
+Actors (who wrote the record: user / chief / manager / worker) and sources (who stated the fact) record separately. Write targets follow agent roles:
 
-- 服务在真实用户 `submit` 时记录普通 `pi.user` 条目；Goal / Schedule / Run / Inbox 的唤醒用 `system.notification` 条目，Worker 输入用 `worker.input`。所有输入都可分页定位，不受最近 30 条限制。
-- `remember` / `revise` 的 `source: "user"` 只在存储语句与**当前用户输入整体**在规范化空白后**完全相等**时确认（大小写、否定、标点、路径都保留）。系统唤醒、Worker 输入、以及历史上以通知正文写入的 `pi.user` 条目都不算；截取、改写、翻译、概括一律降为 `agent_inferred`，工具结果说明原因并提示记录用户原话。确认与否和 `sourceRef` 绑定是两件事：即使不确认，也会绑定当前输入 entry 便于追溯。
-- 最新输入即证据：图片/空文本输入也会被绑定（`text` 为空，验证器不确认），不会回退到更早的文本轮次。
-- 确认后 `sourceRef` 精确到 `conv:<conversation>#<entry>`，可直接交给 `read_history` 定位。
-- Core 快照的"轮次"以任意输入 kind 为界：通知唤醒也会在下一请求刷新，而不会被旧的用户轮次缓存冻结。
-- 用户在 Memory 面板的修订固定为 `user_confirmed`、来源 `ui:memory-panel`。
+- The service records `pi.user` entries during genuine user turns. Wakeups for goals, schedules, runs, and inboxes write `system.notification` entries. Worker turns use `worker.input`.
+- The label `source: "user"` confirms only when stored text matches current user input exactly after whitespace normalization. System wakeups, worker inputs, and summarized notifications fall back to `agent_inferred`. Regardless of confirmation, `sourceRef` binds to the latest input entry (`conv:<id>#<entry>`).
+- Image-only and empty inputs bind without user confirmation.
+- Confirmed entries record references like `conv:<conversation>#<entry>`, readable directly by `read_history`.
+- Revisions in the desktop Memory panel mark as `user_confirmed` with source `ui:memory-panel`.
 
-## 去重与幂等
+## Deduplication and Idempotency
 
-- 同 Scope、规范化空白后完全相同的正文（大小写保留，`Foo` 与 `foo` 视为不同）返回原 `#seq`，不新增条目。
-- 重复写入若带来新的用户确认或新的来源引用，会升级可信度/来源并追加一条 `evidence` 版本记录、重建导出并推进版本号；不会静默吞掉。`revise` 到相同正文也走同一条补证据路径（`changed=false` 但 `evidenceAdded=true`），元数据变宽导致 Core 放不下时会移出 Core 并明确返回 `coreDropped`。
-- 重复写入若同时要求 `core: true`，仍按最终渲染集合校验预算；超额整笔回滚（包括证据更新），不会先写证据再绕过预算。
-- 同内容但已 superseded/deleted 的历史不会被复活：会写入新的 active 条目。
-- `remember` / `revise` / `forget` 以 durable `taskId:callId` 作为操作 ID，重放是空操作；并发旧 revision 由事务内的状态校验拒绝（例如候选的 supersede 目标已被用户修订时，晋升会失败并提示改用 revise）。
+- Matching text within the same scope after whitespace normalization returns the existing `#seq` without creating duplicates. Case sensitivity is preserved (`Foo` and `foo` remain distinct).
+- Duplicate writes that supply new user confirmations or source references upgrade confidence ratings and append `evidence` version records. They advance version numbers and update exports. Calling `revise` with identical text follows this evidence-enhancement path (`changed = false`, `evidenceAdded = true`). If wider metadata causes Core overflow, the entry leaves Core and reports `coreDropped`.
+- Repeat requests with `core: true` validate budgets against final rendered collections. Budget overages roll back the entire transaction.
+- Superseded and deleted records do not revive. Identical new content creates a fresh active record.
+- Tool operations use durable `taskId:callId` operation IDs for idempotent replay. Concurrent outdated revisions reject under transactional checks.
 
-## 候选（自动提取）
+## Candidate Extraction
 
-`worker/memory-worker.ts` 在常驻服务内后台运行，不占用总管对话回合。触发时机：Task 完成、会话空闲（watch 到 busy→idle，另有 5 分钟兜底 sweep）、用户纠正（`revise` / `forget` 强制触发）。按 scope 游标增量读取 History 派生索引，经 Extract → Classify → Deduplicate（与 `memory_fts` 比对）→ Resolve Conflicts → Persist 生成候选记忆。自动触发有 30 秒最小间隔节流；服务关闭或维护时暂停。
+The background worker in `worker/memory-worker.ts` runs inside the resident service without consuming Chief conversational turns. Triggers include task completions, conversation idle events (busy to idle transitions with 5-minute sweeps), and user corrections (`revise` / `forget`). It reads incremental History indexes, runs extraction, classification, deduplication, conflict resolution, and persistence. Automatic runs throttle to a 30-second minimum interval. Processing pauses during maintenance and shutdown.
 
-- 候选一律为 `candidate`、trust = `agent_inferred`，绝不进入 `wake()` 渲染与只读导出；提取与入库在同一事务，提取器抛异常则整体回滚、游标不动。
-- 候选与 active 记忆同 kind 且措辞高度重叠时记为取代候选（`supersedes`）；用户在 Memory 面板 promote 时同事务取代旧记忆，但**不会**自动进入 Core。
-- dismiss 后同一来源不再重复提取（去重覆盖已删除记忆）。
-- 提取器是可注入接口 `MemoryExtractor`，默认为确定性启发式（中英文模式表见源码），可离线测试；接 Magpie 模型的位置已预留但未接（PRD 问题 6 未决）。
-- 每轮提取记录在 `memory_worker_runs`（触发原因、来源数、候选数、去重数），并写入 `events`（`memory.extracted`）。
+- Candidates store as `status = candidate` and `trust_level = agent_inferred`. They never enter `wake()` prompt injections or read-only exports. Extraction and persistence execute in a single transaction. Errors roll back cursors.
+- Candidates matching active memories in kind with overlapping phrasing record as superseding candidates (`supersedes`). Promoting them in the UI supersedes the older memory in the same transaction without automatically adding the item to Core Memory.
+- Dismissing candidates prevents duplicate extraction from the same source.
+- The `MemoryExtractor` interface defaults to a deterministic heuristic supporting offline tests.
+- Extraction runs log to `memory_worker_runs` and record `memory.extracted` audit events.
 
-## 位置与用户审阅
+## File Locations and User Review
 
-- 项目记忆在 `<project root>/memory/`，全局记忆在 `<dataDir>/scopes/global/memory/`；较长内容放 `<scope root>/notes/` 的 Markdown。
-- 首次打开某 scope 时，若存在旧版 `LOG.txt`，一次性事务导入（seq = 行号，来源 legacy、可信度 agent_inferred）；导入提交后才把源文件移入 `memory/legacy/`，回滚不会消耗导入源。旧 `TREE/` 同样移入 legacy 但不再导入。此后数据库是唯一写入来源。
-- 初始化（遗留导入、初始 Core 选择）在进入可失败的业务写入事务之前完成并独立提交；`Scopes` 不缓存事务内构造的 store，外层回滚后重载会从已提交状态重新初始化。
-- 数据库升级时对旧数据做一次确定性 Core 选择：用户确认优先，其次 preference/decision，再次其余，按 seq 顺序逐条校验最终渲染预算；其余 active 全部保留可检索。迁移结果可在 Memory 面板与导出中看到。
-- App 的 Context Pane 里有 Memory 面板：区分候选、Core 与"可检索未常驻"，显示 Core 用量，用户可直接晋升、驳回、选入/移出、修订（操作者为 user），全部历史保留在版本记录中。该面板当前在 UI 中隐藏（`ContextPane.tsx` 把 `memory` 标签从 tab strip 过滤掉，面板组件与 `memoryPromote` / `memoryDismiss` / `memorySelect` / `memoryDeselect` / `memoryRevise` 命令保留待恢复），隐藏期间候选只能经 Agent 工具审阅。
+- Project memory lives in `<project root>/memory/`. Global memory lives in `<dataDir>/scopes/global/memory/`. Long documentation stores as Markdown in `<scope root>/notes/`.
+- Opening a scope for the first time imports legacy `LOG.txt` files inside an atomic transaction. Files move to `memory/legacy/` only after commits succeed. Legacy trees move to legacy folders and are not imported.
+- Initialization completes and commits before running business transactions. Rollbacks reload stores from committed states.
+- Database upgrades perform deterministic Core selections for legacy data (prioritizing user-confirmed items, preferences, and decisions against token budgets). Remaining active items stay searchable.
+- The Context Pane contains a Memory panel. It displays candidates, Core facts, and searchable non-resident items alongside Core token usage. Users can promote, dismiss, select, deselect, or revise records (operator: `user`). All changes persist in version history. This panel is currently hidden in the UI. `ContextPane.tsx` filters out the `memory` tab from the tab strip. Panel components and commands (`memoryPromote`, `memoryDismiss`, `memorySelect`, `memoryDeselect`, `memoryRevise`) remain intact for future restoration. While hidden, candidates can only be reviewed through Agent tools.
 
-记什么、选什么由总管模型与用户决定。当前没有向量索引，也没有后台 Dreaming；Notes 检索与 Memory / History 共用同一套查询计划（`worker/search.ts`：AND、大小写不敏感子串），返回有界 snippet 与 `file.md:<line>` 命中，`read_note` 可展开命中行附近的窗口。
+Agents and users determine what to remember. Vector indexes and dreaming are not present in MVP. Note searches share query plans with Memory and History (`worker/search.ts`), returning bounded snippets with `file.md:<line>` references.

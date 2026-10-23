@@ -6,7 +6,7 @@
 
 总管运行在本机常驻 Node 服务中（launchd 管理，崩溃自动重启）；Electron App 是它的桌面客户端，Telegram Bot 与微信（iLink / ClawBot）是远程聊天入口。会话可以结束，记忆、目标和责任不会消失。
 
-产品需求与路线图见 [docs/prd.md](prd.md)，术语见 [CONTEXT.md](CONTEXT.md)（[英文原版](../CONTEXT.md)），设计决策见 [docs/decisions.md](decisions.md)，视觉语言见 [docs/design-language.md](design-language.md)。
+产品需求与路线图见 [docs/prd.md](zh/prd.md)（[英文版](prd.md)），术语见 [CONTEXT.md](zh/CONTEXT.md)（[英文原版](../CONTEXT.md)），设计决策见 [docs/decisions.md](zh/decisions.md)（[英文版](decisions.md)），视觉语言见 [docs/design-language.md](zh/design-language.md)（[英文版](design-language.md)）。
 
 ## 功能一览
 
@@ -32,24 +32,24 @@ mise run start    # 启动桌面 App
 mise run verify   # typecheck + lint + react-doctor + test
 ```
 
-工具链（Node 26 + pnpm 12.5.1）、环境变量与测试矩阵详见 [docs/development.md](development.md)。
+工具链（Node 26 + pnpm 12.5.1）、环境变量与测试矩阵详见 [docs/development.md](zh/development.md)。
 
 ## 文档索引
 
-| 文档                                                        | 内容                                                               |
-| ----------------------------------------------------------- | ------------------------------------------------------------------ |
-| [docs/development.md](development.md)                       | 工具链（mise）、常用任务、本地环境变量、完整测试套件与代码质量要求 |
-| [docs/decisions.md](decisions.md)                           | 架构设计决策 D1–D18：取舍与设计原由                                |
-| [docs/architecture.md](architecture.md)                     | 进程模型、桌面客户端、模块地图、权限与 Scope 隔离                  |
-| [docs/service.md](service.md)                               | 常驻服务：安装、操作、独占锁、升级事务与回滚机制                   |
-| [docs/agent-work.md](agent-work.md)                         | 目标、任务生命周期、调度、Run 状态机、管理者与工兵消息             |
-| [docs/memory.md](memory.md)                                 | SQLite 记忆体系、显式 Core Memory、来源（Provenance）与自动提取    |
-| [docs/channels.md](channels.md)                             | 渠道与会话绑定、Telegram / 微信接入配置与 Inbox 文件邮箱           |
-| [docs/data.md](data.md)                                     | 数据库表设计、恢复机制、通知投递、History 全文检索与 Event 审计    |
-| [docs/improvement-log.md](improvement-log.md)               | 改进日志：条目生命周期、异常指纹去重与任务提升                     |
-| [docs/prd.md](prd.md)                                       | 产品需求文档（PRD）：定位、核心对象、需求矩阵与路线图              |
-| [docs/design-language.md](design-language.md)               | 视觉语言规范：墨色表面、单色强调、Coder token 与 Phosphor 图标     |
-| [docs/research/memory-review.md](research/memory-review.md) | 记忆系统对比调研：OpenClaw、Hermes 与 Tian Agent 设计对比          |
+| 文档（中文 / 英文）                                                                              | 内容                                                               |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| [docs/development.md](zh/development.md) · [EN](development.md)                                  | 工具链（mise）、常用任务、本地环境变量、完整测试套件与代码质量要求 |
+| [docs/decisions.md](zh/decisions.md) · [EN](decisions.md)                                        | 架构设计决策 D1–D18：取舍与设计原由                                |
+| [docs/architecture.md](zh/architecture.md) · [EN](architecture.md)                               | 进程模型、桌面客户端、模块地图、权限与 Scope 隔离                  |
+| [docs/service.md](zh/service.md) · [EN](service.md)                                              | 常驻服务：安装、操作、独占锁、升级事务与回滚机制                   |
+| [docs/agent-work.md](zh/agent-work.md) · [EN](agent-work.md)                                     | 目标、任务生命周期、调度、Run 状态机、管理者与工兵消息             |
+| [docs/memory.md](zh/memory.md) · [EN](memory.md)                                                 | SQLite 记忆体系、显式 Core Memory、来源（Provenance）与自动提取    |
+| [docs/channels.md](zh/channels.md) · [EN](channels.md)                                           | 渠道与会话绑定、Telegram / 微信接入配置与 Inbox 文件邮箱           |
+| [docs/data.md](zh/data.md) · [EN](data.md)                                                       | 数据库表设计、恢复机制、通知投递、History 全文检索与 Event 审计    |
+| [docs/improvement-log.md](zh/improvement-log.md) · [EN](improvement-log.md)                      | 改进日志：条目生命周期、异常指纹去重与任务提升                     |
+| [docs/prd.md](zh/prd.md) · [EN](prd.md)                                                          | 产品需求文档（PRD）：定位、核心对象、需求矩阵与路线图              |
+| [docs/design-language.md](zh/design-language.md) · [EN](design-language.md)                      | 视觉语言规范：墨色表面、单色强调、Coder token 与 Phosphor 图标     |
+| [docs/research/memory-review.md](zh/research/memory-review.md) · [EN](research/memory-review.md) | 记忆系统对比调研：OpenClaw、Hermes 与 Tian Agent 设计对比          |
 
 ## 后续规划
 

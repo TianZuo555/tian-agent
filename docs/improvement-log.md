@@ -1,10 +1,12 @@
-# 改进日志
+# Improvement Log
 
-Log 视图和 `improvements` 表记录值得改进的产品问题、使用摩擦、想法与成功经验，与审计 Event、Memory 分开（[D11](decisions.md#d11--改进日志用户与总管可写系统错误自动指纹化)）。
+**English** | [简体中文](zh/improvement-log.md)
 
-- 一条条目带 `kind`（issue / friction / idea / win）、`status`（open / promoted / resolved / dismissed）、severity、来源（user / chief / system）和 scope；可选关联 Run、Conversation、Event。列表只取摘要，展开时才读取 detail。
-- 总管用 `log_improvement` 写入，用户可在 Log 视图新建；`list_improvements` 用于避免重复记录。
-- 服务启动、监听、Inbox、History、通知、调度、Run、Land/Ship、Telegram 与渲染层的异常会通过同一个 `reportIssue` 汇点自动记录。相同 `area + error name + code + message` 在同一 scope 的 open/promoted 条目上合并为一条并累计 `occurrences`；正文脱敏 bot token、Bearer、`sk-*` 和常见密钥赋值。
-- Promote 在同一事务中创建一条带 `improvement:<id>` 去重键的待办 Task，并回写 `task_id`；重复操作复用同一条 Task。
-- 自动捕获是 best-effort，写入失败只回退到 `console.error`，不阻塞原业务。原始进程输出仍写入 `service.log`。
-- 新增 Log 命令与 `improvements` 事件把 `SERVICE_PROTOCOL` 升到 3（此后其它特性继续递增，当前值见 `src/shared/service-paths.ts`）。
+The Log view and the `improvements` table record product issues, user friction, ideas, and wins. They stay separate from audit Events and Memory ([D11](decisions.md#d11--improvement-log-writable-by-user-and-chief-automatic-fingerprinting-for-system-errors)).
+
+- Each entry has `kind` (issue / friction / idea / win), `status` (open / promoted / resolved / dismissed), severity, source (user / chief / system), and scope. It can link to a Run, Conversation, or Event. The list returns summaries only. The UI loads detail text when you expand a row.
+- The Chief writes with `log_improvement`. Users create entries in the Log view. Use `list_improvements` to prevent duplicate records.
+- Service startup, listeners, Inbox, History, notifications, scheduler, Runs, Land/Ship, Telegram, and renderer errors record automatically through a single `reportIssue` sink. The system merges matching `area + error name + code + message` in the same scope into an open/promoted entry and increments `occurrences`. Text redacts bot tokens, Bearer tokens, `sk-*` keys, and common secret assignments.
+- Promote creates a pending Task with deduplication key `improvement:<id>` in the same transaction and writes back `task_id`. Repeated promotions reuse the same Task.
+- Automatic capture is best-effort. Storage failures fall back to `console.error` and do not block primary work. Raw process output still writes to `service.log`.
+- Log commands and `improvements` events raise `SERVICE_PROTOCOL` to 3.

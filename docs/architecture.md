@@ -1,81 +1,83 @@
-# 架构
+# Architecture
 
-## 进程
+**English** | [简体中文](zh/architecture.md)
 
-| 进程     | 职责                                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------------------- |
-| Renderer | React + Tailwind + coss。维护展示状态与订阅，拒绝过时响应；聊天使用应用自己的 `ChatSnapshot`                  |
-| Preload  | 通过 `contextBridge` 暴露共享类型的命令和可取消订阅；保持 sandbox 与 context isolation，关闭 Node integration |
-| Main     | 管理窗口、目录选择和 IPC 转发，通过 Unix socket 连接常驻服务；不打开数据库                                    |
-| 常驻服务 | 唯一持有应用数据库与 Pi storage；执行模型调用、工具、Inbox、通知和 Run。客户端重连后重新获取快照与订阅        |
+## Processes
 
-总管、项目管理者和工兵共用服务内的 Harness 与 Pi storage，各自显式选择 extension。三者都是 Durable 会话，生命周期与桌面客户端独立。
+| Process          | Responsibility                                                                                                                                                                |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Renderer         | React + Tailwind + coss. Manages view state and subscriptions; rejects outdated responses; uses application-owned `ChatSnapshot` for chat.                                    |
+| Preload          | Exposes typed commands and cancellable subscriptions via `contextBridge`; keeps sandbox and context isolation active; disables Node integration.                              |
+| Main             | Manages windows, directory pickers, and IPC routing; connects to the resident service via Unix sockets; never opens databases.                                                |
+| Resident Service | Holds application databases and Pi storage exclusively; executes models, tools, Inbox, notifications, and Runs. Reconnecting clients fetch fresh snapshots and subscriptions. |
 
-## 桌面客户端
+The Chief, Project Managers, and Workers share the service Harness and Pi storage. Each agent selects its extension set explicitly. All three run as Durable conversations with lifecycles independent from the desktop client.
 
-- 主导航：Chat、Goals、Skills、Inbox 四个视图；侧栏底部的齿轮或 `⌘,` 打开整页 Settings（再次按下或点关闭按钮回到来源视图）。侧栏与右栏都能折叠：侧栏 `⌃⌘S`，右栏 `⌘B`，开关都在内容区标题栏。
-- 会话归档：侧栏会话行 hover 出现 Archive / Restore（`archiveConversation`），归档会话收进底部 Archive 区；归档后不再作为 Scope 级唤醒目标。
-- 跨 scope 看板：Goals 视图统一展示所有 scope 的 goals / tasks / notices，Inbox 视图同理，条目带 scope 徽标。
-- Context Pane：Tasks / Runs 标签页（跟随当前会话的 scope）。Memory 面板实现保留（候选 / Core / 可检索分区、Core 用量、晋升 / 驳回 / 选入 / 修订命令都在），但标签当前从 tab strip 隐藏，UI 暂无入口。
-- ⌘K 命令面板：新建会话、切换视图、开关侧栏与 Context Pane。
-- Settings 页：模型选择与 Gateway 状态、用量统计热力图、改进日志（Log）、服务与升级（见 [service.md](service.md)）。
-- 聊天渲染：Streamdown 输出 Markdown，Mermaid 图表按需懒加载。
-- App 组件必须通过 oxlint 的 `jsx-a11y` 规则（error 级，见 `.oxlintrc.json`）。
+## Desktop Client
 
-## 模块地图
+- Navigation: Four primary views: Chat, Goals, Skills, and Inbox. The gear icon at the bottom of the sidebar or `⌘,` opens full-page Settings (pressing again or clicking close returns to the previous view). Both sidebar (`⌃⌘S`) and right context pane (`⌘B`) collapse cleanly from header buttons.
+- Conversation Archiving: Hovering conversation rows reveals Archive / Restore buttons (`archiveConversation`). Archived sessions collapse into the bottom Archive section and no longer receive unaddressed scope-level wakeups.
+- Cross-Scope Boards: The Goals view consolidates goals, tasks, and notices across all scopes. The Inbox view operates identically, showing scope badges for multi-project setups.
+- Context Pane: Tabbed view for Tasks and Runs (matches the active conversation scope). The Memory panel implementation remains intact (candidate, Core, and retrievable partitions, Core token usage, and promote, dismiss, select, and revise commands). However, its tab is hidden from the tab strip, leaving no entry point in the UI (see [memory.md](memory.md)).
+- Command Palette (`⌘K`): Creates conversations, switches views, and toggles sidebars and panels.
+- Settings: Model selection, Gateway status, daily usage heatmaps, Improvement Log, and Service Upgrades (see [service.md](service.md)).
+- Chat Rendering: Markdown renders through Streamdown. Mermaid diagrams load lazily on demand.
+- Application components must pass oxlint `jsx-a11y` rules at error level (see `.oxlintrc.json`).
 
-| 模块                           | 职责                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------- |
-| `service/server.ts`            | 服务生命周期、独占锁、Unix socket RPC、客户端隔离                                  |
-| `service/client.ts`            | 请求、事件、自动重连；关闭客户端不停止服务                                         |
-| `service/launchd.ts`           | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理                                  |
-| `desktop/controller.ts`        | App 连接偏好、服务控制及本地升级入口                                               |
-| `desktop/app-update.ts`        | App 校验、独立替换、启动检查与失败恢复                                             |
-| `shared/contracts.ts`          | IPC / socket 参数 schema、返回类型和消息合约                                       |
-| `shared/messages.ts`           | Pi transcript 转换为聊天快照                                                       |
-| `worker/service.ts`            | 应用组装、项目、总管/管理者会话、渠道绑定、委派、Inbox 与通知                      |
-| `worker/commands.ts`           | 各 transport 共用的业务命令                                                        |
-| `worker/agents.ts`             | Pi API 适配和总管／管理者／工兵能力配置                                            |
-| `worker/magpie.ts`             | Magpie 网关 provider：模型发现与描述映射                                           |
-| `worker/settings.ts`           | 模型选择与缓存的模型目录                                                           |
-| `worker/tools.ts`              | 总管 extension：task、memory、notes、Inbox、dispatch、delegate 等                  |
-| `worker/manager-tools.ts`      | 项目管理者 extension：项目锁定的 task、memory、notes、runs、report_chief 等        |
-| `worker/tools-memory.ts`       | 总管／项目管理者共用的记忆工具与 scope 解析                                        |
-| `worker/tools-goals.ts`        | 目标工具与总管／管理者共用的任务执行工具（taskExecutionTools）                     |
-| `worker/tools-improvements.ts` | 总管改进工具：log_improvement、list_improvements                                   |
-| `worker/tools-history.ts`      | 总管检索工具：search_history、read_history                                         |
-| `worker/worker-tools.ts`       | 工兵消息工具：ask_chief、tell_chief、check_msgs                                    |
-| `worker/goals.ts`              | Goal 存储、用户提醒（`user_notices`）与每日预算                                    |
-| `worker/skills.ts`             | Skill 多版本注册表、审批状态机、注入匹配与经验提取                                 |
-| `worker/files.ts`              | 原子文件发布（临时文件 + rename）                                                  |
-| `worker/scheduler.ts`          | cron 解析与触发事务                                                                |
-| `worker/runs.ts`               | Run 状态、attempt、收集、恢复及验收                                                |
-| `worker/run-progress.ts`       | Run 进度快照类型与工具输出格式化（`run_progress`）                                 |
-| `worker/manager-label.ts`      | 项目管理者命名与标签解析（D18）                                                    |
-| `worker/data.ts`               | task、memory、Inbox 操作和更新事件                                                 |
-| `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录                                          |
-| `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入                                                |
-| `worker/memory.ts`             | SQLite 记忆、来源与版本、显式 Core 选择（见 [memory.md](memory.md)）               |
-| `worker/provenance.ts`         | 用户来源证据校验（区分用户轮次与系统唤醒）                                         |
-| `worker/search.ts`             | Memory / History / Notes 共用的查询计划、Token 估算与 code point 分页              |
-| `worker/memory-worker.ts`      | 后台候选记忆提取：触发、游标、启发式提取器                                         |
-| `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索                                    |
-| `worker/events.ts`             | 业务事件与审计日志（`events` 表）                                                  |
-| `worker/improvements.ts`       | 改进日志、异常指纹去重、提升为 Task（见 [improvement-log.md](improvement-log.md)） |
-| `worker/usage.ts`              | 按本地日统计各 scope 的模型 token 用量                                             |
-| `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令                                           |
-| `worker/telegram.ts`           | Telegram Bot 长轮询、白名单、会话映射与回复转发                                    |
-| `worker/wechat.ts`             | 微信 iLink（ClawBot）扫码登录、白名单、会话映射、回复转发与 24 小时窗口保活        |
-| `worker/channel-host.ts`       | 渠道适配器共用的宿主接口与总管回复文本提取                                         |
+## Module Map
 
-## 权限与 scope
+| Module                         | Responsibility                                                                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `service/server.ts`            | Service lifecycle, exclusive locks, Unix socket RPC, client isolation                                                                   |
+| `service/client.ts`            | Requests, events, automatic reconnection; closing clients does not stop the service                                                     |
+| `service/launchd.ts`           | Service upgrade transactions, backups, rollbacks, recovery, and LaunchAgent operations                                                  |
+| `desktop/controller.ts`        | Connection preferences, service management, and local update triggers                                                                   |
+| `desktop/app-update.ts`        | Application bundle verification, staging, swap, health checks, and rollback                                                             |
+| `shared/contracts.ts`          | IPC and socket schemas, return types, and message contracts                                                                             |
+| `shared/messages.ts`           | Transforms Pi transcripts into chat snapshots                                                                                           |
+| `worker/service.ts`            | Application wiring, projects, chief/manager sessions, channel bindings, delegation, Inbox, and notifications                            |
+| `worker/commands.ts`           | Business command handlers shared across transports                                                                                      |
+| `worker/agents.ts`             | Pi API adapter and capability configurations for Chief, Manager, and Worker roles                                                       |
+| `worker/magpie.ts`             | Magpie gateway provider: model discovery and schema mapping                                                                             |
+| `worker/settings.ts`           | Model selection and cached model catalogs                                                                                               |
+| `worker/tools.ts`              | Chief extension: tasks, memory, notes, Inbox, dispatch, delegation                                                                      |
+| `worker/manager-tools.ts`      | Project Manager extension: project-locked tasks, memory, notes, runs, report_chief                                                      |
+| `worker/tools-memory.ts`       | Memory tools and scope resolution shared by Chief and Project Managers                                                                  |
+| `worker/tools-goals.ts`        | Goal management tools and shared task execution tools (`taskExecutionTools`)                                                            |
+| `worker/tools-improvements.ts` | Chief improvement tools: `log_improvement`, `list_improvements`                                                                         |
+| `worker/tools-history.ts`      | History search tools: `search_history`, `read_history`                                                                                  |
+| `worker/worker-tools.ts`       | Worker messaging tools: `ask_chief`, `tell_chief`, `check_msgs`                                                                         |
+| `worker/goals.ts`              | Goal storage, user notifications (`user_notices`), and daily execution budgets                                                          |
+| `worker/skills.ts`             | Multi-version Skill registry, approval state machine, prompt injection, and experience reviews                                          |
+| `worker/files.ts`              | Atomic file publishing via temporary files and renames                                                                                  |
+| `worker/scheduler.ts`          | Cron parsing and single-transaction execution triggers                                                                                  |
+| `worker/runs.ts`               | Run state machine, attempts, collection, recovery, and review operations                                                                |
+| `worker/run-progress.ts`       | Run progress snapshot types and tool output formatting (`run_progress`)                                                                 |
+| `worker/manager-label.ts`      | Project Manager naming and label resolution ([D18](decisions.md#d18--memory-ownership-by-role-chief-owns-global-managers-own-projects)) |
+| `worker/data.ts`               | Task, memory, and Inbox operations and update events                                                                                    |
+| `worker/db.ts`                 | Business databases, channel bindings, notification outbox, idempotency records                                                          |
+| `worker/scopes.ts`             | Scope directory management, notes, and Inbox file ingestion                                                                             |
+| `worker/memory.ts`             | SQLite memory engine, provenance, versioning, explicit Core selection (see [memory.md](memory.md))                                      |
+| `worker/provenance.ts`         | Evidence validation distinguishing user turns from system wakeups                                                                       |
+| `worker/search.ts`             | Shared search query planner, token estimators, and code point pagination                                                                |
+| `worker/memory-worker.ts`      | Background candidate memory extraction: triggers, cursors, heuristic extractors                                                         |
+| `worker/history.ts`            | Derived full-text indexes for transcripts and events, incremental sync, search                                                          |
+| `worker/events.ts`             | Business event auditing (`events` table)                                                                                                |
+| `worker/improvements.ts`       | Improvement Log, exception fingerprinting, task promotion (see [improvement-log.md](improvement-log.md))                                |
+| `worker/usage.ts`              | Daily token usage aggregation per scope                                                                                                 |
+| `worker/dispatch.ts`           | Worktree lifecycle, commits, diffs, merges, and PR operations                                                                           |
+| `worker/telegram.ts`           | Telegram Bot long polling, allow-listing, session mapping, reply forwarding                                                             |
+| `worker/wechat.ts`             | WeChat iLink QR login, allow-listing, session mapping, reply forwarding, 24h keepalive                                                  |
+| `worker/channel-host.ts`       | Shared channel host adapter and response text extraction                                                                                |
 
-总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch、delegate（`delegate` / `send_manager_msg` / `list_manager_msgs`）、Run 查询与 Run 消息（`send_run_msg` / `list_run_msgs` / `run_progress` / `stop_run`），没有 `bash/read/write/edit`；读取 Run 结果用 `read_run_report` / `read_run_diff`。启动时会重新限制已有总管会话的 extension。记忆与 notes 按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）：总管只写 Global、只注入 Global Core，项目的记忆与 notes 只能带 `scope` 只读查询。
+## Permissions and Scopes
 
-项目管理者启用 manager extension，由 `channel_sessions` 中 `channel = 'manager'`、`external_id = project_id` 的绑定决定，每项目恰好一条持久会话，随 `addProject` 创建（名字必填），服务启动时为旧项目补建；`channel = 'manager'` 是保留 channel，公开 `openSession` 不能绑定它——面向用户的入口是 `openManager(projectId)` 命令（拒 Global 与未知项目，重复调用幂等），会话行用 `role: 'manager'` 在 `ConversationInfo` 中标识并在侧栏置顶于本项目。它的工具全部锁定本项目 scope：任务执行（`delegate` 产生的 `assignee='manager'` Task 归它收口，总管不再能 start/complete/fail）、Run 管理（`dispatch` 只许本项目的 Task，把 `chief_conversation_id` 指到自己，支持 `run_progress` 与 `stop_run`，工兵的提问与结果回到管理者）、记忆与 notes 由它独占写入（Global 记忆只读，注入 Global + 本项目 Core），history 同样只许本项目；没有 shell / 编码工具。上行用 `report_chief` / `ask_chief` 走 `manager_messages` 持久线程（kind/task_id/reply_to/closed_at），通知按委派 Task 的 `report_to` 路由到对应总管会话。
+The Chief enables the `chief` extension only: tasks, memory, notes, Inbox, Improvement Log, dispatch, delegation (`delegate` / `send_manager_msg` / `list_manager_msgs`), Run inspections, and Run messaging (`send_run_msg` / `list_run_msgs` / `run_progress` / `stop_run`). It does not have shell or direct file-editing tools (`bash/read/write/edit`). It reads run outputs via `read_run_report` and `read_run_diff`. Service startup re-applies extension limits to existing conversations. Memory and notes follow role ownership ([D18](decisions.md#d18--memory-ownership-by-role-chief-owns-global-managers-own-projects)): the Chief writes Global memory only and receives Global Core Memory. Project memories and notes query read-only when given an explicit `scope`.
 
-Tian 可直接在管理者会话里对话派活：本轮输入的 `currentInput` 为 `kind='user'` 即为 Tian 轮次。此时 `ask_chief` 与 `report_chief` 被工具层守卫挡下（返回提示语、不写 `manager_messages`、不唤醒总管）——例外是 `report_chief` 带一个 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 指派的 Task 经 `add_task` 创建、`assignee` 为 NULL，静默收口；Tian 轮次里 `remember(source:'user')` 照常记 `user_confirmed`。
+Project Managers enable the `manager` extension based on channel bindings (`channel = 'manager'`, `external_id = project_id`). Exactly one persistent conversation exists per project, created with `addProject` (where manager naming is required). Startup reconciles legacy projects. The channel `manager` is reserved; public `openSession` rejects it. Users open it via `openManager(projectId)`. Manager conversations carry `role: 'manager'` in `ConversationInfo` and pin to the top of project sections in the sidebar. Manager tools lock to their project scope: task execution (concluding delegated Tasks with `assignee = 'manager'`), Run dispatches (`chief_conversation_id` points to the Manager), and exclusive write access to project memory and notes. Project Managers have no shell or coding tools. Upstream communication routes through `report_chief` and `ask_chief` across `manager_messages` threads. Notifications route to the delegating Chief via `report_to`.
 
-工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可执行中用 `ask_chief` 提问并阻塞等待答复，用 `tell_chief` 发进度通知，用 `check_msgs` 接收总管指令。工兵被要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，不提供操作系统文件访问沙箱。
+Tian can converse directly with Project Managers to assign work. When turn inputs have `kind = 'user'`, the turn belongs to Tian. Tool guards intercept `ask_chief` and `report_chief` to prevent unnecessary notifications to the Chief. Tasks created by Tian use `add_task` (`assignee = NULL`) and conclude quietly without Chief notification. Memory writes during Tian turns record as `user_confirmed`.
 
-Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。`runTimeoutMin = 0`（默认）表示单次尝试不限时，`deadline_at` 留空；正整数则作为该 attempt 的硬超时，到点 abort 并进入 collecting。
+Workers enable `CodingTools` and messaging extensions. They operate inside isolated Git worktrees and lack memory writing tools. Running Workers call `ask_chief` to query supervisors, `tell_chief` to send progress updates, and `check_msgs` to read supervisor instructions. Workers edit the current directory only and read memory and notes as read-only documents. Worktrees provide Git isolation; they do not enforce operating system sandboxes.
+
+Scopes divide into `global` and user-registered projects. Conversations bind to scopes. Project settings include `autoLand`, `allowInPlace`, `runTimeoutMin`, `baseBranch`, and `promptPreamble`. The default worker type is `durable-worker`. Setting `runTimeoutMin = 0` indicates unlimited execution time per attempt. A positive integer enforces a hard timeout that aborts the attempt and begins artifact collection.
