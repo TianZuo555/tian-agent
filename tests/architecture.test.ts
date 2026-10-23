@@ -397,6 +397,8 @@ test('chief and worker capabilities remain separate, including previously contam
       'check_msgs',
       'edit',
       'read',
+      'read_history',
+      'recall',
       'tell_chief',
       'write',
     ]);

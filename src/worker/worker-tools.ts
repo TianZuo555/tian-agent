@@ -1,9 +1,16 @@
-import { defineExtension, defineTool } from '@earendil-works/pi-durable';
+import {
+  defineExtension,
+  defineTool,
+  section,
+} from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import type { Db, Notification } from './db.js';
+import type { Scopes } from './scopes.js';
+import { relevantContext } from './relevant-context.js';
 
 export interface WorkerDeps {
   db: Db;
+  scopes?: Scopes;
   /**
    * Queue a notification that wakes the chief conversation, then trigger
    * delivery. Reuses the same pipeline that reports finished runs.
@@ -141,8 +148,87 @@ export function workerExtension(deps: WorkerDeps) {
     },
   });
 
+  const recall = defineTool({
+    name: 'recall',
+    replay: 'safe',
+    description:
+      'Read task-related memory, notes and history from this run project only. No memory writes. Use read_history for source excerpts.',
+    parameters: Type.Object({
+      query: Type.String(),
+      budget: Type.Optional(Type.Integer({ minimum: 50, maximum: 4000 })),
+    }),
+    execute: async (args, api) => {
+      const run = runOf(String(api.conversationId));
+      if (!run || !deps.scopes)
+        return err('No project memory is bound to this run');
+      return text(
+        relevantContext(
+          { db, scopes: deps.scopes },
+          [run.projectId],
+          args.query,
+          args.budget,
+        ),
+      );
+    },
+  });
+  const readEvidence = defineTool({
+    name: 'read_history',
+    replay: 'safe',
+    description:
+      'Read an indexed original evidence excerpt from this run project only.',
+    parameters: Type.Object({
+      ref: Type.String(),
+      offset: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+    execute: async (args, api) => {
+      const run = runOf(String(api.conversationId));
+      const ref = args.ref.trim();
+      const match = /^conv:([^#]+)#(.+)$/.exec(ref);
+      const event = /^event:(.+)$/.exec(ref);
+      if (!run || (!match && !event)) return err('Unknown evidence reference');
+      // Events are project-scoped like transcript entries: the scope check is
+      // part of the lookup, so another project's event reads as unavailable.
+      let row: { text: string } | undefined;
+      try {
+        row = (
+          match
+            ? db.sqlite
+                .prepare(
+                  'SELECT text FROM history_entries WHERE scope_id = ? AND conversation_id = ? AND entry_id = ?',
+                )
+                .get(run.projectId, match[1], match[2])
+            : db.sqlite
+                .prepare(
+                  "SELECT summary || char(10) || 'payload: ' || payload AS text FROM events WHERE scope_id = ? AND id = ?",
+                )
+                .get(run.projectId, event![1])
+        ) as { text: string } | undefined;
+      } catch {
+        // The events table belongs to EventLog and may not exist yet.
+        row = undefined;
+      }
+      if (!row) return err('Evidence is unavailable in this project');
+      return text(
+        [...row.text]
+          .slice(args.offset ?? 0, (args.offset ?? 0) + 1800)
+          .join(''),
+      );
+    },
+  });
   return defineExtension({
     name: 'tian-worker-msg',
-    tools: [askChief, tellChief, checkMsgs],
+    sections: [
+      section('relevant_context', (input) => {
+        const run = runOf(String(input.conversationId));
+        return run && deps.scopes
+          ? relevantContext(
+              { db, scopes: deps.scopes },
+              [run.projectId],
+              run.prompt,
+            )
+          : '';
+      }),
+    ],
+    tools: [askChief, tellChief, checkMsgs, recall, readEvidence],
   });
 }

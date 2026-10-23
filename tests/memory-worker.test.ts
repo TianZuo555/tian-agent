@@ -166,12 +166,19 @@ test('the same source never produces a second candidate', async (t) => {
   const repeat = await f.worker.trigger('p1', 'manual', { force: true });
   assert.equal(repeat.sources, 0);
 
-  // A reworded duplicate of the same fact is dropped by the fts comparison.
+  // A reworded statement is not an exact duplicate: keep it for review instead
+  // of dropping a possibly different decision by lexical similarity.
   f.seed('p1', row('1', '11', 'we decided to standardize on PNPM workspaces!'));
+  const reworded = await f.worker.trigger('p1', 'manual', { force: true });
+  assert.equal(reworded.candidates, 1);
+  assert.equal(reworded.duplicates, 0);
+  assert.equal(f.scopes.memory('p1').dump().items.length, 2);
+  // An exact repeat (case and punctuation are significant) is deduplicated.
+  f.seed('p1', row('1', '12', 'we decided to standardize on PNPM workspaces!'));
   const deduped = await f.worker.trigger('p1', 'manual', { force: true });
   assert.equal(deduped.candidates, 0);
   assert.equal(deduped.duplicates, 1);
-  assert.equal(f.scopes.memory('p1').dump().items.length, 1);
+  assert.equal(f.scopes.memory('p1').dump().items.length, 2);
 });
 
 test('promote renders in Core Memory (applying conflicts); dismiss never comes back', async (t) => {
@@ -181,7 +188,7 @@ test('promote renders in Core Memory (applying conflicts); dismiss never comes b
     kind: 'decision',
     actor: 'chief',
   });
-  // Same kind, overlapping topic, different fact → a supersede candidate.
+  // Overlap alone does not prove a conflict: keep both and show the related fact.
   f.seed(
     'p1',
     row('1', '10', 'We decided to deploy on Mondays instead of Fridays'),
@@ -190,12 +197,16 @@ test('promote renders in Core Memory (applying conflicts); dismiss never comes b
   const items = f.scopes.memory('p1').dump().items;
   const candidate = items.find((item) => item.status === 'candidate')!;
   assert.ok(candidate);
-  assert.equal(candidate.supersedes, 0);
+  assert.equal(candidate.supersedes, null);
+  assert.equal(candidate.related?.[0].seq, 0);
   assert.doesNotMatch(f.scopes.memory('p1').wake(), /Mondays/);
 
   const { memory: promoted, superseded } = f.scopes
     .memory('p1')
-    .promote(candidate.seq, 'user');
+    .promote(candidate.seq, 'user', 'reviewed', undefined, {
+      seq: 0,
+      content: 'We decided to deploy on Fridays',
+    });
   assert.equal(promoted.status, 'active');
   assert.equal(promoted.trustLevel, 'agent_inferred');
   // Promotion is user approval, not Core selection: the fact is active and
@@ -239,11 +250,13 @@ test('promote renders in Core Memory (applying conflicts); dismiss never comes b
   // The dismissal is remembered: the same source cannot re-create it.
   f.seed(
     'global',
-    row('2', '21', 'our build server runs on Ubuntu 24.04 with node 26'),
+    row('2', '21', 'Our build server runs on Ubuntu 24.04 with node 26'),
   );
   const again = await f.worker.trigger('global', 'task-completed', {
     force: true,
   });
+  // The dismissed statement is suppressed by its exact content, not by a
+  // broad similarity score over every historical text.
   assert.equal(again.candidates, 0);
   assert.equal(again.duplicates, 1);
 });
@@ -661,10 +674,10 @@ test('the heuristic extractor records the five priorities and skips noise', asyn
   assert.deepEqual(
     candidates.map((item) => [item.kind, item.confidence]),
     [
-      ['preference', 0.7],
-      ['decision', 0.7],
-      ['environment', 0.6],
-      ['outcome', 0.6],
+      ['preference', null],
+      ['decision', null],
+      ['environment', null],
+      ['outcome', null],
     ],
   );
   assert.doesNotMatch(
@@ -673,7 +686,7 @@ test('the heuristic extractor records the five priorities and skips noise', asyn
   );
 });
 
-test('conflict resolution picks the closest same-kind memory and promote applies it', () => {
+test('lexical similarity never auto-selects a replacement', () => {
   const active = [
     {
       seq: 0,
@@ -697,7 +710,7 @@ test('conflict resolution picks the closest same-kind memory and promote applies
       'decision',
       active,
     ),
-    1,
+    null,
   );
   assert.equal(
     resolveConflict('We decided to use SQLite for memory', 'decision', active),
@@ -705,7 +718,67 @@ test('conflict resolution picks the closest same-kind memory and promote applies
   );
   assert.equal(
     resolveConflict('I now always prefer yarn over npm', 'preference', active),
-    2,
+    null,
   );
   assert.equal(similarity('完全不同的一条记忆', 'We deploy on Fridays'), 0);
+});
+
+test('a repeated active fact gains the new source as evidence, not a candidate', async (t) => {
+  const f = fixture(t, { minIntervalMs: 0 });
+  f.seed('p1', row('1', '10', 'We decided to standardize on pnpm workspaces'));
+  await f.worker.trigger('p1', 'task-completed');
+  const memory = f.scopes.memory('p1');
+  const pending = memory.dump().items[0];
+  memory.promote(pending.seq, 'user');
+  f.seed('p1', row('2', '20', 'We decided to standardize on pnpm workspaces'));
+  const again = await f.worker.trigger('p1', 'manual', { force: true });
+  assert.equal(again.candidates, 0);
+  assert.equal(again.duplicates, 1);
+  const items = memory.dump().items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, 'active');
+  assert.equal(items[0].trustLevel, 'agent_inferred');
+  assert.deepEqual(items[0].evidence?.map((item) => item.sourceRef).sort(), [
+    'conv:1#10',
+    'conv:2#20',
+  ]);
+});
+
+test('a repeated candidate gains evidence and notifies the panel', async (t) => {
+  const emitted: string[] = [];
+  const dir = temporary(t);
+  const db = new Db(join(dir, 'data'));
+  t.after(() => db.close());
+  const scopes = new Scopes(join(dir, 'data', 'global'), db);
+  const events = new EventLog(db);
+  const history = new HistoryIndex(
+    db,
+    { conversation: () => Promise.reject(new Error('no conversations')) },
+    events,
+  );
+  t.after(() => history.stop());
+  const worker = new MemoryWorker({
+    db,
+    scopes,
+    history,
+    events,
+    minIntervalMs: 0,
+    emitMemory: (scopeId) => emitted.push(scopeId),
+  });
+  t.after(() => worker.stop());
+  const text = 'We decided to standardize on pnpm workspaces';
+  history.indexRows([{ ...row('1', '10', text), scopeId: 'global' }]);
+  await worker.trigger('global', 'manual', { force: true });
+  assert.deepEqual(emitted, ['global']);
+  history.indexRows([{ ...row('2', '20', text), scopeId: 'global' }]);
+  const again = await worker.trigger('global', 'manual', { force: true });
+  assert.equal(again.candidates, 0);
+  assert.equal(again.duplicates, 1);
+  assert.deepEqual(emitted, ['global', 'global']);
+  const items = scopes.memory('global').dump().items;
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].evidence?.map((item) => item.sourceRef).sort(), [
+    'conv:1#10',
+    'conv:2#20',
+  ]);
 });

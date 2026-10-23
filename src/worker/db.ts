@@ -281,7 +281,34 @@ export class Db {
     this.ensureColumns('memories', {
       supersedes: 'INTEGER',
       core: 'INTEGER NOT NULL DEFAULT 0',
+      conditions: "TEXT NOT NULL DEFAULT ''",
+      observed_at: 'TEXT',
+      verified_at: 'TEXT',
+      valid_until: 'TEXT',
     });
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_evidence (
+        id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(id),
+        source_ref TEXT NOT NULL, excerpt TEXT NOT NULL, source_actor TEXT NOT NULL,
+        relation TEXT NOT NULL, observed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS memory_evidence_memory ON memory_evidence(memory_id);
+      CREATE TABLE IF NOT EXISTS memory_confirmations (
+        id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(id),
+        source_ref TEXT NOT NULL, content TEXT NOT NULL, method TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS memory_confirmations_memory ON memory_confirmations(memory_id);
+      INSERT OR IGNORE INTO memory_evidence
+        SELECT 'legacy:' || id, id, COALESCE(source_ref, 'legacy:unknown'), content,
+          source_type, 'inference', created_at FROM memories
+          WHERE NOT EXISTS (SELECT 1 FROM memory_meta WHERE key = 'evidence-migrated:v1');
+      INSERT OR IGNORE INTO memory_confirmations
+        SELECT 'legacy:' || id, id, COALESCE(source_ref, 'legacy:unknown'), content,
+          'legacy', created_at FROM memories WHERE trust_level = 'user_confirmed'
+          AND NOT EXISTS (SELECT 1 FROM memory_meta WHERE key = 'evidence-migrated:v1');
+      INSERT OR IGNORE INTO memory_meta VALUES ('evidence-migrated:v1', '1');
+    `);
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS memories_scope_status ON memories(scope_id, status);
       CREATE INDEX IF NOT EXISTS memories_scope_core ON memories(scope_id, core);

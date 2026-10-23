@@ -4,7 +4,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D18，按领域排序。当前 `DATABASE_VERSION = 7`、`SERVICE_PROTOCOL = 10`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D19，按领域排序。当前 `DATABASE_VERSION = 8`、`SERVICE_PROTOCOL = 10`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -28,6 +28,7 @@
 | —      | D16 Run 进度可见、attempt 可中止：`run_progress` 只读、`stop_run` 保留 worktree |
 | —      | D17 微信走官方 iLink（ClawBot）通道，24 小时窗口用「最小保活」维持              |
 | —      | D18 记忆按角色归属：总管管 Global，管理者管项目                                 |
+| —      | D19 记忆证据、确认与相似度：证据表达依据，确认表达审核，相似度只提示相关        |
 
 > 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时追加为下一个空闲编号。D12–D18 为后续架构演进决策。
 
@@ -94,10 +95,10 @@ Memory 从 `<scope>/memory/LOG.txt` + `TREE/` 文件迁到 `tian.db`，增加来
 - 预算按 Token 计算（`ceil(UTF-8 字节 / 3)`，默认每 scope 1500），覆盖**最终渲染文本**：序号、类型、可信度、换行和用量页脚都计入。选入超额原子拒绝并返回当前用量；运行时不静默裁剪、不静默驱逐、不维护永远超额的 selected 列表。
 - 取代（Supersede）= 写入新 Memory（新 `seq`）+ 旧 Memory 标记 `superseded` 并指向新 Memory。旧 Memory 立即离开 Core，且不会被自动重新选入。修订优先保证纠正生效：替换放不下时新事实仍保存、`coreDropped` 明确返回，旧事实不保留在 Core。
 - 删除也是状态变更，不物理删除；写入、取代、删除、选入、移出、补证据都追加一条版本记录（操作者、原因、前后内容）。
-- 来源贯穿写入与读取：操作者与来源分开；`source: "user"` 只在存储语句与当前用户输入整体在空白规范化后**完全相等**时确认（大小写/否定/路径均保留），系统唤醒、Worker 输入、通知正文、截取/翻译/改写/概括都不确认（降为 `agent_inferred` 并说明）；无论是否确认，`sourceRef` 都绑定**最新**输入 entry（`conv:<id>#<entry>`，图片/空文本输入也绑定但不确认），修订引用本次纠正而非旧来源。
+- 来源贯穿写入与读取：操作者、来源与确认分开；`source: "user"` 只在存储语句与当前用户输入整体在空白规范化后**完全相等**时确认（大小写/否定/路径均保留），或整轮输入为锚定的 `记住：<正文>` / `remember: <正文>` 保存请求且正文完全相等时确认；系统唤醒、Worker 输入、通知正文、截取/翻译/改写/概括都不确认（降为 `agent_inferred` 并说明）。无论是否确认，`sourceRef` 都绑定**最新**输入 entry（`conv:<id>#<entry>`，图片/空文本输入也绑定但不确认），修订引用本次纠正而非旧来源。确认记录单独保存在 `memory_confirmations`，证据保存在 `memory_evidence`（见 D19）。
 - 同 Scope 规范化空白后完全相同的正文精确去重（大小写保留），重复写返回原 `#seq`；新的用户确认/来源追加 `evidence` 版本、重建导出并推进版本号而不丢失；历史行不会被不加区分地复活。写入、修订、删除、选入、移出都以 durable `taskId:callId` 幂等；`revise` 到相同正文仍走补证据路径。
 - 一次性导入旧 `LOG.txt`（`seq` = 行号，来源 legacy、可信度 agent_inferred），旧文件移入 `memory/legacy/`；旧 `TREE/` 只移入 legacy，不再导入。升级时对既有 active 记忆做一次确定性 Core 选择（用户确认优先，其次 preference/decision，按 `seq` 逐条校验预算），其余保留可检索；结果记录在 `memory_meta`，同版本重开不重做。
-- 自动提取只产生 `candidate`：候选不进入 `wake()` 渲染与只读导出，promote 只把候选转为 active，仍需用户或 Chief 显式 `select` 才常驻；候选的 supersede 目标在等待期间被用户修订时，晋升失败而不是覆盖新事实。
+- 自动提取只产生 `candidate`：候选不进入 `wake()` 渲染与只读导出，promote 只把候选转为 active，仍需用户或 Chief 显式 `select` 才常驻；普通候选不自动设置 supersede，只有用户明确选择“确认此条取代 #seq”时才同事务取代，且目标在等待期间变化时晋升失败而不是覆盖新事实（见 D19）。
 
 **后果**：服务把有效 Memory（标注是否 `[core]`）与 Core 用量单向导出到 `<scope>/memory/MEMORY.md` 供工兵和人阅读，手改导出文件不会写回；旧 `memory_nodes` 在升级事务中改名为 `memory_nodes_retired`，仅保留现场、不再读取，新库不创建；Core 的取舍从"压缩算法"变成显式选择，需要模型或用户主动管理，但不会再因递归摘要丢掉原始事实，也不会让过期摘要复活；数据库版本变化由升级事务备份与回滚覆盖（见 [service.md](service.md)）。
 
@@ -361,3 +362,25 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - `SERVICE_PROTOCOL` 升至 10（`addProject` 参数与 `ScopeInfo.managerName` 变为必填）。
 
 **后果**：记忆有清晰的单一 Agent 所有者，总管 Prompt 不随项目数量增长，项目细节集中在管理者的上下文里；Tian 的偏好不会再被困在某个项目 scope。代价：总管回答项目细节时要么按需只读查询、要么问管理者，多一跳；总管不能再直接修正项目记忆，只能转告管理者。Memory Worker 的候选提取与 Memory 面板仍按 scope 工作，不受角色限制。
+
+---
+
+## D19 · 记忆证据、确认与相似度：证据表达依据，确认表达审核，相似度只提示相关
+
+一条 Memory 的事实依据与用户是否审核过它是两件事。词面或 embedding 相似度不能证明两个陈述同义或矛盾，因此不再用相似度自动丢弃候选或指定取代目标。
+
+**背景**：旧实现把 `source: "user"` 与整条用户输入严格相等当作唯一确认规则，导致“记住：以后请用中文回答”提炼成“以后请用中文回答”只能降为 `agent_inferred`；但把规则放宽为子串又会确认被否定或引用的内容。同时 `similarity >= 0.8` 被当作重复、`0.45–0.8` 同 kind 被当作冲突，导致“use PostgreSQL”与“not use PostgreSQL”互相覆盖，“coffee with sugar”与“without sugar”只保留一条，`Ubuntu with PostgreSQL` 与 `Ubuntu with Redis` 被错误取代。
+
+**决定**：
+
+- `memory_evidence` 保存多条证据：实际 `source_ref`、原文 `excerpt`、来源 actor、`direct` / `paraphrase` / `inference` 关系与观察时间。工具层的 `evidence_ref` / `excerpt` 由服务校验：引用必须存在、属于写入 scope，片段必须出现在原文中；当前输入的引用绑定触发原因，历史/通知引用只提供证据，不能授权用户确认。
+- `memory_confirmations` 保存独立确认记录：`explicit-save`（经校验的明确保存请求）、`review`（Memory 面板审核）、`legacy`（升级迁移）。`trust_level` 与 `verified_at` 由确认记录驱动；模型传 `source: "user"` 不能自我授权。
+- 确认规则保持严格相等，只额外接受锚定整轮输入的 `记住：<正文>` / `请记住：<正文>` / `remember: <正文>` / `please remember: <正文>`，且正文不含引号。`不是…`、引用他人、截取与改写仍不确认。只有锚定保存请求构成工具侧确认；等于整轮输入只证明来源（`source: "user"`），条目仍是候选，必须经面板审核才激活。
+- 相似度只用于审核界面列出相关事实（`related`），不用于自动去重、自动冲突或自动晋升。精确去重保留大小写、数字、否定与条件。
+- 候选普通重复只补证据，不晋升；用户确认已有候选时通过 Memory 面板或锚定保存请求晋升。晋升与 Core 选择分离，普通晋升不自动进入 Core。
+- 取代只来自显式选择：候选上的 `supersedes` 是审核提示，普通确认/晋升（含 `promote` 工具）只激活候选，不会隐式取代目标；只有面板的“确认此条取代 #seq”把目标身份一并提交时才同事务取代。未确认的 `revise` 先校验目标存在且未成为历史，否则报错，而不是写成无关的新事实。
+- 候选提交阶段在事务内重新校验来源存在与旧事实状态；旧事实在提取期间被修订时，晋升失败并提示重新审核。驳回按具体正文抑制，不使用全历史相似度永久压制新的纠正。
+- 事实可带 `conditions`（环境/对象/版本），因此 prod PostgreSQL 与 test SQLite 共存；`observed_at`（来源发生时间）、`verified_at`（用户审核时间）与 `updated_at`（最后状态变化）分开；`valid_until` 只用于有明确有效期的记忆，并在默认读取与 Core 渲染中生效：过期条目不能选入 Core，已选入的到期后离开 Core 与默认 `recall`。不按出现次数自动提高可信度，也不为所有偏好统一衰减。
+- 未校准的 `confidence` 不再写入或展示，避免虚假精度；升级时把旧值清空。旧数据保留正文、状态、版本与候选关系，并补一条 `legacy` 证据；原 `user_confirmed` 另补 `legacy` 确认记录。
+
+**后果**：记忆审核成为正常入口（右栏 Memory tab），可展开证据、确认记录、相关事实与时间；写入路径（工具、候选、面板）共用同一套证据/确认/状态规则。代价是词面检索仍需明确查询策略，不能假装具备语义理解；相关事实需要用户判断是否取代，而不是系统猜测。

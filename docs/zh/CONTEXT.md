@@ -69,7 +69,7 @@ _Avoid_: hook, wakeup
 ## 记忆
 
 **Memory**:
-一条跨会话保留、带来源与可信度的事实、偏好、决策或结论，单行且不超过 1000 个字符。
+一条跨会话保留、带证据、可选条件与审核状态的事实、偏好、决策或结论，单行且不超过 1000 个字符。
 _Avoid_: note, fact, log line
 
 **Core Memory**:
@@ -89,8 +89,19 @@ _Avoid_: 截断, overflow log
 _Avoid_: overwrite, edit, update
 
 **Provenance（来源）**:
-Memory 的来源对象与可信级别：用户确认、Agent 推断或第三方数据。操作者（谁执行写入）与来源（谁陈述事实）分开记录；只有当前请求确实由真实用户轮次发起时，才可标为用户确认。
+Memory 的来源，由 Evidence 与独立 Confirmation 记录表达。写入者、来源 actor 与审核存储正文的人分开。
 _Avoid_: origin, citation
+
+**Evidence（证据）**:
+支持一条 Memory 的原始来源引用与原文片段，带来源 actor 以及 direct / paraphrase / inference 关系。重复证据不会使陈述变成已确认。
+_Avoid_: confidence score
+
+**Confirmation（确认）**:
+记录用户通过审核或经校验的明确保存请求接受存储正文的动作。仅凭用户是来源不构成 Confirmation。
+_Avoid_: mention
+
+**Relevant Context（任务相关上下文）**:
+为当前输入或 Task 在参与者可读 Scope 内检索出的、有独立预算的 Memory、Notes 与 History 子集；它独立于稳定的 Core Memory 选择。
 
 **History**:
 所有已发生的会话内容和事件的可检索记录；只有沉淀为 Memory 的内容才会自动进入其他会话。

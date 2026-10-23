@@ -69,7 +69,7 @@ _Avoid_: hook, wakeup
 ## Memory
 
 **Memory**:
-A single fact, preference, decision, or conclusion preserved across conversations, carrying provenance and confidence; single-line and at most 1,000 Unicode characters.
+A single fact, preference, decision, or conclusion preserved across conversations, with evidence, optional conditions, and a review state; single-line and at most 1,000 Unicode characters.
 _Avoid_: note, fact, log line
 
 **Core Memory**:
@@ -89,7 +89,19 @@ Replaces an outdated Memory with a revised Memory; the previous Memory is retain
 _Avoid_: overwrite, edit, update
 
 **Provenance**:
-The originating source and confidence tier of a Memory: user confirmed, agent inferred, or third-party data. The actor (who executed the write) and source (who stated the fact) are recorded separately; marked as user confirmed only if the current request originated from a genuine user turn.
+The origins of a Memory, expressed by its Evidence and separate Confirmation records. The writer, the source actor, and the person who reviewed the stored statement are distinct.
+_Avoid_: origin, citation
+
+**Evidence**:
+An original source reference and excerpt that supports a Memory, with its source actor and its direct, paraphrase, or inference relationship to the stored statement. Repeated evidence does not make a statement confirmed.
+_Avoid_: confidence score
+
+**Confirmation**:
+A recorded user action that accepts the stored statement, through review or a verified explicit save request. A user source alone is not Confirmation.
+_Avoid_: mention
+
+**Relevant Context**:
+A bounded selection of Memory, Notes, and History retrieved for the current input or Task within the participant's readable Scopes. It is separate from the stable Core Memory selection.
 _Avoid_: origin, citation
 
 **History**:

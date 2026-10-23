@@ -61,7 +61,8 @@ export const commandHandlers = (service: Service, clientId: number) =>
       service.memoryRevise(scopeId, seq, text, reason),
     memoryForget: (scopeId, seq, reason) =>
       service.memoryForget(scopeId, seq, reason),
-    memoryPromote: (scopeId, seq) => service.memoryPromote(scopeId, seq),
+    memoryPromote: (scopeId, seq, replacement) =>
+      service.memoryPromote(scopeId, seq, replacement),
     memoryDismiss: (scopeId, seq) => service.memoryDismiss(scopeId, seq),
     memorySelect: (scopeId, seq) => service.memorySelect(scopeId, seq),
     memoryDeselect: (scopeId, seq) => service.memoryDeselect(scopeId, seq),

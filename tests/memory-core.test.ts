@@ -190,7 +190,8 @@ test('remember binds the exact current input and confirms only verbatim user wor
   const conversation = await f.openConversation('p1');
   const id = String(conversation.id);
 
-  // A real user turn that IS the statement: confirmed, evidence = that entry.
+  // A real user turn that IS the statement confirms the source only: the row
+  // stays a candidate, and Core waits for review.
   f.turn = {
     entryId: '42',
     kind: 'user',
@@ -203,23 +204,22 @@ test('remember binds the exact current input and confirms only verbatim user wor
   });
   assert.doesNotMatch(toolText(written), /isError/);
   assert.match(toolText(written), /remembered as #0/);
-  assert.match(toolText(written), /user-confirmed/);
+  assert.match(toolText(written), /agent-inferred/);
+  assert.match(toolText(written), /stays a candidate/);
+  assert.match(toolText(written), /not in Core/);
   assert.equal(
     (
       f.db.sqlite
-        .prepare('SELECT source_ref FROM memories WHERE seq = 0')
-        .get() as { source_ref: string }
+        .prepare('SELECT source_ref, status FROM memories WHERE seq = 0')
+        .get() as { source_ref: string; status: string }
     ).source_ref,
     `conv:${id}#42`,
   );
-  // Core renders provenance (kind, trust, date, source) inside the budget.
-  assert.match(
-    f.scopes.memory('global').wake(),
-    /#0 \[fact\] user_confirmed \d{4}-\d{2}-\d{2} conv:/,
-  );
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'candidate');
+  assert.doesNotMatch(f.scopes.memory('global').wake(), /release 分支/);
 
   // An excerpt of a longer turn is not proof (no substring matching): the
-  // stored row must not be upgraded to user_confirmed by this call.
+  // stored row keeps its first source and stays a candidate.
   f.turn = {
     entryId: '43',
     kind: 'user',
@@ -237,6 +237,30 @@ test('remember binds the exact current input and confirms only verbatim user wor
         .get() as { source_ref: string }
     ).source_ref,
     `conv:${id}#42`,
+  );
+
+  // An anchored save request is the tool-side confirmation; only then does the
+  // row become active, verified and selected.
+  f.turn = {
+    entryId: '44',
+    kind: 'user',
+    text: '记住：项目部署走 release 分支',
+  };
+  const saved = await call(f.tool('remember'), id, {
+    text: '项目部署走 release 分支',
+    source: 'user',
+    core: true,
+  });
+  assert.match(toolText(saved), /user-confirmed/);
+  assert.match(toolText(saved), /in Core/);
+  const stored = f.scopes.memory('global').dump().items[0];
+  assert.equal(stored.status, 'active');
+  assert.equal(stored.trustLevel, 'user_confirmed');
+  assert.equal(stored.core, true);
+  // Core renders provenance (kind, trust, date, source) inside the budget.
+  assert.match(
+    f.scopes.memory('global').wake(),
+    /#0 \[fact\] user_confirmed \d{4}-\d{2}-\d{2} conv:/,
   );
 
   const recall = f.tool('recall');
@@ -378,7 +402,11 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
   const f = await harness(t);
   const conversation = await f.openConversation('p1');
   const id = String(conversation.id);
-  f.turn = { entryId: '10', kind: 'user', text: '我喝咖啡' };
+  f.turn = {
+    entryId: '10',
+    kind: 'user',
+    text: '记住：我喝咖啡',
+  };
   await call(f.tool('remember'), id, {
     text: '我喝咖啡',
     source: 'user',
@@ -407,10 +435,11 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
     'agent_inferred',
   );
 
-  // Recording the user's exact words is the confirmation path.
-  f.turn = { entryId: '21', kind: 'user', text: '其实我喝茶' };
+  // An anchored save request for the correction is the confirmation path. The
+  // confirmed correction supersedes the active fact it was written against.
+  f.turn = { entryId: '21', kind: 'user', text: '记住：其实我喝茶' };
   const verbatim = await call(f.tool('revise'), id, {
-    seq: 1,
+    seq: 0,
     text: '其实我喝茶',
     reason: 'user corrected the preference',
     source: 'user',
@@ -421,12 +450,187 @@ test('a correction quoting the user stays confirmed; a rewrite is agent_inferred
     .get() as { source_ref: string; trust_level: string; core: number };
   assert.equal(row.trust_level, 'user_confirmed');
   assert.equal(row.source_ref, `conv:${id}#21`);
-  assert.equal(row.core, 1);
-  // The original fact is history, not Core, and never comes back.
+  // The original fact was in Core; the correction does not inherit Core.
+  assert.equal(f.scopes.memory('global').dump().items[1].core, false);
+  // The verified correction supersedes the original fact in the same
+  // transaction; the old fact leaves Core but remains as history.
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'superseded');
   assert.doesNotMatch(f.scopes.memory('global').wake(), /我喝咖啡/);
   assert.match(
     f.scopes.memory('global').recall('我喝咖啡', { includeHistory: true }),
     /\(superseded\)/,
+  );
+});
+
+test('remember source:user keeps a candidate until an explicit save or review', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const id = String(conversation.id);
+  // An ordinary user statement equal to the stored claim confirms the source
+  // only: no confirmation record, no activation, no Core.
+  f.turn = { entryId: '30', kind: 'user', text: 'I prefer tea in the morning' };
+  const inferred = await call(f.tool('remember'), id, {
+    text: 'I prefer tea in the morning',
+    source: 'user',
+    core: true,
+  });
+  assert.match(toolText(inferred), /agent-inferred/);
+  const pending = f.scopes.memory('global').dump().items[0];
+  assert.equal(pending.status, 'candidate');
+  assert.equal(pending.trustLevel, 'agent_inferred');
+  assert.equal(pending.core, false);
+  assert.equal(pending.verifiedAt, null);
+  assert.equal(pending.confirmations?.length ?? 0, 0);
+  assert.doesNotMatch(f.scopes.memory('global').wake(), /tea in the morning/);
+  // The anchored save request activates it with a real confirmation record.
+  f.turn = {
+    entryId: '31',
+    kind: 'user',
+    text: 'remember: I prefer tea in the morning',
+  };
+  const saved = await call(f.tool('remember'), id, {
+    text: 'I prefer tea in the morning',
+    source: 'user',
+  });
+  assert.match(toolText(saved), /user-confirmed/);
+  const active = f.scopes.memory('global').dump().items[0];
+  assert.equal(active.status, 'active');
+  assert.equal(active.trustLevel, 'user_confirmed');
+  assert.equal(active.confirmations?.length, 1);
+  assert.ok(active.verifiedAt);
+  // Selection stayed a separate decision: saving did not select into Core.
+  assert.equal(active.core, false);
+});
+
+test('an unconfirmed revise validates its target instead of inventing a fact', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const id = String(conversation.id);
+  const memory = f.scopes.memory('global');
+  memory.remember({ text: 'Deploys run on Fridays', kind: 'decision' });
+  f.turn = { entryId: '40', kind: 'user', text: 'deploy day changed' };
+  // A missing number fails; it never becomes a standalone candidate.
+  const missing = await call(f.tool('revise'), id, {
+    seq: 99,
+    text: 'Deploys run on Thursdays',
+    reason: 'user corrected the day',
+  });
+  assert.equal(missing.isError, true);
+  assert.match(toolText(missing), /no memory #99/);
+  // A historical target fails the same way.
+  memory.revise(0, 'Deploys run on Sundays', 'corrected', 'user');
+  const historical = await call(f.tool('revise'), id, {
+    seq: 0,
+    text: 'Deploys run on Saturdays',
+    reason: 'user corrected the day again',
+  });
+  assert.equal(historical.isError, true);
+  assert.match(toolText(historical), /superseded/);
+  assert.equal(memory.dump().items.length, 2);
+  assert.equal(
+    memory.dump().items.filter((item) => item.status === 'candidate').length,
+    0,
+  );
+  // A live target stores the correction as a candidate that leaves the target
+  // active until Tian chooses the replacement.
+  const pending = await call(f.tool('revise'), id, {
+    seq: 1,
+    text: 'Deploys run on Thursdays',
+    reason: 'user corrected the day',
+  });
+  assert.match(toolText(pending), /candidate/);
+  const review = memory
+    .dump()
+    .items.find((item) => item.status === 'candidate')!;
+  assert.equal(review.supersedes, 1);
+
+  // Verbatim user wording confirms the source only: an ordinary correction
+  // sentence must not replace the fact without an explicit save request.
+  f.turn = { entryId: '41', kind: 'user', text: 'Deploys run on Wednesdays' };
+  const verbatim = await call(f.tool('revise'), id, {
+    seq: 1,
+    text: 'Deploys run on Wednesdays',
+    reason: 'user corrected the day',
+    source: 'user',
+  });
+  assert.match(toolText(verbatim), /candidate/);
+  assert.equal(memory.dump().items[1].status, 'active');
+  assert.equal(
+    memory.dump().items.filter((item) => item.status === 'candidate').length,
+    2,
+  );
+  assert.equal(memory.dump().items[1].status, 'active');
+});
+
+test('ordinary activation never replaces a fact; only an explicit replacement does', async (t) => {
+  const f = await harness(t);
+  const memory = f.scopes.memory('p1');
+  const old = memory.remember({
+    text: 'Deploys run on Fridays',
+    kind: 'decision',
+    core: true,
+  });
+  const pending = memory.candidate({
+    text: 'Deploys run on Mondays',
+    kind: 'decision',
+    sourceRef: 'conv:1#2',
+    supersedes: old.memory.seq,
+  })!;
+  // The supersede hint is a review prompt, not an instruction.
+  const activated = memory.promote(pending.seq, 'user', 'reviewed');
+  assert.equal(activated.memory.status, 'active');
+  assert.equal(activated.superseded, null);
+  assert.equal(
+    memory.dump().items.find((item) => item.seq === old.memory.seq)?.status,
+    'active',
+  );
+  assert.match(memory.wake(), /Fridays/);
+  assert.doesNotMatch(memory.wake(), /Mondays/);
+  // The dedicated replacement action is the only path that supersedes; it
+  // needs a candidate, so the replacement is staged through revise.
+  const staged = memory.candidate({
+    text: 'Deploys run on Saturdays',
+    kind: 'decision',
+    sourceRef: 'conv:1#3',
+    supersedes: old.memory.seq,
+  })!;
+  const replaced = memory.promote(staged.seq, 'user', 'reviewed', undefined, {
+    seq: old.memory.seq,
+    content: old.memory.content,
+    conditions: old.memory.conditions,
+    validUntil: old.memory.validUntil,
+  });
+  assert.equal(replaced.superseded?.status, 'superseded');
+  assert.equal(
+    memory.dump().items.find((item) => item.seq === old.memory.seq)?.status,
+    'superseded',
+  );
+  assert.doesNotMatch(memory.wake(), /Fridays/);
+});
+
+test('an expired memory cannot be selected into Core', async (t) => {
+  const f = await harness(t);
+  const memory = f.scopes.memory('p1');
+  const expired = memory.remember({
+    text: 'Deploy freeze ended',
+    validUntil: '2020-01-01T00:00:00.000Z',
+  });
+  assert.throws(
+    () => memory.select(expired.memory.seq),
+    /expired .*cannot enter Core/,
+  );
+  assert.equal(
+    memory.dump().items.find((item) => item.seq === expired.memory.seq)?.core,
+    false,
+  );
+  assert.throws(
+    () =>
+      memory.remember({
+        text: 'Another expired fact',
+        validUntil: '2020-01-01',
+        core: true,
+      }),
+    /expired .*cannot enter Core/,
   );
 });
 
@@ -511,14 +715,15 @@ test('same-text revision records confirmation, publishes version and export, and
 
   // Same content, but now confirmed from a later entry: trust, source, version,
   // export and the next-turn snapshot all move.
-  const same = memory.revise(0, '项目用 pnpm', 'Tian confirmed it', 'chief', {
+  const same = memory.revise(0, '项目用 pnpm', 'Tian confirmed it', 'user', {
     sourceRef: 'conv:1#9',
-    trustLevel: 'user_confirmed',
+    confirmation: { sourceRef: 'conv:1#9', method: 'review' },
   });
   assert.equal(same.changed, false);
   assert.equal(same.evidenceAdded, true);
   assert.equal(same.memory.trustLevel, 'user_confirmed');
   assert.equal(same.memory.sourceRef, 'conv:1#9');
+  assert.equal(same.memory.verifiedAt !== null, true);
   assert.equal(
     (
       db.sqlite.prepare('SELECT COUNT(*) AS n FROM memory_versions').get() as {
@@ -532,9 +737,9 @@ test('same-text revision records confirmation, publishes version and export, and
   assert.ok(memory.version() > 0);
 
   // Repeating adds nothing: no duplicate evidence rows.
-  const repeat = memory.revise(0, '项目用 pnpm', 'again', 'chief', {
+  const repeat = memory.revise(0, '项目用 pnpm', 'again', 'user', {
     sourceRef: 'conv:1#9',
-    trustLevel: 'user_confirmed',
+    confirmation: { sourceRef: 'conv:1#9', method: 'review' },
   });
   assert.equal(repeat.evidenceAdded, false);
   assert.equal(
@@ -634,7 +839,6 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
   const f = await harness(t);
   const conversation = await f.openConversation('p1');
   const id = String(conversation.id);
-  const remember = f.tool('remember');
   f.turn = null;
   const facts = [
     'Project uses SQLite for durable memory storage',
@@ -643,7 +847,10 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
     '部署使用 release 分支',
     'Unrelated deployment detail about caches',
   ];
-  for (const text of facts) await call(remember, id, { text });
+  // Seed active rows directly: tool writes without a verified user turn are
+  // candidates by design and are covered by the review tests.
+  for (const text of facts)
+    f.scopes.memory('global').remember({ text, actor: 'chief' });
 
   const recall = f.tool('recall');
   // Non-contiguous words both match (AND), unlike the old phrase query.
@@ -855,6 +1062,8 @@ test('memory writes are idempotent under a replayed operation and duplicates add
   assert.match(toolText(again), /already says that/);
   assert.match(toolText(again), /evidence recorded/);
   assert.equal(f.scopes.memory('global').dump().items.length, 1);
+  // The duplicate is one review record with two citations, not a second fact
+  // or a second audit write.
   assert.equal(
     f.db.sqlite
       .prepare(
@@ -863,9 +1072,10 @@ test('memory writes are idempotent under a replayed operation and duplicates add
       .get()?.n,
     1,
   );
+  assert.equal(f.scopes.memory('global').dump().items[0].evidence?.length, 2);
 });
 
-test('candidates never enter Core automatically, and a stale supersede target blocks promotion', async (t) => {
+test('candidates never enter Core automatically, and ordinary promotion keeps both facts', async (t) => {
   const f = await harness(t);
   await f.openConversation('p1');
   const memory = f.scopes.memory('p1');
@@ -891,18 +1101,19 @@ test('candidates never enter Core automatically, and a stale supersede target bl
     'correction',
     'user',
   );
-  // Promotion of the stale candidate is refused with an explanation.
-  await assert.rejects(
-    async () => f.data.promote('p1', candidate.seq),
-    /since this candidate was extracted/,
-  );
+  // Ordinary activation ignores the stale hint instead of replacing the newer
+  // fact; the candidate becomes active and searchable on its own.
+  const promoted = f.data.promote('p1', candidate.seq);
+  assert.equal(promoted.memory.status, 'active');
+  assert.equal(promoted.superseded, null);
   assert.equal(
     memory.dump().items.find((item) => item.seq === candidate.seq)?.status,
-    'candidate',
+    'active',
   );
-  // The current fact is still in Core; the candidate did not replace it.
+  // The current fact is still in Core and the candidate stayed out of it.
   assert.match(memory.wake(), /Sundays/);
   assert.doesNotMatch(memory.wake(), /Mondays/);
+  assert.match(memory.recall('Mondays'), /Mondays/);
 });
 
 test('the chief owns General memory: writes land there, Core renders only General', async (t) => {
@@ -1024,8 +1235,12 @@ test('notifications drive Core snapshot refreshes while provenance stays system'
   const f = await harness(t);
   const conversation = await f.openConversation('p1');
   const id = String(conversation.id);
-  // Turn 1: a real user statement, selected into Core.
-  f.turn = { entryId: '10', kind: 'user', text: '项目部署走 release 分支' };
+  // Turn 1: an explicit save request, selected into Core.
+  f.turn = {
+    entryId: '10',
+    kind: 'user',
+    text: '记住：项目部署走 release 分支',
+  };
   await call(f.tool('remember'), id, {
     text: '项目部署走 release 分支',
     source: 'user',
@@ -1101,11 +1316,13 @@ test('writes bind the exact current input even for agent-inferred facts', async 
     kind: 'system.notification',
     text: '[run finished] report ready',
   };
-  await call(f.tool('revise'), id, {
+  const revised = await call(f.tool('revise'), id, {
     seq: 0,
     text: 'The migration test is flaky on CI runners',
     reason: 'refine wording',
   });
+  // An unverified correction is a review candidate, not an automatic replace.
+  assert.match(toolText(revised), /candidate/);
   assert.equal(
     (
       f.db.sqlite
@@ -1114,6 +1331,9 @@ test('writes bind the exact current input even for agent-inferred facts', async 
     ).source_ref,
     `conv:${id}#11`,
   );
+  // An unverified agent write is a candidate, never silently active.
+  assert.equal(f.scopes.memory('global').dump().items[0].status, 'candidate');
+  assert.equal(f.scopes.memory('global').dump().items[1].supersedes, null);
 });
 
 test('the newest input wins even when it carries no text', async (t) => {
@@ -1156,4 +1376,46 @@ test('the shared search plan keeps one rule set for memory, history and notes', 
   assert.equal(plan.match, '"SQLite"');
   assert.equal(planSearch('中文').match, null);
   assert.deepEqual(planSearch('  ').terms, []);
+});
+
+test('a staged revise inherits the target conditions and expiry', async (t) => {
+  const f = await harness(t);
+  const conversation = await f.openConversation('p1');
+  const id = String(conversation.id);
+  const memory = f.scopes.memory('global');
+  memory.remember({
+    text: 'Production uses PostgreSQL',
+    kind: 'environment',
+    conditions: 'production',
+    validUntil: '2030-01-01',
+  });
+  f.turn = { entryId: '50', kind: 'user', text: 'we moved to SQLite' };
+  const staged = await call(f.tool('revise'), id, {
+    seq: 0,
+    text: 'Production uses SQLite',
+    reason: 'user corrected the database',
+  });
+  assert.match(toolText(staged), /candidate/);
+  const pending = memory
+    .dump()
+    .items.find((item) => item.status === 'candidate')!;
+  assert.equal(pending.conditions, 'production');
+  assert.equal(pending.validUntil, '2030-01-01T00:00:00.000Z');
+  // The hinted target is always offered for replacement, even when the
+  // wording is too different to pass the similarity threshold.
+  for (let i = 0; i < 6; i++)
+    memory.remember({ text: `Production uses SQLite replica ${i}` });
+  const reworded = await call(f.tool('revise'), id, {
+    seq: 0,
+    text: 'Switch the database layer over to embedded storage',
+    reason: 'user corrected the database',
+  });
+  assert.match(toolText(reworded), /candidate/);
+  const items = memory
+    .dump()
+    .items.filter((item) => item.status === 'candidate');
+  for (const item of items) {
+    assert.equal(item.related?.[0]?.seq, 0);
+    assert.ok((item.related?.length ?? 0) <= 5);
+  }
 });

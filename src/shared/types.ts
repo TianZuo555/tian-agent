@@ -267,6 +267,21 @@ export interface SkillItem {
   updatedAt: string;
 }
 
+export interface MemoryEvidence {
+  sourceRef: string;
+  excerpt: string;
+  actor: string;
+  relation: 'direct' | 'paraphrase' | 'inference';
+  observedAt: string | null;
+}
+
+export interface MemoryConfirmation {
+  sourceRef: string;
+  content: string;
+  method: 'explicit-save' | 'review' | 'legacy';
+  confirmedAt: string;
+}
+
 export interface MemoryItem {
   seq: number;
   content: string;
@@ -276,6 +291,20 @@ export interface MemoryItem {
   sourceType: string;
   sourceRef: string | null;
   confidence: number | null;
+  evidence?: MemoryEvidence[];
+  confirmations?: MemoryConfirmation[];
+  conditions?: string;
+  observedAt?: string | null;
+  verifiedAt?: string | null;
+  validUntil?: string | null;
+  /** Related facts require review; similarity does not prove a conflict. */
+  related?: {
+    seq: number;
+    content: string;
+    sourceRef: string | null;
+    conditions?: string;
+    validUntil?: string | null;
+  }[];
   /** Explicitly selected into the Core Memory view. */
   core: boolean;
   supersededBy: string | null;

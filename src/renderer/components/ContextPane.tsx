@@ -695,6 +695,9 @@ function MemoryPanel() {
           {t('memory.history')}
         </label>
       </div>
+      <p className="px-3 py-2 text-[11px] text-content-secondary">
+        {t('memory.reviewHint')}
+      </p>
       <ScrollArea className="min-h-0 flex-1" scrollbarGutter scrollFade>
         <div className="flex flex-col gap-px p-1.5">
           {items.length === 0 && (
@@ -809,6 +812,72 @@ function MemoryPanel() {
   );
 }
 
+function MemoryReviewDetails({ item }: { item: MemoryItem }) {
+  const t = useT();
+  return (
+    <>
+      {item.conditions && (
+        <span className="block text-[11px] text-content-secondary">
+          {t('memory.conditions')}: {item.conditions}
+        </span>
+      )}
+      {item.related && item.related.length > 0 && (
+        <span className="block text-[11px] text-content-secondary">
+          {t('memory.relatedReview')}
+          {item.related.map((related) => (
+            <span className="block" key={related.seq}>
+              #{related.seq}: {related.content} · {related.sourceRef}
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() =>
+                  void actions.memoryPromote(item.seq, {
+                    seq: related.seq,
+                    content: related.content,
+                    conditions: related.conditions,
+                    validUntil: related.validUntil,
+                  })
+                }
+              >
+                {t('memory.confirmReplacement', { seq: related.seq })}
+              </Button>
+            </span>
+          ))}
+        </span>
+      )}
+      <details className="mt-1 text-[11px] text-content-secondary">
+        <summary className="cursor-pointer">{t('memory.evidence')}</summary>
+        {item.evidence?.map((evidence, index) => (
+          <span
+            className="block break-words"
+            key={`${evidence.sourceRef}:${index}`}
+          >
+            {evidence.sourceRef} · {evidence.actor} · {evidence.relation}
+            <br />
+            {evidence.excerpt}
+          </span>
+        ))}
+        <span className="block">
+          {t('memory.confirmations', {
+            count: item.confirmations?.length ?? 0,
+          })}
+        </span>
+        <span className="block">
+          {t('memory.observed')}: {item.observedAt ?? t('memory.unknown')}
+        </span>
+        <span className="block">
+          {t('memory.verified')}: {item.verifiedAt ?? t('memory.unknown')}
+        </span>
+        {item.validUntil && (
+          <span className="block">
+            {t('memory.validUntil')}: {item.validUntil}
+          </span>
+        )}
+      </details>
+    </>
+  );
+}
+
 const trustVariant: Record<string, 'success' | 'secondary' | 'warning'> = {
   user_confirmed: 'secondary',
   agent_inferred: 'secondary',
@@ -857,6 +926,7 @@ function MemoryRow({
         >
           {item.content}
         </span>
+        <MemoryReviewDetails item={item} />
         <span className="mt-1 flex flex-wrap items-center gap-1">
           <Badge variant="outline" size="sm" className="font-mono">
             {item.kind}
@@ -1131,8 +1201,7 @@ function ForgetMemoryForm({
 /**
  * Right-hand context pane, Codex-style: a segmented tab strip that swaps one
  * inspector panel at a time, with the run list drilling into run detail.
- * The Memory tab stays hidden; MemoryPanel below keeps the surface ready to
- * bring back.
+ * Memory exposes candidate review and explicit Core selection.
  */
 export function ContextPane() {
   const scope = useStore((s) => s.activeScopeId);
@@ -1143,7 +1212,7 @@ export function ContextPane() {
   const reduce = useReducedMotion();
   const t = useT();
 
-  const tabs = TABS.filter((entry) => entry.id !== 'memory');
+  const tabs = TABS;
 
   const name = scopes.find((s) => s.id === scope)?.name ?? scope;
   const memory = useStore((s) => s.memory);

@@ -122,7 +122,7 @@ Goals and Tasks belong to the Goal Store rather than the Memory system.
 
 ### 4.2 F01 — Core Memory (P0) [Existing]
 
-Current State: Memory ownership follows agent roles ([D18](decisions.md#d18--memory-ownership-by-role-chief-owns-global-managers-own-projects)). The Chief injects Global Core Memory only; Project Managers inject Global Core Memory plus their project's Core Memory. Core Memory is an **explicitly selected** subset of active facts (default 1,500 tokens per scope). New memories default to searchable; running `select` makes them persistent. Deselecting an item removes it from Core Memory without deleting it. Budget overages reject atomically. Agents read and write records using `remember`, `revise`, `forget`, `recall`, `select`, and `deselect`. Revisions and deletions keep version records. Users can promote, dismiss, select, deselect, or revise candidate and active memories in the Memory panel (this panel is currently hidden in the UI; see [memory.md](memory.md)). Not yet implemented: prioritized loading of Goal-level memories (the field exists but `wake()` does not filter by Goal), and final conclusions on prompt prefix cache impacts.
+Current State: Memory ownership follows agent roles ([D18](decisions.md#d18--memory-ownership-by-role-chief-owns-global-managers-own-projects)). The Chief injects Global Core Memory only; Project Managers inject Global Core Memory plus their project's Core Memory. Core Memory is an **explicitly selected** subset of active facts (default 1,500 tokens per scope). New memories default to searchable; running `select` makes them persistent. Deselecting an item removes it from Core Memory without deleting it. Budget overages reject atomically. Agents read and write records using `remember`, `revise`, `promote`, `forget`, `recall`, `select`, and `deselect`. Revisions and deletions keep version records. Users can confirm, dismiss, select, deselect, or revise candidate and active memories in the Memory panel, and expand evidence, confirmation records, and times. Core selection is separate from promotion: promotion only makes a candidate active and never selects it into Core. A separately budgeted task-related context also exists (see F07 in §4.7). Not yet implemented: prioritized loading of Goal-level memories (the field exists but `wake()` does not filter by Goal), and final conclusions on prompt prefix cache impacts.
 
 Requirements:
 
@@ -133,7 +133,7 @@ Requirements:
 
 Design Highlights ([D4](decisions.md#d4--memory-uses-sqlite-as-single-source-of-writes-core-memory-changes-to-explicit-selection)):
 
-- Tools: `remember` (replaces `note`), `revise` (supersedes), `forget` (soft-deletes), `recall` (keyword AND search with relevance ranking), `select` / `deselect` (explicit Core management).
+- Tools: `remember` (replaces `note`), `revise` (supersedes), `promote` (confirms a reviewed candidate), `forget` (soft-deletes), `recall` (keyword AND search with relevance ranking), `select` / `deselect` (explicit Core management).
 - Snapshots: Core Memory caches per version in conversations and refreshes only when a new user turn starts with incremented versions.
 
 Acceptance:
@@ -160,37 +160,50 @@ Design Highlights:
 
 ### 4.4 F03 — Automatic Memory Extraction (P1 / M4) [Partial]
 
-Current State: The background worker in `worker/memory-worker.ts` extracts candidate facts without occupying conversational turns. Triggers include task completions (`complete_task`), conversation idle transitions, and user corrections (`revise` / `forget`). Processing runs incremental collection, extraction, classification, deduplication, conflict resolution, and persistence. The `MemoryExtractor` defaults to a deterministic heuristic supporting offline tests.
+Current State: The background worker in `worker/memory-worker.ts` extracts candidate facts without occupying conversational turns. Triggers include task completions (`complete_task`), conversation idle transitions, and user corrections (`revise` / `forget`). Processing runs incremental collection, extraction, classification, deduplication (exact-text deduplication and dismissed-text suppression only), and persistence. Lexical similarity only lists related facts in the review UI; it never decides duplicates or replacements. The `MemoryExtractor` defaults to a deterministic heuristic that uses `Intl.Segmenter` for Chinese and mixed text, supporting offline tests.
 
-Priorities: Stable preferences, project decisions, environment configs, problem solutions, and reusable workflows. Exclude casual chit-chat, unverified conjectures, and raw tool output repetitions.
+Priorities: Stable preferences, project decisions, environment configs, problem solutions, and reusable workflows. Exclude casual chit-chat, unverified conjectures, and raw tool output repetitions. Short Chinese preferences (such as “我喜欢用中文交流” or “以后统一使用中文回复”) must be extractable.
 
-Candidates record with `trust_level = agent_inferred` and do not enter Core Memory directly. Users promote or dismiss candidates from the Memory panel. Promoting transitions candidates to active without changing trust, superseding conflicting active memories atomically. Dismissing marks candidates as deleted to prevent repeated extraction. This panel is currently hidden in the UI, leaving candidate review temporarily without an entry point (see [memory.md](memory.md)).
+Extracted memories enter the candidate state and do not enter Core Memory directly. Users promote or dismiss candidates from the Memory panel. Promoting makes a candidate active; an ordinary candidate never replaces a fact automatically, and only the explicit “Confirm this replaces #seq” choice supersedes that fact in the same transaction. Dismissing marks candidates as deleted, and the same text is not extracted again. Promotion and Core selection are separate actions.
 
 ### 4.5 F04 — Consolidation and Dreaming (P1 / M4) [Partial]
 
-Current State: Candidate extraction and conflict detection are implemented. Consolidation relies on deterministic deduplication and manual user promotions. Automated dreaming loops are deferred.
+Current State: Candidate extraction, evidence references, and related-fact hints are implemented. Consolidation relies on exact deduplication, user review, and explicit Core selection. Automated dreaming loops are deferred, and repetition never raises weight automatically.
 
-Requirements: Explainable promotions; repeated unverified assertions do not gain artificial weight; version histories remain intact; failures do not corrupt existing data.
+Requirements: Explainable promotions; repeated unverified assertions do not gain artificial weight; version histories remain intact; failures do not corrupt existing data. Repeated facts only add evidence; they never create new facts or raise trust by count.
 
 ### 4.6 F05 — Provenance (P0) [Existing]
 
-Memory fields in `memories`:
+Boundaries between evidence, confirmation, and similarity are set in [D19](decisions.md#d19--memory-evidence-confirmation-and-similarity-evidence-supports-confirmation-reviews-similarity-only-relates).
 
-| Field                       | Description                                                             |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `id`, `scope_id`, `seq`     | Immutable sequence number per scope                                     |
-| `goal_id`                   | Optional association                                                    |
-| `kind`                      | preference / fact / decision / outcome / environment                    |
-| `content`                   | Single-line, maximum 1,000 Unicode characters                           |
-| `source_type`, `source_ref` | user / agent / tool / external / legacy; references `conv:<id>#<entry>` |
-| `trust_level`, `confidence` | user confirmed / agent inferred / third-party                           |
-| `core`                      | Boolean Core Memory selection flag                                      |
-| `status`, `superseded_by`   | candidate / active / superseded / deleted                               |
-| `created_at`, `updated_at`  | Timestamps                                                              |
+Memory fields in `memories` (provenance, evidence, confirmation, versions, and supersession are implemented):
 
-- Append-only records in `memory_versions` track creations, revisions, selections, and deletions with actor and reason details.
-- Actors (who performed the write) and sources (who stated the fact) record separately. Stored text confirms `source: "user"` only when matching actual user input.
+| Field                                       | Description                                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `id`, `scope_id`, `seq`                     | Immutable sequence number per scope                                                                  |
+| `goal_id`                                   | Optional association                                                                                 |
+| `kind`                                      | preference / fact / decision / outcome / environment                                                 |
+| `content`                                   | Single-line, maximum 1,000 Unicode characters                                                        |
+| `source_type`, `source_ref`                 | user / agent / tool / external / legacy; references `conv:<id>#<entry>`, events, or the UI           |
+| `trust_level`                               | user confirmed / agent inferred / third-party; derived from confirmation records, never self-claimed |
+| `conditions`                                | Environment, subject, or version; `prod PostgreSQL` and `test SQLite` can coexist                    |
+| `observed_at`, `verified_at`, `valid_until` | Source time, user review time, optional explicit expiry; Core selection never changes fact times     |
+| `core`                                      | Boolean Core Memory selection flag                                                                   |
+| `status`, `superseded_by`                   | candidate / active / superseded / deleted                                                            |
+| `created_at`, `updated_at`                  | Record creation and last state change                                                                |
+
+- `memory_evidence` stores multiple pieces of evidence: the actual `source_ref`, the original excerpt, the source actor, the `direct` / `paraphrase` / `inference` relation, and the observation time. `memory_confirmations` stores separate confirmation records (`explicit-save` / `review` / `legacy`).
+- Append-only records in `memory_versions` track creations, revisions, selections, and deletions with actor and reason details. Evidence expresses the basis of a fact; version records express the operation audit.
+- Actors (who performed the write), sources (who stated the fact), and confirmations (who reviewed the stored text) record separately. `source: "user"` requires runtime proof that a real user turn started the request; system wakeups and notifications do not count and fall back to `agent_inferred`. Confirmation comes only from a real user action (Memory panel review) or a service-verified explicit save request (an anchored `记住：<text>` / `remember: <text>`). User wording equal to the stored text proves the source only; it is not a confirmation, and the item stays a candidate. Historical references supply evidence only and cannot authorize confirmation.
+- The service checks that an evidence reference exists, belongs to the write scope, and that its excerpt occurs in the original text; models cannot forge references.
 - External tool outputs never enter prompts as high-priority instructions.
+- Legacy `LOG.txt` imports once; legacy `TREE/` moves to legacy and is not read. On upgrade, old records receive `legacy` evidence (original `user_confirmed` rows also receive a `legacy` confirmation record); text, status, versions, and candidates are kept.
+
+### 4.7 F07 — Task-Related Context (P1) [Existing]
+
+Current State: Core Memory stays an explicit snapshot that is stable per turn. A separate `<relevant_context>` with its own token budget (default 1,200) lexically retrieves the scope's Memory, Notes, and History for the current input and the running Task. It uses the shared `planSearch` and a few explicit aliases (中文 / Chinese, postgres / PostgreSQL, production / prod, and so on), with no vector store, knowledge graph, or mandatory model call. Workers receive their project's relevant context and can continue with read-only `recall` and expand original evidence with `read_history`; they never load all memory and never cross projects.
+
+Acceptance: the budget covers the complete output; old transcript evidence of superseded facts does not return to default context; Workers have no write tools and read only their own project; project isolation tests pass.
 
 ---
 

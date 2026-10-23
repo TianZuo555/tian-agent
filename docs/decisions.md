@@ -4,7 +4,7 @@
 
 This document records architectural decisions that are **difficult to reverse and critical to understand**: why this architecture was chosen and what trade-offs were made. Implementation details and operational guides appear in [architecture.md](architecture.md), [memory.md](memory.md), [data.md](data.md), [agent-work.md](agent-work.md), [channels.md](channels.md), [service.md](service.md), and [improvement-log.md](improvement-log.md).
 
-Each decision forms a section numbered D1 through D18, organized by domain. Current metadata: `DATABASE_VERSION = 7`, `SERVICE_PROTOCOL = 10`. Every schema or protocol change is governed by upgrade transactions (see [service.md](service.md#service-upgrades)).
+Each decision forms a section numbered D1 through D19, organized by domain. Current metadata: `DATABASE_VERSION = 8`, `SERVICE_PROTOCOL = 10`. Every schema or protocol change is governed by upgrade transactions (see [service.md](service.md#service-upgrades)).
 
 The earlier `docs/adr/` directory has been consolidated into this document:
 
@@ -28,6 +28,7 @@ The earlier `docs/adr/` directory has been consolidated into this document:
 | —          | D16 Run progress visibility and attempt interruption                   |
 | —          | D17 WeChat integration via official iLink protocol                     |
 | —          | D18 Memory ownership by role: Chief owns Global, Managers own projects |
+| —          | D19 Memory evidence, confirmation, and similarity                      |
 
 ---
 
@@ -92,9 +93,9 @@ Memory storage migrated from text files (`LOG.txt` and `TREE/`) into `tian.db`, 
 - Token budgets cover the **fully rendered text** (headers, types, confidence, line breaks, and usage footers). Overages reject atomically.
 - Superseding creates a new memory record and marks the prior record as `superseded`. Outdated records leave Core Memory immediately.
 - Deletions update record statuses without physical removal. All mutations append audit records in `memory_versions`.
-- Stored text matching current user input confirms `source: "user"`. System wakeups, worker outputs, and summaries fall back to `agent_inferred`.
+- Actors, sources, and confirmations record separately. `source: "user"` confirms only when stored text equals the whole current user input after whitespace normalization, or when the whole input is an anchored `记住：<text>` / `remember: <text>` save request with exactly equal text. System wakeups, worker outputs, notifications, excerpts, translations, and summaries fall back to `agent_inferred`. Confirmation records live in `memory_confirmations` and evidence in `memory_evidence` (see D19).
 - Exact string deduplication per scope returns existing `#seq` values, appending evidence records if sources differ.
-- Automatic extraction produces `candidate` records that never enter prompt injections until explicitly approved.
+- Automatic extraction produces `candidate` records that never enter prompt injections until explicitly approved. Promotion only makes a candidate active; Core still needs an explicit `select`. Ordinary candidates never set a supersede target automatically. Only the user's explicit "Confirm this replaces #seq" supersedes a fact in the same transaction, and promotion fails rather than overwrite a target that changed while the candidate was pending (see D19).
 
 **Consequences**: Active memories export to `<scope>/memory/MEMORY.md` for human and worker reading. Manual file edits do not write back to SQLite. Legacy `memory_nodes` tables are retired. Managing Core Memory becomes an explicit action for users and agents.
 
@@ -334,3 +335,25 @@ The Chief writes Global memory only (facts about Tian and facts shared across pr
 - Protocol: `SERVICE_PROTOCOL` increases to 10 (mandatory `addProject` `managerName` argument and `ScopeInfo.managerName`).
 
 **Consequences**: Establishes a single agent owner for each scope's memory. Chief prompts do not grow with the number of registered projects, and project details concentrate inside the Manager context. Tian's preferences no longer get trapped inside a project scope. Trade-offs: The Chief must query read-only or ask the Manager when recalling project details (one extra hop); the Chief cannot fix project memory directly and must inform the Manager instead. Memory Worker candidate extraction and the UI Memory panel continue operating per scope without role restrictions.
+
+---
+
+## D19 · Memory Evidence, Confirmation, and Similarity: Evidence Supports, Confirmation Reviews, Similarity Only Relates
+
+The factual basis of a memory and whether the user reviewed it are two different things. Lexical or embedding similarity cannot prove that two statements mean the same thing or contradict each other, so similarity no longer discards candidates or picks replacement targets automatically.
+
+**Context**: The old implementation treated strict equality between `source: "user"` and the whole user input as the only confirmation rule, so “记住：以后请用中文回答” distilled to “以后请用中文回答” fell back to `agent_inferred`. Relaxing the rule to substring matching would confirm negated or quoted content. At the same time, `similarity >= 0.8` counted as a duplicate and `0.45–0.8` within the same kind counted as a conflict. As a result, “use PostgreSQL” and “not use PostgreSQL” overwrote each other, only one of “coffee with sugar” and “without sugar” survived, and `Ubuntu with PostgreSQL` wrongly superseded `Ubuntu with Redis`.
+
+**Decision**:
+
+- `memory_evidence` stores multiple pieces of evidence: the actual `source_ref`, the original `excerpt`, the source actor, the `direct` / `paraphrase` / `inference` relation, and the observation time. The service validates tool-supplied `evidence_ref` / `excerpt`: the reference must exist and belong to the write scope, and the excerpt must occur in the original text. A current-input reference binds the trigger; history and notification references supply evidence only and cannot authorize user confirmation.
+- `memory_confirmations` stores separate confirmation records: `explicit-save` (a verified explicit save request), `review` (Memory panel review), and `legacy` (upgrade migration). `trust_level` and `verified_at` derive from confirmation records; a model passing `source: "user"` cannot authorize itself.
+- The confirmation rule stays strict equality. It additionally accepts only whole inputs anchored as `记住：<text>` / `请记住：<text>` / `remember: <text>` / `please remember: <text>` with no quotes in the text. `不是…` (negations), quoting others, excerpts, and rewrites still do not confirm. Only an anchored save request is a tool-side confirmation; equality with the whole input proves the source (`source: "user"`) only, and the item stays a candidate until panel review activates it.
+- Similarity only lists related facts (`related`) in the review UI. It is never used for automatic deduplication, conflict detection, or promotion. Exact deduplication preserves case, numbers, negation, and conditions.
+- An ordinary repeat of a candidate only adds evidence and never promotes it. Users confirm an existing candidate through the Memory panel or an anchored save request. Promotion is separate from Core selection; ordinary promotion never enters Core.
+- Replacement comes only from an explicit choice. `supersedes` on a candidate is a review hint; ordinary confirmation and promotion (including the `promote` tool) only activate the candidate and never supersede the target implicitly. Only the panel's "Confirm this replaces #seq", which submits the target identity, supersedes in the same transaction. An unconfirmed `revise` first checks that the target exists and is not historical; otherwise it fails instead of writing an unrelated new fact.
+- Candidate commits recheck source existence and the old fact's state inside the transaction. If the old fact was revised during extraction, promotion fails and asks for a fresh review. Dismissals suppress the exact text; whole-history similarity never permanently suppresses a new correction.
+- Facts may carry `conditions` (environment / subject / version), so prod PostgreSQL and test SQLite coexist. `observed_at` (source time), `verified_at` (user review time), and `updated_at` (last state change) are separate. `valid_until` applies only to memories with an explicit validity period and is enforced in default reads and Core rendering: expired items cannot be selected into Core, and selected items leave Core and default `recall` when they expire. Trust never rises with repetition count, and preferences do not decay uniformly.
+- Uncalibrated `confidence` is no longer written or shown, to avoid false precision; the upgrade clears old values. Legacy data keeps its text, status, versions, and candidate links and receives a `legacy` evidence record; original `user_confirmed` rows also receive a `legacy` confirmation record.
+
+**Consequences**: Memory review becomes a normal entry point (the right-pane Memory tab), with expandable evidence, confirmation records, related facts, and times. All write paths (tools, candidates, panel) share one set of evidence, confirmation, and status rules. Trade-offs: lexical retrieval still needs an explicit query strategy and cannot pretend to understand semantics, and the user must decide whether a related fact is replaced instead of the system guessing.

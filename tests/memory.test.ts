@@ -309,6 +309,7 @@ test('exact duplicates reuse the row and append evidence without reviving histor
   assert.equal(confirmed.memory.trustLevel, 'user_confirmed');
   assert.equal(confirmed.memory.sourceType, 'user');
   assert.equal(confirmed.memory.sourceRef, 'conv:1#12');
+  assert.equal(confirmed.memory.evidence?.at(-1)?.sourceRef, 'conv:1#12');
   assert.deepEqual(
     versions(f.db, first.memory.id).map((row) => [row.action, row.actor]),
     [
@@ -317,6 +318,27 @@ test('exact duplicates reuse the row and append evidence without reviving histor
     ],
   );
   assert.match(versions(f.db, first.memory.id)[1].reason!, /conv:1#12/);
+  const repeatedAgain = memory.remember({
+    text: 'Project uses pnpm',
+    sourceType: 'user',
+    trustLevel: 'user_confirmed',
+    sourceRef: 'conv:1#12',
+    actor: 'chief',
+  });
+  assert.equal(repeatedAgain.evidenceAdded, false);
+  assert.equal(versions(f.db, first.memory.id).length, 2);
+  // A later duplicate from a new source is evidence; the first source stays
+  // stable and no second audit row appears for the same review.
+  const third = memory.remember({
+    text: 'Project uses pnpm',
+    sourceRef: 'conv:1#13',
+    actor: 'chief',
+  });
+  assert.equal(third.evidenceAdded, true);
+  // The most recent confirmed source identifies the row; every citation stays
+  // in evidence.
+  assert.equal(third.memory.sourceRef, 'conv:1#12');
+  assert.equal(third.memory.evidence?.length, 3);
 
   // Same content after a supersede is a new fact, not a resurrection.
   memory.revise(0, 'Project uses pnpm workspaces', 'refined', 'chief');
@@ -337,7 +359,7 @@ test('exact duplicates reuse the row and append evidence without reviving histor
   assert.equal(reAdded.memory.seq, 3);
 });
 
-test('candidates stay out of Core, are never auto-promoted by repeats, and stale supersede targets fail', (t) => {
+test('candidates stay out of Core, are never auto-promoted by repeats, and activation never replaces', (t) => {
   const f = fixture(t);
   const memory = f.scopes.memory('p1');
   const old = memory.remember({
@@ -371,27 +393,29 @@ test('candidates stay out of Core, are never auto-promoted by repeats, and stale
     'candidate',
   );
 
-  // The user revises the target while the candidate is pending: promotion must
-  // not silently supersede the newer fact.
+  // The user revises the target while the candidate is pending.
   memory.revise(
     old.memory.seq,
     'We decided to deploy on Sundays',
     'user corrected the day',
     'user',
   );
-  assert.throws(
-    () => memory.promote(candidate.seq),
-    /since this candidate was extracted/,
-  );
+
+  // Ordinary activation ignores the supersede hint: both facts coexist and the
+  // current one keeps Core. Only the explicit replacement action supersedes.
+  const activated = memory.promote(candidate.seq);
+  assert.equal(activated.memory.status, 'active');
+  assert.equal(activated.superseded, null);
   assert.equal(
     dump(f.scopes, 'p1').items.find((item) => item.seq === candidate.seq)
       ?.status,
-    'candidate',
+    'active',
   );
-  // The current fact is intact and still selected.
   assert.match(memory.wake(), /Sundays/);
+  assert.match(memory.recall('Mondays'), /Mondays/);
 
-  // Promoting a candidate with a live target keeps it out of Core.
+  // Promoting a candidate with a live target keeps it out of Core, and the
+  // explicit replacement is the only path that supersedes.
   const other = memory.candidate({
     text: 'We decided to deploy on Tuesdays',
     kind: 'decision',
@@ -404,7 +428,7 @@ test('candidates stay out of Core, are never auto-promoted by repeats, and stale
   const promoted = memory.promote(other.seq, 'user');
   assert.equal(promoted.memory.status, 'active');
   assert.equal(promoted.memory.core, false);
-  assert.equal(promoted.superseded?.status, 'superseded');
+  assert.equal(promoted.superseded, null);
   assert.doesNotMatch(memory.wake(), /Tuesdays/);
   assert.match(memory.recall('Tuesdays'), /Tuesdays/);
 });
@@ -759,7 +783,10 @@ test('a v4 database migrates without losing memory, versions, provenance, or can
       ],
     );
     assert.equal(d.items[3].supersedes, 2);
-    assert.equal(d.items[3].confidence, 0.7);
+    // Uncalibrated confidence is removed; evidence and review carry provenance.
+    assert.equal(d.items[3].confidence, null);
+    assert.equal(d.items[0].confirmations?.[0].method, 'legacy');
+    assert.equal(d.items[3].evidence?.[0].sourceRef, 'conv:1#7');
     // Version history survived the upgrade.
     assert.equal(
       db.sqlite

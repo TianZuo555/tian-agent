@@ -1517,7 +1517,13 @@ test('the resident service records inbox and delivery events, and backfills tran
   assert.equal(inboxEvents().length, 1);
 
   // Delivering that notification is an event too, recorded once per notification.
+  // The queue row clears before its submission settles; maintenance counts
+  // in-flight submissions, so wait for the wake to settle as well.
   await until(() => service.db.pendingNotifications().length === 0);
+  for (let i = 0; i < 500; i++) {
+    if ((await service.activity()).submissions === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   const delivered = service.events.list({
     type: 'notification.delivered',
     scopeId: 'global',
