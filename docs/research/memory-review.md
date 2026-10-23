@@ -94,7 +94,7 @@ Hermes freezes snapshots at conversation launch, requiring new sessions to obser
 - Worker read-only access to memory with desktop UI support for corrections and dismissals.
 - Versioned refreshes on new user turns without forcing session termination.
 
-Relevant code: `worker/memory.ts`, `worker/history.ts`, `worker/tools.ts`, `worker/tools-memory.ts`.
+Relevant code: [memory.ts](../../src/worker/memory.ts), [history.ts](../../src/worker/history.ts), [tools.ts](../../src/worker/tools.ts), [tools-memory.ts](../../src/worker/tools-memory.ts).
 
 ## Confirmed Issues and Priorities
 
@@ -188,3 +188,35 @@ Selection rules: Prioritize explicit long-term preferences, active constraints, 
 | 5    | Evaluate vector embeddings against benchmarks                                  | Clear gains on fuzzy and multilingual search; graceful fallback to keyword search   |
 
 Avoid dedicated vector databases, external plugin frameworks, or deep multi-phase dreaming until verified test cases justify their operational overhead.
+
+## Verification Record
+
+Command: `mise exec -- pnpm exec tsx --test tests/memory.test.ts tests/history.test.ts`.
+
+Result: 18 / 18 passed. Retrieval latency across 5,000 fixture entries in History was approximately 1.2ms. This measures local test performance and does not represent live p95 latency with transcript synchronization.
+
+Reproduction script results:
+
+| Scenario                               | Observed Result                                        |
+| -------------------------------------- | ------------------------------------------------------ |
+| 8 facts complete all merges            | 7 summary writes; Core contains only one root summary  |
+| Search non-consecutive `SQLite memory` | `(no matches)`                                         |
+| Write identical text twice             | Two active Memory records created                      |
+| Submit outdated summary after revision | Core contains both old "coffee" and new "tea"          |
+| Chief corrects preference for user     | `agent_inferred`, still referencing older conversation |
+| 94 common Chinese characters           | Rejected for exceeding 280-byte limit                  |
+
+These scenarios test storage and selection behavior, not model memory quality. This research added documentation only and did not modify runtime code.
+
+## Sources
+
+- [OpenClaw Memory overview](https://docs.openclaw.ai/concepts/memory)
+- [OpenClaw Memory architecture](https://docs.openclaw.ai/concepts/memory-architecture)
+- [OpenClaw Memory search](https://docs.openclaw.ai/concepts/memory-search)
+- [OpenClaw Hybrid Search source](https://github.com/openclaw/openclaw/blob/c7dcd3412d3a88f6fbb84e4b251b3ce6f4b985a0/extensions/memory-core/src/memory/hybrid.ts)
+- [OpenClaw repository](https://github.com/openclaw/openclaw/tree/c7dcd3412d3a88f6fbb84e4b251b3ce6f4b985a0)
+- [Hermes Persistent Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory)
+- [Hermes MemoryStore source](https://github.com/NousResearch/hermes-agent/blob/9e01b44dd23978f9ff40b7837467f3a9f1582130/tools/memory_tool_store.py)
+- [Hermes Session Search source](https://github.com/NousResearch/hermes-agent/blob/9e01b44dd23978f9ff40b7837467f3a9f1582130/tools/session_search_tool.py)
+- [Decision D4](../decisions.md#d4--memory-uses-sqlite-as-single-source-of-writes-core-memory-changes-to-explicit-selection)
+- [Decision D6](../decisions.md#d6--history-is-a-derived-index-of-pi-transcripts-business-facts-write-to-events)

@@ -1,6 +1,6 @@
 # Tian Agent — 统一概念与术语规范（Ubiquitous Language）
 
-[English](../CONTEXT.md) | **简体中文**
+[English](../../CONTEXT.md) | **简体中文**
 
 一个长期在线的个人 Agent：用户管理目标，Agent 管理任务；会话可以结束，记忆、目标和责任不会消失。
 

@@ -8,7 +8,7 @@
 平台：macOS 优先；Linux / Windows 后续
 技术方向：TypeScript 常驻服务（launchd）+ Pi Durable + Electron/React 客户端 + SQLite（见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)）
 
-术语以 [CONTEXT.md](../CONTEXT.md) 为准。每项需求标注现状：**【已有】** 已实现并有测试覆盖；**【部分】** 有基础但不满足需求；**【缺失】** 尚未开始。标注"建议"的是待确认的设计；标注"待验证"的是尚未在代码中确认的假设。
+术语以 [CONTEXT.md](CONTEXT.md)（[英文原版](../../CONTEXT.md)）为准。每项需求标注现状：**【已有】** 已实现并有测试覆盖；**【部分】** 有基础但不满足需求；**【缺失】** 尚未开始。标注"建议"的是待确认的设计；标注"待验证"的是尚未在代码中确认的假设。
 
 ---
 

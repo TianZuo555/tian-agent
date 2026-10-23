@@ -96,7 +96,7 @@ Hermes 冻结系统快照有利于缓存，但其文档也专门解释 Telegram 
 - Worker 只读共享记忆，UI 支持用户纠正与遗忘。
 - 新用户轮按版本刷新记忆，不要求结束长期 Conversation。
 
-对应代码：[memory.ts](../../src/worker/memory.ts)、[history.ts](../../src/worker/history.ts)、[tools.ts](../../src/worker/tools.ts)、[tools-memory.ts](../../src/worker/tools-memory.ts)。
+对应代码：[memory.ts](../../../src/worker/memory.ts)、[history.ts](../../../src/worker/history.ts)、[tools.ts](../../../src/worker/tools.ts)、[tools-memory.ts](../../../src/worker/tools-memory.ts)。
 
 ## 已确认的问题与优化顺序
 

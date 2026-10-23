@@ -1,12 +1,12 @@
 # Tian Agent
 
-[English](../README.md) | **简体中文**
+[English](../../README.md) | **简体中文**
 
 一个长期在线的个人 Agent：一位总管（Chief）负责关于 Tian 与跨项目的记忆、规划与汇报，按项目划分 scope；每个项目都有一位随项目创建、必须命名的管理者（Manager），掌管本项目的详细记忆并承接总管的委派，代码类任务最终交给在 Git worktree 中无人值守执行的工兵（Worker）。各层之间都有双向消息通道：工兵可以边执行边提问并等待答复，上级也能中途下达指令。
 
 总管运行在本机常驻 Node 服务中（launchd 管理，崩溃自动重启）；Electron App 是它的桌面客户端，Telegram Bot 与微信（iLink / ClawBot）是远程聊天入口。会话可以结束，记忆、目标和责任不会消失。
 
-产品需求与路线图见 [docs/prd.md](prd.md)，术语见 [CONTEXT.md](CONTEXT.md)（[英文原版](../CONTEXT.md)），设计决策见 [docs/decisions.md](decisions.md)，视觉语言见 [docs/design-language.md](design-language.md)。
+产品需求与路线图见 [docs/prd.md](prd.md)，术语见 [CONTEXT.md](CONTEXT.md)（[英文原版](../../CONTEXT.md)），设计决策见 [docs/decisions.md](decisions.md)，视觉语言见 [docs/design-language.md](design-language.md)。
 
 ## 功能一览
 
