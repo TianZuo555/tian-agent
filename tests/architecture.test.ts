@@ -20,7 +20,7 @@ import { Scopes } from '../src/worker/scopes';
 import { GoalStore } from '../src/worker/goals';
 import { ImprovementStore } from '../src/worker/improvements';
 import { DataService } from '../src/worker/data';
-import { AgentRuntime } from '../src/worker/agents';
+import { AgentRuntime, agentEnv } from '../src/worker/agents';
 import { Settings } from '../src/worker/settings';
 import { EventLog } from '../src/worker/events';
 import { HistoryIndex } from '../src/worker/history';
@@ -906,5 +906,247 @@ test('restart respects the original deadline instead of resetting the timeout', 
     resumed.pause();
     runtime.stopWaits();
     await resumed.join();
+  }
+});
+
+test('git calls are killed by their timeout instead of hanging', async (t) => {
+  const f = await fixture(t);
+  // hash-object --stdin blocks on an open stdin until the timeout kills it.
+  await assert.rejects(
+    Git.git(f.projectPath, ['hash-object', '--stdin'], { timeoutMs: 200 }),
+    /timed out/,
+  );
+});
+
+test('a second attempt waits for a slot instead of running concurrently', async (t) => {
+  const f = await fixture(t);
+  const runtime = new FakeRuntime();
+  const runs = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    runtime,
+    f.userData,
+    () => {},
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { maxActiveAttempts: 1 },
+  );
+  try {
+    const first = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'first',
+      chiefConversationId: null,
+    });
+    await until(() => f.db.getRun(first.id)?.status === 'running');
+    const second = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'second',
+      chiefConversationId: null,
+    });
+    // Long enough for a broken cap to submit the second worker.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(f.db.getRun(second.id)?.status, 'queued');
+    const recordOf = (run: RunRow) =>
+      [...runtime.records.values()].find((record) => record.run.id === run.id)!;
+    assert.equal(recordOf(second).submissions.size, 0);
+    runtime.complete(first.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'running');
+    assert.equal(recordOf(second).submissions.size, 1);
+    runtime.complete(second.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'done');
+    assert.equal(f.db.getRun(first.id)?.status, 'done');
+  } finally {
+    runs.pause();
+    runtime.stopWaits();
+    await runs.join();
+  }
+});
+
+test('stopping a run that waits for a slot never submits it and frees the queue', async (t) => {
+  const f = await fixture(t);
+  const runtime = new FakeRuntime();
+  const runs = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    runtime,
+    f.userData,
+    () => {},
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { maxActiveAttempts: 1 },
+  );
+  try {
+    const first = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'first',
+      chiefConversationId: null,
+    });
+    await until(() => f.db.getRun(first.id)?.status === 'running');
+    const second = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'second',
+      chiefConversationId: null,
+    });
+    const third = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'third',
+      chiefConversationId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await runs.stop(second.id);
+    assert.equal(f.db.getRun(second.id)?.status, 'interrupted');
+    const record = [...runtime.records.values()].find(
+      (entry) => entry.run.id === second.id,
+    )!;
+    assert.equal(record.submissions.size, 0);
+    // The slot the second run would have taken goes to the next in line.
+    runtime.complete(first.conversationId!);
+    await until(() => f.db.getRun(third.id)?.status === 'running');
+    runtime.complete(third.conversationId!);
+    await until(() => f.db.getRun(third.id)?.status === 'done');
+  } finally {
+    runs.pause();
+    runtime.stopWaits();
+    await runs.join();
+  }
+});
+
+test('a run that waited for a slot keeps its original timeout from the real start', async (t) => {
+  const f = await fixture(t);
+  const runtime = new FakeRuntime();
+  const runs = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    runtime,
+    f.userData,
+    () => {},
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { maxActiveAttempts: 1 },
+  );
+  try {
+    const first = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'first',
+      chiefConversationId: null,
+    });
+    await until(() => f.db.getRun(first.id)?.status === 'running');
+    const second = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'second',
+      chiefConversationId: null,
+    });
+    const queued = f.db.getRun(second.id)!;
+    const duration =
+      Date.parse(queued.deadlineAt) - Date.parse(queued.startedAt);
+    // Make the wait measurable so the shifted startedAt must differ.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    runtime.complete(first.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'running');
+    const started = f.db.getRun(second.id)!;
+    assert.equal(
+      Date.parse(started.deadlineAt) - Date.parse(started.startedAt),
+      duration,
+    );
+    assert.ok(Date.parse(started.startedAt) > Date.parse(queued.startedAt));
+    runtime.complete(second.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'done');
+  } finally {
+    runs.pause();
+    runtime.stopWaits();
+    await runs.join();
+  }
+});
+
+test('a resumed running attempt claims its slot instead of waiting behind another', async (t) => {
+  const f = await fixture(t);
+  const first = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'first',
+    chiefConversationId: null,
+  });
+  await until(() => f.db.getRun(first.id)?.status === 'running');
+  const second = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'second',
+    chiefConversationId: null,
+  });
+  await until(() => f.db.getRun(second.id)?.status === 'running');
+  f.runs.pause();
+  f.runtime.stopWaits();
+  await f.runs.join();
+  // Both attempts were mid-model-work at the restart. With the cap at one,
+  // the second must still finish without queuing behind the first's slot.
+  const runtime = new FakeRuntime(f.runtime.records);
+  const resumed = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    runtime,
+    f.userData,
+    () => {},
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { maxActiveAttempts: 1 },
+  );
+  try {
+    await resumed.recover();
+    runtime.complete(second.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'done');
+    assert.equal(f.db.getRun(first.id)?.status, 'running');
+  } finally {
+    resumed.pause();
+    runtime.stopWaits();
+    await resumed.join();
+  }
+});
+
+test('worker shells never see service-only environment variables', async (t) => {
+  const saved = {
+    TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+    MAGPIE_API_KEY: process.env.MAGPIE_API_KEY,
+    WECHAT_ALLOWED_USER_IDS: process.env.WECHAT_ALLOWED_USER_IDS,
+    TIAN_AGENT_DATA_DIR: process.env.TIAN_AGENT_DATA_DIR,
+    TIAN_TEST_KEEP: process.env.TIAN_TEST_KEEP,
+  };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  });
+  process.env.TELEGRAM_BOT_TOKEN = 'secret-telegram';
+  process.env.MAGPIE_API_KEY = 'secret-magpie';
+  process.env.WECHAT_ALLOWED_USER_IDS = 'wxid_secret';
+  process.env.TIAN_AGENT_DATA_DIR = '/tmp/secret-data';
+  process.env.TIAN_TEST_KEEP = '1';
+  const directory = temporary(t);
+  const scrubbed = [
+    'TELEGRAM_BOT_TOKEN',
+    'MAGPIE_API_KEY',
+    'WECHAT_ALLOWED_USER_IDS',
+    'TIAN_AGENT_DATA_DIR',
+  ];
+  for (const command of ['env', ['/usr/bin/env']]) {
+    let stdout = '';
+    const result = await agentEnv(directory).exec(
+      command,
+      {
+        onOutput: (text, _context, info) => {
+          if (info.stream === 'stdout') stdout += text;
+        },
+      },
+      BACKGROUND_CONTEXT,
+    );
+    assert.equal(result.ok, true);
+    for (const name of scrubbed) assert.ok(!stdout.includes(name), name);
+    assert.match(stdout, /TIAN_TEST_KEEP=1/);
+    assert.match(stdout, /PATH=/);
   }
 });

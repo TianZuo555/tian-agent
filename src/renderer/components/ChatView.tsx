@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -46,7 +47,7 @@ import { Markdown } from './Markdown';
 import { TypingDots, EASE } from './motion-primitives';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MessageRow, ToolCallRow } from '@/shared/messages';
-import { noticeParts } from '@/shared/messages';
+import { noticeParts, sameRow } from '@/shared/messages';
 import { actions, useStore } from '../store';
 import { useT, type MessageKey } from '../i18n';
 import { ContextToggle, SidebarToggle } from './SidebarToggle';
@@ -446,30 +447,35 @@ function NoticeCard({ row }: { row: MessageRow }) {
   );
 }
 
-function Row({ row }: { row: MessageRow }) {
-  if (row.role === 'system') {
-    return row.variant === 'notice' ? (
-      <NoticeCard row={row} />
+// Snapshots rebuild every row object; memo by content so steady rows skip
+// re-rendering while a streamed turn updates.
+const Row = memo(
+  function Row({ row }: { row: MessageRow }) {
+    if (row.role === 'system') {
+      return row.variant === 'notice' ? (
+        <NoticeCard row={row} />
+      ) : (
+        <div
+          role="separator"
+          className="flex items-center gap-3 py-2 font-mono text-[9.5px] text-content-disabled uppercase tracking-[0.14em]"
+        >
+          <span className="h-px flex-1 bg-gradient-to-r from-transparent to-border" />
+          {row.text}
+          <span className="h-px flex-1 bg-gradient-to-l from-transparent to-border" />
+        </div>
+      );
+    }
+    if (row.role === 'tool') {
+      return <ToolGroup tools={row.toolCalls ?? []} />;
+    }
+    return row.role === 'user' ? (
+      <UserBubble row={row} />
     ) : (
-      <div
-        role="separator"
-        className="flex items-center gap-3 py-2 font-mono text-[9.5px] text-content-disabled uppercase tracking-[0.14em]"
-      >
-        <span className="h-px flex-1 bg-gradient-to-r from-transparent to-border" />
-        {row.text}
-        <span className="h-px flex-1 bg-gradient-to-l from-transparent to-border" />
-      </div>
+      <AssistantBubble row={row} />
     );
-  }
-  if (row.role === 'tool') {
-    return <ToolGroup tools={row.toolCalls ?? []} />;
-  }
-  return row.role === 'user' ? (
-    <UserBubble row={row} />
-  ) : (
-    <AssistantBubble row={row} />
-  );
-}
+  },
+  (prev, next) => sameRow(prev.row, next.row),
+);
 
 const SUGGESTIONS: {
   icon: Icon;
@@ -731,6 +737,7 @@ function Transcript({
             role="log"
             aria-label={t('chat.messages')}
             aria-live="polite"
+            aria-busy={busy}
             className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-5 py-7"
           >
             {rows.map((r) => (

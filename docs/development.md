@@ -2,7 +2,7 @@
 
 **English** | [简体中文](zh/development.md)
 
-Toolchains, tasks, and local environment variables declare in `mise.toml` via [mise](https://mise.jdx.dev/). Node 26 and pnpm 12.5.1 pin inside the repository. Mise switches versions automatically when you enter the directory. Development builds need Node 24+. Each mise task wraps a `package.json` script. Systems without mise can run `pnpm <script>` directly. Run `mise tasks ls` to list all tasks.
+The repository declares its toolchain, tasks, and local environment variables in `mise.toml` via [mise](https://mise.jdx.dev/). It pins Node 26 and pnpm 12.5.1. Mise switches versions automatically when you enter the directory. Development builds need Node 24+. Each mise task wraps a `package.json` script. Systems without mise can run `pnpm <script>` directly. Run `mise tasks ls` to list all tasks.
 
 ## Common Commands
 
@@ -15,7 +15,7 @@ mise run doctor     # Run React Doctor only
 mise run verify     # Run check, doctor, and test before commits
 ```
 
-Type checking uses [`tsrs`](https://github.com/oxc-project/tsrs), the Rust port of the TypeScript 7 compiler. The command `pnpm typecheck` runs `tsrs --noEmit`. It is ten times faster than `tsc` and uses one third of the memory. It enforces TypeScript 7 rules. Therefore, `tsconfig.json` cannot use options removed in TypeScript 7 (such as `baseUrl`, ES5 target, or AMD modules). Path aliases do not need `baseUrl`. The script `pnpm typecheck:tsc` remains available as a check. Diagnostics from both checkers must match exactly.
+Type checking uses [`tsrs`](https://github.com/oxc-project/tsrs), the Rust port of the TypeScript 7 compiler. The command `pnpm typecheck` runs `tsrs --noEmit`. It is ten times faster than `tsc` and uses one third of the memory. It enforces TypeScript 7 rules. Therefore, `tsconfig.json` cannot use options removed in TypeScript 7 (such as `baseUrl`, ES5 target, or AMD modules). Path aliases do not need `baseUrl`. The script `pnpm typecheck:tsc` remains available as a check; it runs the reference `tsc` from TypeScript 7. Diagnostics from both checkers must match exactly. Lint runs `oxlint --deny-warnings`, so warnings fail the gate like errors; `oxfmt --check` enforces formatting.
 
 ## Local Environment Variables
 
@@ -34,7 +34,7 @@ cp .env.example .env
 | `TIAN_AGENT_DATA_DIR`                | Data directory; `mise run service:env` writes here                                |
 | `TIAN_AGENT_SOCKET_PATH`             | Unix socket path (absolute path, 100 bytes maximum)                               |
 
-The file `.env` only affects the application and pnpm tasks inside the mise shell. Launchd starts the resident service and cannot read shell environment variables. Run `mise run service:env` to copy non-empty `MAGPIE_*`, `TELEGRAM_*`, and `WECHAT_*` variables to `<dataDir>/service.env` with 0600 permissions. Then run `mise run service:restart`. Other development variables do not enter the service environment.
+The file `.env` only affects the application and pnpm tasks inside the mise shell. Launchd starts the resident service and cannot read shell environment variables. Run `mise run service:env` to copy non-empty `MAGPIE_*`, `TELEGRAM_*`, and `WECHAT_*` variables to `<dataDir>/service.env` with 0600 permissions. Then run `mise run service:restart`. Other development variables do not enter the service environment. Agent shell commands (for example, Worker `bash` calls) do not receive these variables.
 
 ## Tests
 

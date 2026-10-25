@@ -101,6 +101,23 @@ function RowAction({
   );
 }
 
+/** The aria-label key a conversation row reads out for its role and state. */
+function conversationLabelKey(
+  role: ConversationInfo['role'],
+  archived: boolean,
+): MessageKey {
+  if (role === 'manager')
+    return archived ? 'sidebar.archivedManagerLabel' : 'sidebar.managerLabel';
+  return archived
+    ? 'sidebar.archivedConversationLabel'
+    : 'sidebar.conversationLabel';
+}
+
+/** Secondary line on an archived row: the scope it came from and when. */
+function archivedMeta(scopeName: string | undefined, when: string): string {
+  return `${scopeName ? `${scopeName} · ` : ''}${when}`;
+}
+
 function ConversationRow(props: {
   conversation: ConversationInfo;
   active: boolean;
@@ -111,18 +128,10 @@ function ConversationRow(props: {
   const reduce = useReducedMotion();
   const t = useT();
   const title = c.title ?? t('common.newConversation');
-  const when = relativeTime(c.archivedAt ?? c.createdAt);
-  const meta = archived ? `${scopeName ? `${scopeName} · ` : ''}${when}` : null;
-  const label = t(
-    c.role === 'manager'
-      ? archived
-        ? 'sidebar.archivedManagerLabel'
-        : 'sidebar.managerLabel'
-      : archived
-        ? 'sidebar.archivedConversationLabel'
-        : 'sidebar.conversationLabel',
-    { title },
-  );
+  const meta = archived
+    ? archivedMeta(scopeName, relativeTime(c.archivedAt ?? c.createdAt))
+    : null;
+  const label = t(conversationLabelKey(c.role, archived), { title });
   return (
     <motion.div layout={!reduce} className="group relative">
       <button

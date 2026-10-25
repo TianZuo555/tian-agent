@@ -52,10 +52,14 @@ function withoutObsolete(
     const whole = squash(text);
     const fragment = [row.content, row.excerpt]
       .map(squash)
+      // Substring search, not a membership lookup — no Set equivalent.
+      // react-doctor-disable-next-line js-set-map-lookups
       .find((part) => part && part !== whole && whole.includes(part));
     if (!fragment) return null;
     const kept = sentences.filter(
       (sentence) =>
+        // Substring search, not a membership lookup — no Set equivalent.
+        // react-doctor-disable-next-line js-set-map-lookups
         !sentence.includes(fragment) && !fragment.includes(sentence),
     );
     if (kept.length === sentences.length) return null;

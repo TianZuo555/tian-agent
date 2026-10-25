@@ -72,11 +72,71 @@ export interface SkillProvider {
   review(run: RunRow, report: string, stopped?: string): void;
 }
 
+/** Global cap on worker attempts whose model work runs at the same time. */
+export const MAX_ACTIVE_ATTEMPTS = 3;
+
+/**
+ * FIFO gate on concurrent worker attempts. A run waits for a slot outside its
+ * per-run lock, so stop/discard still work while it waits. `close()` grants
+ * every waiter a slot so they wake, observe `closing`, and exit — releases
+ * stay idempotent so a late `finally` cannot corrupt the count.
+ */
+class AttemptSlots {
+  private active = 0;
+  private waiters: (() => void)[] = [];
+  private closed = false;
+
+  constructor(private readonly max: number) {}
+
+  /** A slot now, or null when the cap is reached or the gate is closed. */
+  tryAcquire(): (() => void) | null {
+    if (this.closed || this.active >= this.max) return null;
+    return this.take();
+  }
+
+  /** A slot when one frees up; close() resolves every waiter. */
+  acquire(): Promise<() => void> {
+    if (this.closed) return Promise.resolve(this.take());
+    const slot = this.tryAcquire();
+    if (slot) return Promise.resolve(slot);
+    return new Promise((resolve) => {
+      this.waiters.push(() => resolve(this.take()));
+    });
+  }
+
+  /**
+   * A slot right away, even above the cap: an attempt that was already
+   * running before a restart resumes its model work by itself, so making it
+   * wait would not limit anything — it would only delay its collection.
+   */
+  claim(): () => void {
+    return this.take();
+  }
+
+  /** Open the gate: every waiter wakes and proceeds to observe `closing`. */
+  close(): void {
+    this.closed = true;
+    for (const grant of this.waiters.splice(0)) grant();
+  }
+
+  private take(): () => void {
+    this.active++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active--;
+      if (this.active < this.max) this.waiters.shift()?.();
+    };
+  }
+}
+
 /** Owns execution, attempts, review transitions, and recovery of external work. */
 export class RunOrchestrator {
   private locks = new Map<string, Promise<unknown>>();
   private collectors = new Map<string, Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private attempts: AttemptSlots;
   private closing = false;
 
   constructor(
@@ -91,7 +151,12 @@ export class RunOrchestrator {
     private onIssue?: IssueReporter,
     /** Skill registry; absent = no skill matching, injection, or review. */
     private skills?: SkillProvider,
-  ) {}
+    options: { maxActiveAttempts?: number } = {},
+  ) {
+    this.attempts = new AttemptSlots(
+      options.maxActiveAttempts ?? MAX_ACTIVE_ATTEMPTS,
+    );
+  }
 
   private async locked<T>(key: string, action: () => Promise<T>): Promise<T> {
     const running = (this.locks.get(key) ?? Promise.resolve())
@@ -303,99 +368,137 @@ export class RunOrchestrator {
   }
 
   private async execute(id: string): Promise<void> {
-    const prepared = await this.locked(id, async () => {
-      let run = this.require(id);
-      if (this.closing || run.reviewStatus !== 'pending') return null;
-      // An agent or Tian stopped this attempt before it started; never submit.
-      if (run.status === 'interrupted') return null;
-      if (run.status === 'collecting')
-        return {
-          run,
-          conversation: await this.runtime.get(run.conversationId!),
-          submission: null,
-        };
-      if (hasPassed(run.deadlineAt)) {
-        const error = new Error('Run exceeded its deadline');
-        if (run.conversationId) {
-          const conversation = await this.runtime.get(run.conversationId);
-          await conversation.abort();
-          await this.collect(
-            this.db.patchRun(id, {
-              status: 'collecting',
-              error: error.message,
-            }),
-            conversation,
-          );
-        } else await this.fail(run, error);
-        return null;
+    // Runs that resume mid-collection or are already under review never
+    // submit a worker, so they never need an attempt slot.
+    const row = this.db.getRun(id);
+    let release: (() => void) | null = null;
+    let waited = false;
+    if (row && row.status !== 'collecting' && row.reviewStatus === 'pending') {
+      if (row.status === 'running') {
+        // Already running before a restart: the harness resumes its model
+        // work on its own, so the attempt claims its slot immediately.
+        release = this.attempts.claim();
+      } else {
+        release = this.attempts.tryAcquire();
+        if (!release) {
+          waited = true;
+          // Wait outside the per-run lock: stop() and discard() must still
+          // reach a queued run while its attempt waits for a slot.
+          release = await this.attempts.acquire();
+        }
       }
-      if (run.reportPath && existsSync(run.reportPath))
-        unlinkSync(run.reportPath);
-      await this.prepare(run);
-      run = this.require(id);
-      const conversation = await this.runtime.get(run.conversationId!);
-      const submission = await conversation.submit(
-        run.currentPrompt,
-        `run:${id}:attempt:${run.attempt}`,
-      );
-      run = this.db.patchRun(id, { status: 'running' });
-      this.db.recordAttempt(run);
-      this.changed();
-      return { run, conversation, submission };
-    });
-    if (!prepared) return;
-    const { conversation, submission } = prepared;
-    let failure: string | null = null;
-    if (submission) {
-      // Fewer than `remaining` ms are left, or there is no deadline at all.
-      const remaining = remainingMs(prepared.run.deadlineAt);
-      let timedOut = remaining !== null && remaining <= 0;
-      if (timedOut) await conversation.abort();
-      else if (remaining !== null) {
-        const timer = setTimeout(() => {
-          timedOut = true;
-          void conversation.abort().catch((error) =>
-            this.onIssue?.('run.abort', error, {
-              scopeId: prepared.run.projectId,
-              runId: id,
-            }),
-          );
-        }, remaining);
-        this.timers.set(id, timer);
-      }
-      try {
-        const result = await submission.wait();
-        if (result.status !== 'done')
-          failure = result.reason || 'Worker did not complete successfully';
-      } finally {
-        clearTimeout(this.timers.get(id));
-        this.timers.delete(id);
-      }
-      if (timedOut) failure = 'Run exceeded its deadline';
     }
-    if (this.closing) return;
-    await this.locked(id, async () => {
-      let run = this.require(id);
-      if (this.closing || run.reviewStatus !== 'pending') return;
-      // A stop already finished the attempt; its abort settles the wait but
-      // the outcome is already recorded, so never collect over it.
-      if (run.status === 'interrupted') return;
-      // Persist the outcome before collecting so a restart cannot turn failure into success.
-      run = this.db.patchRun(id, {
-        status: 'collecting',
-        error: failure ?? run.error,
+    try {
+      const prepared = await this.locked(id, async () => {
+        let run = this.require(id);
+        if (this.closing || run.reviewStatus !== 'pending') return null;
+        // An agent or Tian stopped this attempt before it started; never submit.
+        if (run.status === 'interrupted') return null;
+        if (run.status === 'collecting')
+          return {
+            run,
+            conversation: await this.runtime.get(run.conversationId!),
+            submission: null,
+          };
+        // A run that waited for a slot keeps its original timeout, but the
+        // clock starts when the attempt actually begins, not at dispatch.
+        if (waited && run.status === 'queued' && run.deadlineAt) {
+          const duration =
+            Date.parse(run.deadlineAt) - Date.parse(run.startedAt);
+          run = this.db.patchRun(id, {
+            startedAt: new Date().toISOString(),
+            deadlineAt: new Date(Date.now() + duration).toISOString(),
+          });
+        }
+        if (hasPassed(run.deadlineAt)) {
+          const error = new Error('Run exceeded its deadline');
+          if (run.conversationId) {
+            const conversation = await this.runtime.get(run.conversationId);
+            await conversation.abort();
+            await this.collect(
+              this.db.patchRun(id, {
+                status: 'collecting',
+                error: error.message,
+              }),
+              conversation,
+            );
+          } else await this.fail(run, error);
+          return null;
+        }
+        if (run.reportPath && existsSync(run.reportPath))
+          unlinkSync(run.reportPath);
+        await this.prepare(run);
+        run = this.require(id);
+        const conversation = await this.runtime.get(run.conversationId!);
+        const submission = await conversation.submit(
+          run.currentPrompt,
+          `run:${id}:attempt:${run.attempt}`,
+        );
+        run = this.db.patchRun(id, { status: 'running' });
+        this.db.recordAttempt(run);
+        this.changed();
+        return { run, conversation, submission };
       });
-      await this.collect(run, conversation);
-    });
-    const run = this.require(id);
-    if (
-      !this.closing &&
-      run.status === 'done' &&
-      run.reviewStatus === 'pending' &&
-      this.db.getProject(run.projectId)?.autoLand === 1 &&
-      run.branch
-    ) {
-      await this.land(id);
+      if (!prepared) return;
+      const { conversation, submission } = prepared;
+      let failure: string | null = null;
+      if (submission) {
+        // Fewer than `remaining` ms are left, or there is no deadline at all.
+        const remaining = remainingMs(prepared.run.deadlineAt);
+        let timedOut = remaining !== null && remaining <= 0;
+        if (timedOut) await conversation.abort();
+        else if (remaining !== null) {
+          const timer = setTimeout(() => {
+            timedOut = true;
+            void conversation.abort().catch((error) =>
+              this.onIssue?.('run.abort', error, {
+                scopeId: prepared.run.projectId,
+                runId: id,
+              }),
+            );
+          }, remaining);
+          this.timers.set(id, timer);
+        }
+        try {
+          const result = await submission.wait();
+          if (result.status !== 'done')
+            failure = result.reason || 'Worker did not complete successfully';
+        } finally {
+          clearTimeout(this.timers.get(id));
+          this.timers.delete(id);
+        }
+        if (timedOut) failure = 'Run exceeded its deadline';
+      }
+      // The attempt's model work is over: free the slot for a queued sibling
+      // before collection or auto-land, which are not model work.
+      release?.();
+      release = null;
+      if (this.closing) return;
+      await this.locked(id, async () => {
+        let run = this.require(id);
+        if (this.closing || run.reviewStatus !== 'pending') return;
+        // A stop already finished the attempt; its abort settles the wait but
+        // the outcome is already recorded, so never collect over it.
+        if (run.status === 'interrupted') return;
+        // Persist the outcome before collecting so a restart cannot turn failure into success.
+        run = this.db.patchRun(id, {
+          status: 'collecting',
+          error: failure ?? run.error,
+        });
+        await this.collect(run, conversation);
+      });
+      const run = this.require(id);
+      if (
+        !this.closing &&
+        run.status === 'done' &&
+        run.reviewStatus === 'pending' &&
+        this.db.getProject(run.projectId)?.autoLand === 1 &&
+        run.branch
+      ) {
+        await this.land(id);
+      }
+    } finally {
+      release?.();
     }
   }
 
@@ -845,6 +948,7 @@ export class RunOrchestrator {
   }
   pause(): void {
     this.closing = true;
+    this.attempts.close();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }

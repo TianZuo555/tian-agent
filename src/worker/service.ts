@@ -30,9 +30,10 @@ import { SkillRegistry } from './skills.js';
 import { HistoryIndex } from './history.js';
 import { GoalStore } from './goals.js';
 import { GoalScheduler, parseCron } from './scheduler.js';
-import { MemoryWorker } from './memory-worker.js';
-import { chiefExtension } from './tools.js';
-import { managerExtension } from './manager-tools.js';
+import { MemoryWorker, type MemoryTrigger } from './memory-worker.js';
+import { chiefExtension, type ChiefDeps } from './tools.js';
+import { managerExtension, type ManagerDeps } from './manager-tools.js';
+import type { ChannelHost } from './channel-host.js';
 import { workerExtension } from './worker-tools.js';
 import {
   TelegramAdapter,
@@ -59,6 +60,18 @@ import type {
   TaskItem,
   MemoryRevisionResult,
 } from '../shared/types.js';
+
+/** Deps the chief and manager extensions both wire to the same run surface. */
+type SharedToolDeps =
+  | 'dispatch'
+  | 'runReport'
+  | 'runDiff'
+  | 'runProgress'
+  | 'stopRun'
+  | 'sendRunMessage'
+  | 'runMessages'
+  | 'workerModels'
+  | 'history';
 
 /** Application composition and conversation/project operations; owned by one resident service. */
 export class Service {
@@ -88,6 +101,7 @@ export class Service {
   private maintenance?: ReturnType<typeof setInterval>;
   private memoryTimer?: ReturnType<typeof setInterval>;
   private delivery: Promise<void> | null = null;
+  private deliveryRequested = false;
   private closing = false;
   private maintenanceMode = false;
   private openingSessions = new Map<string, Promise<ConversationInfo>>();
@@ -110,7 +124,6 @@ export class Service {
     this.skills = new SkillRegistry(this.db, this.events, undefined, () =>
       this.emit('skills', this.skills.list(null)),
     );
-    this.data = new DataService(this.db, this.scopes, emit);
     this.agents = new AgentRuntime(
       userDataDir,
       this.globalDir,
@@ -137,16 +150,10 @@ export class Service {
       emitMemory: (scopeId) => this.emit('memory', scopeId),
     });
     this.data = new DataService(this.db, this.scopes, emit, {
-      onTaskCompleted: (scopeId) => {
-        void this.memoryWorker
-          .trigger(scopeId, 'task-completed')
-          .catch((error) => console.error('Memory worker:', error));
-      },
-      onCorrection: (scopeId) => {
-        void this.memoryWorker
-          .trigger(scopeId, 'user-correction', { force: true })
-          .catch((error) => console.error('Memory worker:', error));
-      },
+      onTaskCompleted: (scopeId) =>
+        this.triggerMemory(scopeId, 'task-completed'),
+      onCorrection: (scopeId) =>
+        this.triggerMemory(scopeId, 'user-correction', { force: true }),
     });
     this.runs = new RunOrchestrator(
       this.db,
@@ -191,33 +198,12 @@ export class Service {
         emitUpdates: () => this.emitUpdates(),
         emitImprovements: () => this.emitImprovements(),
         emitNotices: () => this.emit('notices', this.goals.listNotices(null)),
-        onTaskCompleted: (scopeId) => {
-          void this.memoryWorker
-            .trigger(scopeId, 'task-completed')
-            .catch((error) => console.error('Memory worker:', error));
-        },
-        dispatch: (input) => this.dispatchRun(input),
-        runReport: (id) => this.runs.report(id),
-        runDiff: (id) => this.runs.diff(id),
-        runProgress: (id) => this.runs.progress(id),
-        stopRun: (id, reason) =>
-          this.runs.stop(id, { reason, actor: 'chief', strict: true }),
-        sendRunMessage: (runId, body, operationId) =>
-          this.data.sendRunMessage(runId, body, operationId),
-        runMessages: (runId) => this.data.runMessages(runId),
-        workerModels: () =>
-          workerModelChoices(
-            this.settings.catalogState().models,
-            this.settings.get().model.modelId,
-          ),
+        onTaskCompleted: (scopeId) =>
+          this.triggerMemory(scopeId, 'task-completed'),
+        ...this.runToolDeps('chief'),
         delegateToManager: (input) => this.delegateToManager(input),
         sendManagerMessage: (input) => this.sendManagerMessage(input),
         managerMessages: (projectId) => this.data.managerMessages(projectId),
-        history: {
-          db: this.db,
-          events: this.events,
-          history: this.history,
-        },
       }),
       workerExtension({
         db: this.db,
@@ -236,25 +222,9 @@ export class Service {
           this.latestInputEntry(conversationId),
         currentInput: (conversationId) => this.currentInput(conversationId),
         emitUpdates: () => this.emitUpdates(),
-        onTaskCompleted: (scopeId) => {
-          void this.memoryWorker
-            .trigger(scopeId, 'task-completed')
-            .catch((error) => console.error('Memory worker:', error));
-        },
-        dispatch: (input) => this.dispatchRun(input),
-        runReport: (id) => this.runs.report(id),
-        runDiff: (id) => this.runs.diff(id),
-        runProgress: (id) => this.runs.progress(id),
-        stopRun: (id, reason) =>
-          this.runs.stop(id, { reason, actor: 'manager', strict: true }),
-        sendRunMessage: (runId, body, operationId) =>
-          this.data.sendRunMessage(runId, body, operationId),
-        runMessages: (runId) => this.data.runMessages(runId),
-        workerModels: () =>
-          workerModelChoices(
-            this.settings.catalogState().models,
-            this.settings.get().model.modelId,
-          ),
+        onTaskCompleted: (scopeId) =>
+          this.triggerMemory(scopeId, 'task-completed'),
+        ...this.runToolDeps('manager'),
         wakeChief: async (projectId, content, notificationId, taskId) => {
           this.db.queueNotification({
             id: notificationId,
@@ -266,11 +236,6 @@ export class Service {
             content,
           });
           await this.deliverNotifications();
-        },
-        history: {
-          db: this.db,
-          events: this.events,
-          history: this.history,
         },
       }),
     );
@@ -293,7 +258,7 @@ export class Service {
     this.memoryTimer = setInterval(() => {
       void this.memoryWorker
         .sweep()
-        .catch((error) => console.error('Memory sweep:', error));
+        .catch((error) => this.reportIssue('memory.sweep', error));
     }, 5 * 60_000);
     this.memoryTimer.unref();
   }
@@ -325,6 +290,21 @@ export class Service {
     await this.startWechat();
   }
 
+  /** The host surface every channel adapter binds to (Telegram, WeChat). */
+  private channelHost(): ChannelHost {
+    return {
+      db: this.db,
+      scopes: this.scopes,
+      openSession: (binding) => this.openSession(binding),
+      submit: async (conversationId, content, requestId) => {
+        await this.submit(conversationId, content, requestId);
+      },
+      conversation: (id) => this.agents.conversation(id),
+      reportIssue: (area, error, context) =>
+        this.reportIssue(area, error, context),
+    };
+  }
+
   /**
    * Start the WeChat gateway over iLink. It owns its own login: with no stored
    * credentials it publishes a QR code for Settings to show and waits.
@@ -335,21 +315,7 @@ export class Service {
     // An empty allow-list means nobody may reach the chief: keep the adapter off.
     if (!setup?.config?.allowedUserIds.length) return;
     if (!this.wechat)
-      this.wechat = new WechatAdapter(
-        {
-          db: this.db,
-          scopes: this.scopes,
-          openSession: (binding) => this.openSession(binding),
-          submit: async (conversationId, content, requestId) => {
-            await this.submit(conversationId, content, requestId);
-          },
-          conversation: (id) => this.agents.conversation(id),
-          reportIssue: (area, error, context) =>
-            this.reportIssue(area, error, context),
-        },
-        setup.config,
-        setup,
-      );
+      this.wechat = new WechatAdapter(this.channelHost(), setup.config, setup);
     await this.wechat.start();
   }
 
@@ -378,17 +344,7 @@ export class Service {
     if (!config) return;
     if (!this.telegram)
       this.telegram = new TelegramAdapter(
-        {
-          db: this.db,
-          scopes: this.scopes,
-          openSession: (binding) => this.openSession(binding),
-          submit: async (conversationId, content, requestId) => {
-            await this.submit(conversationId, content, requestId);
-          },
-          conversation: (id) => this.agents.conversation(id),
-          reportIssue: (area, error, context) =>
-            this.reportIssue(area, error, context),
-        },
+        this.channelHost(),
         config,
         this.telegramSetup.api ?? fetchBotApi(config.token),
         this.telegramSetup.options,
@@ -772,9 +728,7 @@ export class Service {
         this.history.touch(id, scopeId);
         const snapshot = toRows(value as ConversationView);
         if (wasBusy && !snapshot.busy)
-          void this.memoryWorker
-            .trigger(scopeId, 'conversation-idle')
-            .catch((error) => console.error('Memory worker:', error));
+          this.triggerMemory(scopeId, 'conversation-idle');
         wasBusy = snapshot.busy;
         this.emit('view', { conversationId: id, view: snapshot }, clientId);
       }
@@ -843,15 +797,21 @@ export class Service {
   }
   private scanInbox(scopeId: string): void {
     if (this.closing || this.maintenanceMode) return;
+    // A rescan that changed nothing emits nothing: the renderer refetches the
+    // whole inbox on every `inbox` event, so idle scans stay silent.
+    let changed = this.scopes.importInbox(scopeId) > 0;
     for (const message of this.scopes.listMessages(scopeId)) {
       if (message.from === 'chief' || message.thread.startsWith('run-'))
         continue;
-      this.db.queueNotification({
-        id: `inbox:${scopeId}:${message.id}`,
-        scopeId,
-        conversationId: null,
-        content: `[inbox message ${message.id} from ${message.from}]\n${message.body.slice(0, 12_000)}\nRead with check_inbox and tell Tian what came in.`,
-      });
+      if (
+        this.db.queueNotification({
+          id: `inbox:${scopeId}:${message.id}`,
+          scopeId,
+          conversationId: null,
+          content: `[inbox message ${message.id} from ${message.from}]\n${message.body.slice(0, 12_000)}\nRead with check_inbox and tell Tian what came in.`,
+        })
+      )
+        changed = true;
       this.events.record({
         id: `inbox:${scopeId}:${message.id}`,
         type: 'inbox.received',
@@ -865,64 +825,71 @@ export class Service {
         },
       });
     }
+    if (!changed) return;
     this.emit('inbox', scopeId);
     void this.deliverNotifications();
   }
   private deliverNotifications(): Promise<void> {
     if (this.closing || this.maintenanceMode) return Promise.resolve();
+    // A notification queued while a delivery runs must not wait for the next
+    // interval: the flag makes the in-flight pass loop once more.
+    this.deliveryRequested = true;
     if (this.delivery) return this.delivery;
     this.delivery = (async () => {
-      for (const notification of this.db.pendingNotifications()) {
-        if (this.closing || this.maintenanceMode) break;
-        try {
-          let conversationId = notification.conversationId;
-          if (!conversationId) {
-            conversationId =
-              this.db.latestConversation(notification.scopeId)
-                ?.conversationId ??
-              (await this.createConversation(notification.scopeId))
-                .conversationId;
-            this.db.targetNotification(notification.id, conversationId);
-          }
-          if (notification.id.startsWith('run:')) {
-            const messageId = `run-${createHash('sha256').update(notification.id).digest('hex')}`;
-            this.scopes.sendMessage(
-              notification.scopeId,
-              'run',
-              notification.content,
-              undefined,
-              messageId,
-              messageId,
+      while (this.deliveryRequested && !this.closing && !this.maintenanceMode) {
+        this.deliveryRequested = false;
+        for (const notification of this.db.pendingNotifications()) {
+          if (this.closing || this.maintenanceMode) break;
+          try {
+            let conversationId = notification.conversationId;
+            if (!conversationId) {
+              conversationId =
+                this.db.latestConversation(notification.scopeId)
+                  ?.conversationId ??
+                (await this.createConversation(notification.scopeId))
+                  .conversationId;
+              this.db.targetNotification(notification.id, conversationId);
+            }
+            if (notification.id.startsWith('run:')) {
+              const messageId = `run-${createHash('sha256').update(notification.id).digest('hex')}`;
+              this.scopes.sendMessage(
+                notification.scopeId,
+                'run',
+                notification.content,
+                undefined,
+                messageId,
+                messageId,
+              );
+            }
+            await (
+              await this.agents.conversation(conversationId)
+            ).submit(
+              {
+                type: 'input',
+                content: notification.content,
+                requestId: notification.id,
+                whenBusy: 'followUp',
+                // System wake (goal, run, inbox): never a user statement.
+                entry: { kind: 'system.notification' },
+              },
+              BACKGROUND_CONTEXT,
             );
+            this.db.deliveredNotification(notification.id);
+            this.events.record({
+              id: `notify:${notification.id}:delivered`,
+              type: 'notification.delivered',
+              actor: 'system',
+              scopeId: notification.scopeId,
+              conversationId,
+              summary: `Notification ${notification.id} delivered: ${notification.content.split('\n')[0].slice(0, 120)}`,
+            });
+            this.emit('inbox', notification.scopeId);
+          } catch (error) {
+            this.reportIssue('notification.deliver', error, {
+              scopeId: notification.scopeId,
+              conversationId: notification.conversationId ?? undefined,
+            });
           }
-          await (
-            await this.agents.conversation(conversationId)
-          ).submit(
-            {
-              type: 'input',
-              content: notification.content,
-              requestId: notification.id,
-              whenBusy: 'followUp',
-              // System wake (goal, run, inbox): never a user statement.
-              entry: { kind: 'system.notification' },
-            },
-            BACKGROUND_CONTEXT,
-          );
-          this.db.deliveredNotification(notification.id);
-          this.events.record({
-            id: `notify:${notification.id}:delivered`,
-            type: 'notification.delivered',
-            actor: 'system',
-            scopeId: notification.scopeId,
-            conversationId,
-            summary: `Notification ${notification.id} delivered: ${notification.content.split('\n')[0].slice(0, 120)}`,
-          });
-          this.emit('inbox', notification.scopeId);
-        } catch (error) {
-          this.reportIssue('notification.deliver', error, {
-            scopeId: notification.scopeId,
-            conversationId: notification.conversationId ?? undefined,
-          });
         }
       }
     })().finally(() => {
@@ -1042,6 +1009,20 @@ export class Service {
     } catch (error) {
       console.error('Renderer issue capture failed:', error);
     }
+  }
+
+  /**
+   * Fire a memory extraction pass; failures go to the issue sink like every
+   * other background task instead of an untracked console line.
+   */
+  private triggerMemory(
+    scopeId: string,
+    trigger: MemoryTrigger,
+    options?: { force?: boolean },
+  ): void {
+    void this.memoryWorker
+      .trigger(scopeId, trigger, options)
+      .catch((error) => this.reportIssue('memory.worker', error, { scopeId }));
   }
 
   /**
@@ -1524,6 +1505,35 @@ export class Service {
   skillRollback(id: string, reason: string | null) {
     return this.skills.rollback(id, reason);
   }
+  /**
+   * The run-related deps the chief and manager extensions share; `actor`
+   * marks who issued a stop so the run's record names the right agent.
+   */
+  private runToolDeps(actor: 'chief' | 'manager') {
+    return {
+      dispatch: (input: DispatchInput) => this.dispatchRun(input),
+      runReport: (id: string) => this.runs.report(id),
+      runDiff: (id: string) => this.runs.diff(id),
+      runProgress: (id: string) => this.runs.progress(id),
+      stopRun: (id: string, reason?: string) =>
+        this.runs.stop(id, { reason, actor, strict: true }),
+      sendRunMessage: (runId: string, body: string, operationId: string) =>
+        this.data.sendRunMessage(runId, body, operationId),
+      runMessages: (runId: string) => this.data.runMessages(runId),
+      workerModels: () =>
+        workerModelChoices(
+          this.settings.catalogState().models,
+          this.settings.get().model.modelId,
+        ),
+      history: {
+        db: this.db,
+        events: this.events,
+        history: this.history,
+      },
+    } satisfies Pick<ChiefDeps, SharedToolDeps> &
+      Pick<ManagerDeps, SharedToolDeps>;
+  }
+
   /**
    * Every dispatch path lands here (chief and manager tools alike): a pinned
    * model / thinking level is validated against the catalog before the run

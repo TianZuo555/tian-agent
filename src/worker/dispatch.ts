@@ -7,13 +7,29 @@ export interface GitResult {
   stdout: string;
   stderr: string;
 }
-export function git(cwd: string, args: string[]): Promise<GitResult> {
+export function git(
+  cwd: string,
+  args: string[],
+  options: { timeoutMs?: number } = {},
+): Promise<GitResult> {
+  const timeoutMs = options.timeoutMs ?? 600_000;
   return new Promise((resolveResult, reject) => {
     execFile(
       'git',
       ['-C', cwd, ...args],
-      { maxBuffer: 16 * 1024 * 1024 },
+      {
+        maxBuffer: 16 * 1024 * 1024,
+        // Hooks on commit/merge can be slow; ten minutes is the ceiling.
+        timeout: timeoutMs,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      },
       (error, stdout, stderr) => {
+        if (error && (error as { killed?: boolean }).killed) {
+          reject(
+            new Error(`git ${args[0]} timed out after ${timeoutMs / 1000}s`),
+          );
+          return;
+        }
         if (error && typeof (error as { code?: number }).code !== 'number') {
           reject(error);
           return;
@@ -174,10 +190,22 @@ export async function discardWorktree(
 }
 export function gh(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolveResult, reject) => {
-    execFile('gh', args, { cwd, timeout: 120_000 }, (error, stdout, stderr) =>
-      error
-        ? reject(new Error(String(stderr || error)))
-        : resolveResult(String(stdout).trim()),
+    execFile(
+      'gh',
+      args,
+      {
+        cwd,
+        timeout: 120_000,
+        env: {
+          ...process.env,
+          GH_PROMPT_DISABLED: '1',
+          GIT_TERMINAL_PROMPT: '0',
+        },
+      },
+      (error, stdout, stderr) =>
+        error
+          ? reject(new Error(String(stderr || error)))
+          : resolveResult(String(stdout).trim()),
     );
   });
 }
