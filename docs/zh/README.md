@@ -50,6 +50,7 @@ mise run verify   # typecheck + lint + react-doctor + test
 | [docs/prd.md](prd.md)                                       | 产品需求文档（PRD）：定位、核心对象、需求矩阵与路线图              |
 | [docs/design-language.md](design-language.md)               | 视觉语言规范：墨色表面、单色强调、Coder token 与 Phosphor 图标     |
 | [docs/research/memory-review.md](research/memory-review.md) | 记忆系统对比调研：OpenClaw、Hermes 与 Tian Agent 设计对比          |
+| [docs/research/rakazo-review.md](research/rakazo-review.md) | Rakazo 调研：GUI 与电脑能力缺口，以及分阶段建议                    |
 
 ## 后续规划
 

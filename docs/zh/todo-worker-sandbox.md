@@ -183,4 +183,4 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 ### 阶段 3：所有项目默认开启
 
 - [ ] 把现有项目迁移为 `workspace-write`，并在项目设置中保留 `off` 作为显式选项。
-- [ ] 更新 [architecture.md](architecture.md#权限与-scope)（删掉"不提供操作系统文件访问沙箱"）、PRD §13 第 8 问，并在 [decisions.md](decisions.md) 新增决策 D19。所有改动同步到英文文档。
+- [ ] 更新 [architecture.md](architecture.md#权限与-scope)（删掉"不提供操作系统文件访问沙箱"）、PRD §13 第 8 问，并在 [decisions.md](decisions.md) 新增一条决策（用下一个空号；D19 已是记忆证据决策）。所有改动同步到英文文档。

@@ -50,6 +50,7 @@ Toolchain details (Node 26 + pnpm 12.5.1), environment variables, and testing gu
 | [docs/prd.md](docs/prd.md)                                       | Product Requirements Document (PRD): vision, core entities, requirements matrix, and roadmap    |
 | [docs/design-language.md](docs/design-language.md)               | Visual language specification: ink surfaces, monochrome accents, Coder tokens, and Phosphor     |
 | [docs/research/memory-review.md](docs/research/memory-review.md) | Memory system research comparing OpenClaw, Hermes, and Tian Agent designs                       |
+| [docs/research/rakazo-review.md](docs/research/rakazo-review.md) | Rakazo research: GUI and computer capability gaps, and staged recommendations                   |
 
 ## Roadmap
 

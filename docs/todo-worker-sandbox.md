@@ -183,4 +183,4 @@ Result for a worktree Run:
 ### Phase 3: Default on for all projects
 
 - [ ] Migrate existing projects to `workspace-write`, and keep `off` as an explicit choice in project settings.
-- [ ] Update [architecture.md](architecture.md#permissions-and-scopes) (remove "they do not enforce operating system sandboxes"), PRD §13 question 8, and add a decision record (D19) to [decisions.md](decisions.md). Mirror every change in `docs/zh/`.
+- [ ] Update [architecture.md](architecture.md#permissions-and-scopes) (remove "they do not enforce operating system sandboxes"), PRD §13 question 8, and add a decision record to [decisions.md](decisions.md) (the next free number; D19 is the memory evidence decision). Mirror every change in `docs/zh/`.
