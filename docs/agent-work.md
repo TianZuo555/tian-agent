@@ -56,6 +56,8 @@ pending → landing → landed
 - Follow-up attempts create new attempts, inputs, results, and reports while reusing the same Worker conversation and worktree.
 - Dispatches use stable operation IDs and turn inputs use stable request IDs. Durable submission status determines completion. An idle agent does not mean success. Git commit failures transition Runs into failed states.
 - Run state transitions and reviews execute serially. Discard operations abort Workers first; collectors cannot overwrite discarded states.
+- A global cap limits worker attempts that run model work at the same time (`MAX_ACTIVE_ATTEMPTS`, default 3). Excess attempts wait in queue order outside the Run lock, so `stop` and `discard` still work while a Run waits. A Run that waited keeps its original timeout, but its clock starts when the attempt begins. Attempts that had already started before a restart claim their slot at once and never wait.
+- Git subprocesses disable interactive prompts (`GIT_TERMINAL_PROMPT=0`) and time out after 10 minutes; hooks on commit or merge can run slowly. `gh` calls keep a 120-second limit with `GH_PROMPT_DISABLED=1`.
 - Land merges the Run branch into the designated base branch. It requires the main checkout to sit on that branch without uncommitted tracked changes. Landed Runs cannot accept follow-up attempts.
 - Ship pushes the branch and creates or reuses a Pull Request.
 - Started land, ship, and discard operations record in storage before execution for crash recovery.

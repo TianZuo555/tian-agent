@@ -32,6 +32,31 @@ writeFileSync(
   join(memory, 'LOG.txt'),
   '2026-01-01 00:00 Persistent memory from disk\n',
 );
+// An inbox message with a code block and a mermaid diagram: delivered as a
+// system notification, it must render under the packaged Content-Security-Policy.
+const inbox = join(data, 'scopes/global/.tian/inbox');
+mkdirSync(inbox, { recursive: true });
+const notice = [
+  '---',
+  'from: external',
+  'to: ',
+  'ts: 2026-01-01T00:00:00.000Z',
+  'thread: ',
+  'id: notice-1',
+  '---',
+  '',
+  'Arrived with a code block and a diagram.',
+  '',
+  '```ts',
+  'export const answer: number = 42;',
+  '```',
+  '',
+  '```mermaid',
+  'flowchart LR',
+  '  A[Inbox] --> B[Chat]',
+  '```',
+  '',
+].join('\n');
 // Forge packages these same files. Run the copy with plain Node from outside the checkout.
 cpSync(packagedPayload, join(temporary, 'bundle'), { recursive: true });
 let daemon: ChildProcess | null = null;
@@ -115,20 +140,38 @@ app.whenReady().then(async () => {
   ipcMain.handle('tian:invoke', (event, command, args) => rpc(command, args, event.sender.id));
   ipcMain.handle('tian:desktop', (_event, action) => { if(action === 'ready') return null; throw new Error('Desktop controls are covered by test:app-upgrade'); });
   const errors = [];
+  const cspViolations = [];
   window = new BrowserWindow({ show: false, webPreferences: { preload: preloadPath, sandbox: true, contextIsolation: true, nodeIntegration: false } });
   window.webContents.on('preload-error', (_event, _path, error) => errors.push(String(error)));
+  window.webContents.on('console-message', (...args) => {
+    const detail = args.find((a) => a && typeof a === 'object' && typeof a.message === 'string');
+    const message = detail ? detail.message : args.filter((a) => typeof a === 'string').join(' ');
+    if (/content security policy/i.test(message)) cspViolations.push(message);
+  });
   await window.loadFile(rendererPath);
+  await window.webContents.executeJavaScript("window.__cspViolations = []; window.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(e.violatedDirective + ' ' + e.blockedURI)); true");
   assert.equal(await window.webContents.executeJavaScript('typeof window.tian.openSession'), 'function');
   assert.equal((await window.webContents.executeJavaScript('window.tian.listTasks("global")'))[0].title, 'Persistent task');
-  assert.match((await window.webContents.executeJavaScript('window.tian.memoryDump("global")')).lines[0], /Persistent memory/);
-  const conversation = await window.webContents.executeJavaScript('window.tian.createConversation("global")');
-  assert.equal(typeof conversation.createdAt, 'string');
+  assert.match((await window.webContents.executeJavaScript('window.tian.memoryDump("global")')).items[0].content, /Persistent memory/);
   const deadline = Date.now() + 10000;
   while (!await window.webContents.executeJavaScript('!!document.querySelector("aside[aria-label]")')) {
     if (Date.now() > deadline) throw new Error(await window.webContents.executeJavaScript('document.body.innerText'));
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  // Open the conversation the inbox notice was delivered to, through the UI.
+  assert.equal(await window.webContents.executeJavaScript("(() => { const b = [...document.querySelectorAll('button')].find((el) => el.getAttribute('aria-label') === 'Conversation: CSP notice target'); if (b) { b.click(); return true; } return false; })()"), true);
+  const renderDeadline = Date.now() + 20000;
+  for (;;) {
+    const rendered = await window.webContents.executeJavaScript("({ code: !!document.querySelector('[data-tian-prose] [data-streamdown=code-block]'), mermaid: !!document.querySelector('[data-tian-prose] svg') })");
+    if (rendered.code && rendered.mermaid) break;
+    if (Date.now() > renderDeadline) throw new Error('notice did not render: ' + JSON.stringify(rendered) + ' in ' + await window.webContents.executeJavaScript('document.body.innerText'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const conversation = await window.webContents.executeJavaScript('window.tian.createConversation("global")');
+  assert.equal(typeof conversation.createdAt, 'string');
   assert.deepEqual(errors, []);
+  assert.deepEqual(cspViolations, []);
+  assert.deepEqual(await window.webContents.executeJavaScript('window.__cspViolations'), []);
   window.destroy();
   connection.end();
   console.log('Packaged sandbox preload and renderer connected to standalone service: PASS');
@@ -139,6 +182,37 @@ app.whenReady().then(async () => {
 try {
   const first = await startDaemon();
   await client!.invoke('addTask', ['global', 'Persistent task', null]);
+  // The notice targets the latest global conversation: title it so the UI
+  // pass can find its sidebar row, then drop the file and wait for delivery.
+  const target = await client!.invoke('createConversation', ['global']);
+  await client!.invoke('submit', [target.conversationId, 'CSP notice target']);
+  writeFileSync(join(inbox, 'notice-1.md'), notice);
+  await new Promise<void>((resolveDelivery, rejectDelivery) => {
+    const timeout = setTimeout(
+      () => rejectDelivery(new Error('inbox notice was not delivered')),
+      15_000,
+    );
+    const watcher = new ServiceClient(
+      socket,
+      (channel, payload) => {
+        const view = payload as { conversationId?: string };
+        if (
+          channel === 'view' &&
+          view.conversationId === target.conversationId &&
+          JSON.stringify(payload).includes('notice-1')
+        ) {
+          clearTimeout(timeout);
+          watcher.close();
+          resolveDelivery();
+        }
+      },
+      { readyTimeoutMs: 5_000 },
+    );
+    watcher
+      .start()
+      .then(() => watcher.invoke('watch', [target.conversationId]))
+      .catch(rejectDelivery);
+  });
   const session = await client!.invoke('openSession', [
     { channel: 'telegram', externalId: 'smoke', scopeId: 'global' },
   ]);

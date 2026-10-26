@@ -23,6 +23,7 @@
 - Settings 页：模型选择与 Gateway 状态、用量统计热力图、改进日志（Log）、服务与升级（见 [service.md](service.md)）。
 - 聊天渲染：Streamdown 输出 Markdown，Mermaid 图表按需懒加载。
 - App 组件必须通过 oxlint 的 `jsx-a11y` 规则（error 级，见 `.oxlintrc.json`）。
+- 内容安全策略：`index.html` 携带严格的线上策略（`script-src 'self'`，禁内联脚本，禁 `object-src`）。Vite 开发服务器通过 `vite.renderer.config.mts` 中仅 `serve` 生效的插件换入适配 HMR 的宽松策略；打包产物保留严格策略。
 
 ## 模块地图
 
@@ -78,6 +79,6 @@
 
 Tian 可直接在管理者会话里对话派活：本轮输入的 `currentInput` 为 `kind='user'` 即为 Tian 轮次。此时 `ask_chief` 与 `report_chief` 被工具层守卫挡下（返回提示语、不写 `manager_messages`、不唤醒总管）——例外是 `report_chief` 带一个 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 指派的 Task 经 `add_task` 创建、`assignee` 为 NULL，静默收口；Tian 轮次里 `remember(source:'user')` 照常记 `user_confirmed`。
 
-工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可执行中用 `ask_chief` 提问并阻塞等待答复，用 `tell_chief` 发进度通知，用 `check_msgs` 接收总管指令。工兵被要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，不提供操作系统文件访问沙箱。
+工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可执行中用 `ask_chief` 提问并阻塞等待答复，用 `tell_chief` 发进度通知，用 `check_msgs` 接收总管指令。工兵被要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，不提供操作系统文件访问沙箱。工兵 shell 命令不继承服务专用变量（`TELEGRAM_*`、`WECHAT_*`、`MAGPIE_*`、`TIAN_AGENT_*`）。
 
 Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。`runTimeoutMin = 0`（默认）表示单次尝试不限时，`deadline_at` 留空；正整数则作为该 attempt 的硬超时，到点 abort 并进入 collecting。

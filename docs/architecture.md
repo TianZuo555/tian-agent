@@ -23,6 +23,7 @@ The Chief, Project Managers, and Workers share the service Harness and Pi storag
 - Settings: Model selection, Gateway status, daily usage heatmaps, Improvement Log, and Service Upgrades (see [service.md](service.md)).
 - Chat Rendering: Markdown renders through Streamdown. Mermaid diagrams load lazily on demand.
 - Application components must pass oxlint `jsx-a11y` rules at error level (see `.oxlintrc.json`).
+- Content Security Policy: `index.html` carries the strict production policy (`script-src 'self'`, no inline scripts, no `object-src`). The Vite dev server swaps in a relaxed policy for HMR through a `serve`-only plugin in `vite.renderer.config.mts`; packaged builds keep the strict policy.
 
 ## Module Map
 
@@ -78,6 +79,6 @@ Project Managers enable the `manager` extension based on channel bindings (`chan
 
 Tian can converse directly with Project Managers to assign work. When turn inputs have `kind = 'user'`, the turn belongs to Tian. Tool guards intercept `ask_chief` and `report_chief` to prevent unnecessary notifications to the Chief. Tasks created by Tian use `add_task` (`assignee = NULL`) and conclude quietly without Chief notification. Memory writes during Tian turns record as `user_confirmed`.
 
-Workers enable `CodingTools` and messaging extensions. They operate inside isolated Git worktrees and lack memory writing tools. Running Workers call `ask_chief` to query supervisors, `tell_chief` to send progress updates, and `check_msgs` to read supervisor instructions. Workers edit the current directory only and read memory and notes as read-only documents. Worktrees provide Git isolation; they do not enforce operating system sandboxes.
+Workers enable `CodingTools` and messaging extensions. They operate inside isolated Git worktrees and lack memory writing tools. Running Workers call `ask_chief` to query supervisors, `tell_chief` to send progress updates, and `check_msgs` to read supervisor instructions. Workers edit the current directory only and read memory and notes as read-only documents. Worktrees provide Git isolation; they do not enforce operating system sandboxes. Worker shell commands do not inherit service-only variables (`TELEGRAM_*`, `WECHAT_*`, `MAGPIE_*`, `TIAN_AGENT_*`).
 
 Scopes divide into `global` and user-registered projects. Conversations bind to scopes. Project settings include `autoLand`, `allowInPlace`, `runTimeoutMin`, `baseBranch`, and `promptPreamble`. The default worker type is `durable-worker`. Setting `runTimeoutMin = 0` indicates unlimited execution time per attempt. A positive integer enforces a hard timeout that aborts the attempt and begins artifact collection.

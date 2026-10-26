@@ -26,6 +26,8 @@ export const GLOBAL_SCOPE = 'global';
  */
 export class Scopes {
   private memories = new Map<string, MemoryStore>();
+  /** Inbox file names this instance already imported, per scope. */
+  private importedFiles = new Map<string, Set<string>>();
 
   constructor(
     private globalDir: string,
@@ -51,6 +53,7 @@ export class Scopes {
 
   forget(scopeId: string): void {
     this.memories.delete(scopeId);
+    this.importedFiles.delete(scopeId);
   }
 
   project(scopeId: string): ProjectRow | undefined {
@@ -226,14 +229,24 @@ export class Scopes {
     for (const id of scopeId
       ? [scopeId]
       : [GLOBAL_SCOPE, ...this.db.listProjects().map((p) => p.id)])
-      this.importInboxFiles(id);
+      this.importInbox(id);
     return this.db.listMessages(scopeId);
   }
 
-  private importInboxFiles(scopeId: string): void {
+  /**
+   * Import inbox files this instance has not seen yet; returns how many rows
+   * were actually inserted so callers can tell a no-op rescan from new mail.
+   */
+  importInbox(scopeId: string): number {
     const dir = this.inboxDir(scopeId);
+    let known = this.importedFiles.get(scopeId);
+    if (!known) {
+      known = new Set();
+      this.importedFiles.set(scopeId, known);
+    }
+    let inserted = 0;
     for (const file of readdirSync(dir)
-      .filter((name) => name.endsWith('.md'))
+      .filter((name) => name.endsWith('.md') && !known.has(name))
       .sort()) {
       let raw: string;
       try {
@@ -250,17 +263,22 @@ export class Scopes {
           if (index > 0)
             meta[line.slice(0, index).trim()] = line.slice(index + 1).trim();
         }
-      this.db.importMessage(scopeId, {
-        id: meta.id || file.replace(/\.md$/, ''),
-        scopeId,
-        from: meta.from || '?',
-        to: meta.to || '',
-        ts: meta.ts || file.slice(0, 20),
-        thread: meta.thread || '',
-        body: match ? match[2] : raw,
-        read: false,
-      });
+      if (
+        this.db.importMessage(scopeId, {
+          id: meta.id || file.replace(/\.md$/, ''),
+          scopeId,
+          from: meta.from || '?',
+          to: meta.to || '',
+          ts: meta.ts || file.slice(0, 20),
+          thread: meta.thread || '',
+          body: match ? match[2] : raw,
+          read: false,
+        })
+      )
+        inserted++;
+      known.add(file);
     }
+    return inserted;
   }
 
   unreadMessages(scopeId: string): InboxItem[] {

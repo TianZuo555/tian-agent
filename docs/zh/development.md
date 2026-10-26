@@ -15,7 +15,7 @@ mise run doctor     # 仅 React Doctor
 mise run verify     # check + doctor + test，提交前跑这个
 ```
 
-类型检查用 [`tsrs`](https://github.com/oxc-project/tsrs)（TypeScript 7 编译器的 Rust 移植）：`pnpm typecheck` 跑 `tsrs --noEmit`，比 `tsc` 快一个数量级且内存约为三分之一。它跟随 TS 7 语义，因此 `tsconfig.json` 里不能用 TS 7 移除的选项（`baseUrl`、ES5 target、AMD/UMD module 等）；`paths` 不需要 `baseUrl`。保留 `pnpm typecheck:tsc` 作为对照——怀疑 tsrs 误报时先跑它确认，两者的诊断应逐字一致。
+类型检查用 [`tsrs`](https://github.com/oxc-project/tsrs)（TypeScript 7 编译器的 Rust 移植）：`pnpm typecheck` 跑 `tsrs --noEmit`，比 `tsc` 快一个数量级且内存约为三分之一。它跟随 TS 7 语义，因此 `tsconfig.json` 里不能用 TS 7 移除的选项（`baseUrl`、ES5 target、AMD/UMD module 等）；`paths` 不需要 `baseUrl`。保留 `pnpm typecheck:tsc` 作为对照——它运行 TypeScript 7 自带的参考 `tsc`，怀疑 tsrs 误报时先跑它确认，两者的诊断应逐字一致。lint 以 `oxlint --deny-warnings` 运行，警告与错误一样让检查失败；`oxfmt --check` 校验格式。
 
 ## 本地环境变量
 
@@ -34,7 +34,7 @@ cp .env.example .env
 | `TIAN_AGENT_DATA_DIR`                | 数据目录；`mise run service:env` 也据此决定写到哪里              |
 | `TIAN_AGENT_SOCKET_PATH`             | Unix socket 路径（绝对路径，不超过 100 字节）                    |
 
-`.env` 只影响 mise shell 里的 App 与 `pnpm` 任务。常驻服务由 launchd 启动，读不到 shell 环境；用 `mise run service:env` 把非空的 `MAGPIE_*` / `TELEGRAM_*` / `WECHAT_*` 原子写入 `<dataDir>/service.env`（0600），再 `mise run service:restart`。其余开发变量不会进入服务环境。
+`.env` 只影响 mise shell 里的 App 与 `pnpm` 任务。常驻服务由 launchd 启动，读不到 shell 环境；用 `mise run service:env` 把非空的 `MAGPIE_*` / `TELEGRAM_*` / `WECHAT_*` 原子写入 `<dataDir>/service.env`（0600），再 `mise run service:restart`。其余开发变量不会进入服务环境。Agent 的 shell 命令（例如工兵的 `bash` 调用）不会收到这些变量。
 
 ## 测试
 

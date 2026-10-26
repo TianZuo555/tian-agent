@@ -18,6 +18,28 @@ import type { SkillRegistry } from './skills.js';
 import type { WorkerConversation, WorkerRuntime } from './runs.js';
 import type { RunToolCall } from './run-progress.js';
 
+/** Service-only variables: channel tokens, the gateway key, and service paths. */
+const SERVICE_ONLY_ENV = /^(TELEGRAM_|WECHAT_|MAGPIE_|TIAN_AGENT_)/;
+
+/**
+ * Overrides that hide service-only variables from agent shells. Pi merges
+ * `shellEnv` over `process.env`, and spawn drops keys whose value is undefined.
+ */
+export function agentShellEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.keys(env)
+      .filter((key) => SERVICE_ONLY_ENV.test(key))
+      .map((key) => [key, undefined]),
+  );
+}
+
+/** The execution environment every agent conversation runs commands in. */
+export function agentEnv(cwd: string): NodeExecutionEnv {
+  return new NodeExecutionEnv({ cwd, shellEnv: agentShellEnv() });
+}
+
 /** Tool arguments longer than this are cut in a progress snapshot. */
 const MAX_ARG_CHARS = 160;
 
@@ -68,7 +90,7 @@ export class AgentRuntime implements WorkerRuntime {
         models: this.models,
         registry,
         settings: { extensions: [chief], toolExecution: 'sequential' },
-        env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? this.globalDir }),
+        env: ({ cwd }) => agentEnv(cwd ?? this.globalDir),
       },
       BACKGROUND_CONTEXT,
     );

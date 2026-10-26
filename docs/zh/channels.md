@@ -57,4 +57,4 @@ thread: optional-thread
 消息正文
 ```
 
-先写非 `.md` 临时文件，再 rename 发布。服务按 `(scopeId, messageId)` 导入 SQLite，逐条记已读；`fs.watch`、启动扫描与定期扫描共同处理遗漏。外部消息生成持久化通知；总管自身和 Run 完成消息不重复唤醒。
+先写非 `.md` 临时文件，再 rename 发布。服务按 `(scopeId, messageId)` 导入 SQLite，逐条记已读；`fs.watch`、启动扫描与定期扫描共同处理遗漏。每次扫描只导入本实例未见过的文件，重扫成本低；仅在扫描插入了行或新排入通知时才发出 `inbox` 事件并触发投递。外部消息生成持久化通知；总管自身和 Run 完成消息不重复唤醒。

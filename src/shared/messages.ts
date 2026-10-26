@@ -111,6 +111,33 @@ const toolCallsOf = (
     }));
 };
 
+/**
+ * Structural equality for a rendered row — the transcript emits a fresh row
+ * object per snapshot, so memoized rows compare by content, not identity.
+ */
+export function sameRow(a: MessageRow, b: MessageRow): boolean {
+  if (
+    a.id !== b.id ||
+    a.role !== b.role ||
+    a.text !== b.text ||
+    a.variant !== b.variant ||
+    a.streaming !== b.streaming
+  )
+    return false;
+  const callsA = a.toolCalls ?? [];
+  const callsB = b.toolCalls ?? [];
+  if (callsA.length !== callsB.length) return false;
+  return callsA.every(
+    (call, index) =>
+      call.callId === callsB[index].callId &&
+      call.name === callsB[index].name &&
+      call.args === callsB[index].args &&
+      call.status === callsB[index].status &&
+      call.output === callsB[index].output &&
+      call.entry === callsB[index].entry,
+  );
+}
+
 export function toRows(view: ConversationView | undefined): {
   rows: MessageRow[];
   busy: boolean;

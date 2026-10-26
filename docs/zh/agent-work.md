@@ -56,6 +56,8 @@ pending → landing → landed
 - follow-up 每轮有独立 attempt、输入、结果和报告，复用工兵会话与 worktree。
 - 派发用稳定操作 ID，各轮输入用稳定 `requestId`；成功依据 Durable submission 结果，空闲不代表成功，Git 提交失败会进入失败状态。
 - 同一 Run 的状态转换与验收串行；discard 先停止工兵，collector 不覆盖其结果。
+- 全局上限约束同时进行模型工作的 worker attempt 数（`MAX_ACTIVE_ATTEMPTS`，默认 3）。超出的 attempt 按派发顺序在 Run 锁外等待空位，因此 `stop` 与 `discard` 在等待时仍可用。等待过的 Run 保留原时限，但计时从 attempt 真正开始时算起。重启前已经开始的 attempt 直接占用槽位，不进入等待队列。
+- Git 子进程关闭交互提示（`GIT_TERMINAL_PROMPT=0`）并在 10 分钟后超时；commit 或 merge 的 hook 可能较慢。`gh` 调用保留 120 秒上限并设置 `GH_PROMPT_DISABLED=1`。
 - Land 合入保存的 base branch，要求主 checkout 位于该分支且无已跟踪文件的未提交修改；land 后不能 follow-up。
 - Ship 推送分支，再查询或创建 PR，重复请求复用 PR URL。
 - 已开始的 land/ship/discard 先入库，启动时继续或核对。

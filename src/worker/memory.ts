@@ -209,12 +209,6 @@ function normalizeLine(text: string, what: string): string {
 }
 
 /**
- * Comparison key for exact duplicates: whitespace is normalized, case and
- * identifiers are preserved (`Foo` and `foo` may be different paths or names).
- */
-const dedupeKey = (text: string) => text.replace(/\s+/g, ' ').trim();
-
-/**
  * How a selected memory renders in Core. Provenance stays compact but
  * locatable — kind, trust, date and the source ref — and every character of it
  * is part of the measured budget.
@@ -342,6 +336,7 @@ export class MemoryStore {
     statuses: MemoryStatus[],
   ): MemoryRow | undefined {
     const key = memoryIdentityKey(identity);
+    const wanted = new Set(statuses);
     return this.all(
       'SELECT * FROM memories WHERE scope_id = ? ORDER BY seq',
       this.scopeId,
@@ -349,7 +344,7 @@ export class MemoryStore {
       .map(toMemory)
       .find(
         (memory) =>
-          statuses.includes(memory.status) && memoryIdentityKey(memory) === key,
+          wanted.has(memory.status) && memoryIdentityKey(memory) === key,
       );
   }
 

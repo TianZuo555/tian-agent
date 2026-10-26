@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   noticeParts,
+  sameRow,
   toRows,
   type ConversationView,
+  type MessageRow,
 } from '../src/shared/messages';
 
 function view(entries: ConversationView['entries']): ConversationView {
@@ -252,4 +254,46 @@ test('a run of tool-only rounds folds into one activity row', () => {
       ['tool', '', 'c4,c5'],
     ],
   );
+});
+
+test('sameRow compares row content, including every tool call field', () => {
+  const base: MessageRow = { id: 'e1', role: 'assistant', text: 'hello' };
+  assert.equal(sameRow(base, { ...base }), true);
+  assert.equal(sameRow(base, { ...base, text: 'hi' }), false);
+  assert.equal(sameRow(base, { ...base, streaming: true }), false);
+  assert.equal(sameRow(base, { ...base, variant: 'notice' }), false);
+  assert.equal(sameRow(base, { ...base, role: 'user' }), false);
+  // Missing toolCalls and an empty list render the same.
+  assert.equal(sameRow(base, { ...base, toolCalls: [] }), true);
+  const calls = {
+    ...base,
+    toolCalls: [
+      {
+        callId: 'c1',
+        name: 'search',
+        args: '{"q":"x"}',
+        status: 'done' as const,
+        output: 'ok',
+      },
+    ],
+  };
+  assert.equal(
+    sameRow(calls, { ...calls, toolCalls: [{ ...calls.toolCalls[0] }] }),
+    true,
+  );
+  assert.equal(
+    sameRow(calls, {
+      ...calls,
+      toolCalls: [{ ...calls.toolCalls[0], status: 'running' as const }],
+    }),
+    false,
+  );
+  assert.equal(
+    sameRow(calls, {
+      ...calls,
+      toolCalls: [{ ...calls.toolCalls[0], output: 'other' }],
+    }),
+    false,
+  );
+  assert.equal(sameRow(calls, { ...calls, toolCalls: [] }), false);
 });

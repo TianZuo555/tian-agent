@@ -16,7 +16,7 @@ Only the resident service writes to the database. The frontend is not an authori
 
 The service stops in an orderly sequence upon receiving SIGTERM. The next startup restores conversations, collectors, and original deadlines. Recovery follows tool replay policies. It does not guarantee exactly-once delivery for arbitrary external operations.
 
-Run results and completion notifications record in a single database transaction. The service delivers notifications to the dispatching conversation (Chief or Project Manager) with a stable `requestId`, then marks them delivered. After a crash, notifications redeliver and deduplicate through Durable. If the receiver is busy, notifications enter the follow-up queue.
+Run results and completion notifications record in a single database transaction. The service delivers notifications to the dispatching conversation (Chief or Project Manager) with a stable `requestId`, then marks them delivered. After a crash, notifications redeliver and deduplicate through Durable. If the receiver is busy, notifications enter the follow-up queue. A notification queued while a delivery pass runs triggers another pass immediately; it does not wait for the next 60-second sweep.
 
 ## History and Events
 

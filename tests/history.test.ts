@@ -1565,3 +1565,100 @@ test('the resident service records inbox and delivery events, and backfills tran
     1,
   );
 });
+
+test('a notification queued mid-delivery is delivered in the same pass', async (t) => {
+  const root = temporary(t, 'tian-history-delivery-');
+  const paths = {
+    ...servicePaths(join(root, 'data')),
+    socketPath: join(root, 'agent.sock'),
+  };
+  const server = new ResidentServer(paths);
+  await server.start();
+  t.after(async () => {
+    await server.close();
+  });
+  const service = server.service;
+  const conversation = await service.createConversation('global');
+  const deliver = (
+    service as unknown as { deliverNotifications(): Promise<void> }
+  ).deliverNotifications.bind(service);
+  service.db.queueNotification({
+    id: 'n:first',
+    scopeId: 'global',
+    conversationId: conversation.conversationId,
+    content: 'first wake',
+  });
+  const first = deliver();
+  // The in-flight pass already snapshotted pending rows; a second call while
+  // it runs must re-loop instead of leaving this row for the next interval.
+  service.db.queueNotification({
+    id: 'n:second',
+    scopeId: 'global',
+    conversationId: conversation.conversationId,
+    content: 'second wake',
+  });
+  const second = deliver();
+  await until(() => service.db.pendingNotifications().length === 0);
+  await Promise.all([first, second]);
+  const delivered = service.events
+    .list({ type: 'notification.delivered', scopeId: 'global' })
+    .map((entry) => entry.id)
+    .sort();
+  assert.deepEqual(delivered, [
+    'notify:n:first:delivered',
+    'notify:n:second:delivered',
+  ]);
+});
+
+test('an inbox rescan without new files stays silent; a new file notifies once', async (t) => {
+  const root = temporary(t, 'tian-history-inbox-');
+  const paths = {
+    ...servicePaths(join(root, 'data')),
+    socketPath: join(root, 'agent.sock'),
+  };
+  const server = new ResidentServer(paths);
+  await server.start();
+  t.after(async () => {
+    await server.close();
+  });
+  const service = server.service;
+  await service.createConversation('global');
+  const spy = service as unknown as {
+    emit: (channel: string, payload: unknown) => void;
+    scanInbox(scopeId: string): void;
+  };
+  const inboxEmits: unknown[] = [];
+  const emit = spy.emit;
+  spy.emit = (channel, payload) => {
+    if (channel === 'inbox') inboxEmits.push(payload);
+    return emit(channel, payload);
+  };
+  const scan = spy.scanInbox.bind(service);
+
+  service.scopes.sendMessage('global', 'external', 'first arrival');
+  scan('global');
+  assert.equal(inboxEmits.length, 1);
+  await until(() => service.db.pendingNotifications().length === 0);
+  // A rescan that imports and queues nothing emits nothing.
+  let count = inboxEmits.length;
+  scan('global');
+  assert.equal(inboxEmits.length, count);
+  // A file dropped after the scan is imported and notified exactly once.
+  service.scopes.sendMessage('global', 'external', 'second arrival');
+  count = inboxEmits.length;
+  scan('global');
+  assert.equal(inboxEmits.length, count + 1);
+  await until(() => service.db.pendingNotifications().length === 0);
+  count = inboxEmits.length;
+  scan('global');
+  assert.equal(inboxEmits.length, count);
+  assert.equal(
+    service.events.list({ type: 'inbox.received', scopeId: 'global' }).length,
+    2,
+  );
+  assert.equal(
+    service.events.list({ type: 'notification.delivered', scopeId: 'global' })
+      .length,
+    2,
+  );
+});

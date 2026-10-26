@@ -57,4 +57,4 @@ thread: optional-thread
 Message body text
 ```
 
-Writers should stage changes in non-markdown temporary files and rename them into place. The service imports entries by `(scopeId, messageId)` into SQLite and tracks read status per message. File system watchers, startup scans, and periodic sweeps process missing files. External messages produce persistent notifications. Messages from the Chief and Run completions do not create duplicate wakeups.
+Writers should stage changes in non-markdown temporary files and rename them into place. The service imports entries by `(scopeId, messageId)` into SQLite and tracks read status per message. File system watchers, startup scans, and periodic sweeps process missing files. Each scan imports only files this service instance has not seen, so rescans stay cheap; the `inbox` event and notification delivery fire only when a scan inserts a row or queues a new notification. External messages produce persistent notifications. Messages from the Chief and Run completions do not create duplicate wakeups.

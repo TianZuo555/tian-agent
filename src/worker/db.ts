@@ -1125,12 +1125,15 @@ export class Db {
     return value ? row<TaskRow>(value) : undefined;
   }
 
-  importMessage(scopeId: string, message: InboxItem): void {
-    this.db
-      .prepare(
-        'INSERT INTO inbox (scope_id,id,payload) VALUES (?,?,?) ON CONFLICT DO NOTHING',
-      )
-      .run(scopeId, message.id, JSON.stringify(message));
+  /** Insert an inbox row; returns whether it was new (not already imported). */
+  importMessage(scopeId: string, message: InboxItem): boolean {
+    return (
+      this.db
+        .prepare(
+          'INSERT INTO inbox (scope_id,id,payload) VALUES (?,?,?) ON CONFLICT DO NOTHING',
+        )
+        .run(scopeId, message.id, JSON.stringify(message)).changes > 0
+    );
   }
   listMessages(scopeId: string | null): InboxItem[] {
     const values = (
@@ -1158,12 +1161,16 @@ export class Db {
           .run(scopeId, id);
     });
   }
-  queueNotification(value: Notification): void {
-    this.db
-      .prepare(
-        'INSERT INTO notifications (id,scope_id,conversation_id,content) VALUES (?,?,?,?) ON CONFLICT DO NOTHING',
-      )
-      .run(value.id, value.scopeId, value.conversationId, value.content);
+  /** Queue a notification; returns whether the row was newly inserted. */
+  queueNotification(value: Notification): boolean {
+    return (
+      this.db
+        .prepare(
+          'INSERT INTO notifications (id,scope_id,conversation_id,content) VALUES (?,?,?,?) ON CONFLICT DO NOTHING',
+        )
+        .run(value.id, value.scopeId, value.conversationId, value.content)
+        .changes > 0
+    );
   }
   pendingNotifications(): Notification[] {
     return rows(
