@@ -357,3 +357,20 @@ The factual basis of a memory and whether the user reviewed it are two different
 - Uncalibrated `confidence` is no longer written or shown, to avoid false precision; the upgrade clears old values. Legacy data keeps its text, status, versions, and candidate links and receives a `legacy` evidence record; original `user_confirmed` rows also receive a `legacy` confirmation record.
 
 **Consequences**: Memory review becomes a normal entry point (the right-pane Memory tab), with expandable evidence, confirmation records, related facts, and times. All write paths (tools, candidates, panel) share one set of evidence, confirmation, and status rules. Trade-offs: lexical retrieval still needs an explicit query strategy and cannot pretend to understand semantics, and the user must decide whether a related fact is replaced instead of the system guessing.
+
+---
+
+## D20 · Notification Delivery and Manager Handoffs Leave the Service Class
+
+The resident service is a composition root. It does not own delivery loops or manager conversations.
+
+**Context**: `Service` mixed lifecycle, channels, sessions, inbox scans, notification delivery, goal commands, memory panel commands, and manager handoffs in one file. The notification loop held request coalescing, target selection, run-message copies, delivery, events, and error isolation. Manager delegation held conversation binding, task creation, thread messages, wakes, and idempotency. A change in one flow needed edits beside unrelated flows.
+
+**Decision**:
+
+- `NotificationOutbox` (`worker/outbox.ts`) owns the durable queue drain: one pass at a time, request coalescing, target resolution and persistence, per-notification failure isolation, and pause/resume for maintenance and shutdown.
+- `ManagerLink` (`worker/manager-link.ts`) owns the one manager conversation per project: creation, startup reconciliation, wakes, delegated Tasks, and Chief → Manager messages.
+- `Service` composes both and supplies their dependencies. It keeps lifecycle, channels, sessions, goals, runs, and UI commands.
+- These are implementation parts. They add no Service, Task, Run, or Manager concept.
+
+**Consequences**: Delivery and handoff rules have direct tests and single owners. The service class loses about 170 lines. Behavior stays the same: the queue is durable, failed deliveries retry on the next request or interval, and manager operations stay idempotent. Trade-off: new flows must queue through `service.outbox` and wake managers through `ManagerLink`, not through ad-hoc delivery code.

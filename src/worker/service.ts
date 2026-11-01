@@ -12,7 +12,7 @@ import {
   type FSWatcher,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
-import { Db, type ManagerMessageRow, type TaskRow } from './db.js';
+import { Db, type Notification } from './db.js';
 import { collectUsage, usageConversationIds } from './usage.js';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
 import { Settings } from './settings.js';
@@ -35,6 +35,8 @@ import { chiefExtension, type ChiefDeps } from './tools.js';
 import { managerExtension, type ManagerDeps } from './manager-tools.js';
 import type { ChannelHost } from './channel-host.js';
 import { workerExtension } from './worker-tools.js';
+import { ManagerLink } from './manager-link.js';
+import { NotificationOutbox } from './outbox.js';
 import {
   TelegramAdapter,
   fetchBotApi,
@@ -100,8 +102,8 @@ export class Service {
   private inboxTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private maintenance?: ReturnType<typeof setInterval>;
   private memoryTimer?: ReturnType<typeof setInterval>;
-  private delivery: Promise<void> | null = null;
-  private deliveryRequested = false;
+  readonly managerLink: ManagerLink;
+  readonly outbox: NotificationOutbox;
   private closing = false;
   private maintenanceMode = false;
   private openingSessions = new Map<string, Promise<ConversationInfo>>();
@@ -117,6 +119,25 @@ export class Service {
     private options: { warmModels?: boolean } = {},
   ) {
     this.db = new Db(userDataDir);
+    this.outbox = new NotificationOutbox({
+      store: this.db,
+      resolveConversation: async (notification) =>
+        this.db.latestConversation(notification.scopeId)?.conversationId ??
+        (await this.createConversation(notification.scopeId)).conversationId,
+      deliver: (notification, conversationId) =>
+        this.deliverNotification(notification, conversationId),
+      delivered: (notification, conversationId) =>
+        this.recordDelivery(notification, conversationId),
+      reportIssue: (area, error, context) =>
+        this.reportIssue(area, error, context),
+    });
+    this.managerLink = new ManagerLink({
+      db: this.db,
+      openManagerSession: (binding) => this.openBoundSession(binding),
+      queueNotification: (notification) => this.outbox.queue(notification),
+      requestDelivery: () => this.outbox.request(),
+      emitUpdates: () => this.emitUpdates(),
+    });
     this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
     this.scopes = new Scopes(this.globalDir, this.db);
     this.settings = new Settings(userDataDir);
@@ -161,7 +182,7 @@ export class Service {
       this.agents,
       userDataDir,
       emit,
-      () => this.deliverNotifications(),
+      () => this.outbox.request(),
       this.events,
       (area, error, context) => this.reportIssue(area, error, context),
       this.skills,
@@ -172,7 +193,7 @@ export class Service {
       goals: this.goals,
       ensureGoalConversation: (goalId, scopeId) =>
         this.ensureGoalConversation(goalId, scopeId),
-      notify: () => this.deliverNotifications(),
+      notify: () => this.outbox.request(),
       isPaused: () => this.closing || this.maintenanceMode,
       reportIssue: (area, error, context) =>
         this.reportIssue(area, error, context),
@@ -201,16 +222,16 @@ export class Service {
         onTaskCompleted: (scopeId) =>
           this.triggerMemory(scopeId, 'task-completed'),
         ...this.runToolDeps('chief'),
-        delegateToManager: (input) => this.delegateToManager(input),
-        sendManagerMessage: (input) => this.sendManagerMessage(input),
+        delegateToManager: (input) => this.managerLink.delegate(input),
+        sendManagerMessage: (input) => this.managerLink.send(input),
         managerMessages: (projectId) => this.data.managerMessages(projectId),
       }),
       workerExtension({
         db: this.db,
         scopes: this.scopes,
         wake: async (notification) => {
-          this.db.queueNotification(notification);
-          await this.deliverNotifications();
+          this.outbox.queue(notification);
+          await this.outbox.request();
         },
       }),
       managerExtension({
@@ -226,7 +247,7 @@ export class Service {
           this.triggerMemory(scopeId, 'task-completed'),
         ...this.runToolDeps('manager'),
         wakeChief: async (projectId, content, notificationId, taskId) => {
-          this.db.queueNotification({
+          this.outbox.queue({
             id: notificationId,
             scopeId: projectId,
             // Routed per task: its reportTo, else the latest delegated
@@ -235,7 +256,7 @@ export class Service {
             conversationId: this.data.managerReportTarget(projectId, taskId),
             content,
           });
-          await this.deliverNotifications();
+          await this.outbox.request();
         },
       }),
     );
@@ -251,7 +272,7 @@ export class Service {
           this.reportIssue('inbox.scan', error, { scopeId: scope.id });
         }
       }
-      void this.deliverNotifications();
+      void this.outbox.request();
     }, 60_000);
     this.maintenance.unref();
     // Periodic memory extraction for conversations nobody watches (PRD §4.4).
@@ -270,12 +291,12 @@ export class Service {
       .syncAll()
       .catch((error) => this.reportIssue('history.backfill', error));
     this.scheduler.start();
-    await this.ensureManagers();
+    await this.managerLink.ensureAll();
     for (const scope of this.listScopes()) {
       this.watchInbox(scope.id);
       this.scanInbox(scope.id);
     }
-    await this.deliverNotifications();
+    await this.outbox.request();
     this.agents.harness.resume();
     // Warm the model catalog on service start: a fresh install has no saved
     // catalog, and an empty one makes the generation task settle every
@@ -364,6 +385,7 @@ export class Service {
   }
   async beginMaintenance() {
     this.maintenanceMode = true;
+    this.outbox.pause();
     this.scheduler.stop();
     try {
       // Stop the gateway before the idle check: its internal submits bypass the
@@ -371,7 +393,7 @@ export class Service {
       // be work the upgrade never saw. stop() settles in-flight submits first.
       await this.telegram?.stop();
       await this.wechat?.stop();
-      await this.delivery;
+      await this.outbox.idle();
       const activity = await this.activity();
       if (
         activity.tasks ||
@@ -385,6 +407,7 @@ export class Service {
       return activity;
     } catch (error) {
       this.maintenanceMode = false;
+      this.outbox.resume();
       await this.startTelegram();
       await this.startWechat();
       // Maintenance was refused (work still running): schedules must keep
@@ -396,12 +419,14 @@ export class Service {
   async finishMaintenance(): Promise<void> {
     if (!this.maintenanceMode) return;
     this.maintenanceMode = false;
+    this.outbox.resume();
     await this.activate();
   }
 
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.outbox.pause();
     this.runs.pause();
     this.scheduler.stop();
     this.memoryWorker.stop();
@@ -417,7 +442,7 @@ export class Service {
     await this.history.idle();
     await this.memoryWorker.idle();
     await this.historyBackfill;
-    await this.delivery;
+    await this.outbox.idle();
     await Promise.all([...this.watches.values()].map((watch) => watch.stop()));
     this.watches.clear();
     await this.agents.close();
@@ -491,7 +516,7 @@ export class Service {
       managerName: managerName.trim(),
     });
     this.scopes.ensureDirs(id);
-    await this.ensureManagerConversation(id);
+    await this.managerLink.open(id);
     this.watchInbox(id);
     this.scanInbox(id);
     const scopes = this.listScopes();
@@ -605,7 +630,7 @@ export class Service {
   }
   async openSession(binding: SessionBinding): Promise<ConversationInfo> {
     // The manager channel is reserved: manager conversations are only
-    // created internally through ensureManagerConversation.
+    // created internally through ManagerLink.
     if (binding.channel === 'manager')
       throw new Error('channel "manager" is reserved');
     return this.openBoundSession(binding);
@@ -613,11 +638,11 @@ export class Service {
 
   /**
    * Tian's direct line to a project's manager: opens (or creates) the
-   * bound manager conversation. ensureManagerConversation already
+   * bound manager conversation. ManagerLink.open already
    * rejects global and unknown projects, and repeats are idempotent.
    */
   async openManager(projectId: string): Promise<ConversationInfo> {
-    return this.ensureManagerConversation(projectId);
+    return this.managerLink.open(projectId);
   }
 
   private async openBoundSession(
@@ -804,7 +829,7 @@ export class Service {
       if (message.from === 'chief' || message.thread.startsWith('run-'))
         continue;
       if (
-        this.db.queueNotification({
+        this.outbox.queue({
           id: `inbox:${scopeId}:${message.id}`,
           scopeId,
           conversationId: null,
@@ -827,75 +852,53 @@ export class Service {
     }
     if (!changed) return;
     this.emit('inbox', scopeId);
-    void this.deliverNotifications();
+    void this.outbox.request();
   }
-  private deliverNotifications(): Promise<void> {
-    if (this.closing || this.maintenanceMode) return Promise.resolve();
-    // A notification queued while a delivery runs must not wait for the next
-    // interval: the flag makes the in-flight pass loop once more.
-    this.deliveryRequested = true;
-    if (this.delivery) return this.delivery;
-    this.delivery = (async () => {
-      while (this.deliveryRequested && !this.closing && !this.maintenanceMode) {
-        this.deliveryRequested = false;
-        for (const notification of this.db.pendingNotifications()) {
-          if (this.closing || this.maintenanceMode) break;
-          try {
-            let conversationId = notification.conversationId;
-            if (!conversationId) {
-              conversationId =
-                this.db.latestConversation(notification.scopeId)
-                  ?.conversationId ??
-                (await this.createConversation(notification.scopeId))
-                  .conversationId;
-              this.db.targetNotification(notification.id, conversationId);
-            }
-            if (notification.id.startsWith('run:')) {
-              const messageId = `run-${createHash('sha256').update(notification.id).digest('hex')}`;
-              this.scopes.sendMessage(
-                notification.scopeId,
-                'run',
-                notification.content,
-                undefined,
-                messageId,
-                messageId,
-              );
-            }
-            await (
-              await this.agents.conversation(conversationId)
-            ).submit(
-              {
-                type: 'input',
-                content: notification.content,
-                requestId: notification.id,
-                whenBusy: 'followUp',
-                // System wake (goal, run, inbox): never a user statement.
-                entry: { kind: 'system.notification' },
-              },
-              BACKGROUND_CONTEXT,
-            );
-            this.db.deliveredNotification(notification.id);
-            this.events.record({
-              id: `notify:${notification.id}:delivered`,
-              type: 'notification.delivered',
-              actor: 'system',
-              scopeId: notification.scopeId,
-              conversationId,
-              summary: `Notification ${notification.id} delivered: ${notification.content.split('\n')[0].slice(0, 120)}`,
-            });
-            this.emit('inbox', notification.scopeId);
-          } catch (error) {
-            this.reportIssue('notification.deliver', error, {
-              scopeId: notification.scopeId,
-              conversationId: notification.conversationId ?? undefined,
-            });
-          }
-        }
-      }
-    })().finally(() => {
-      this.delivery = null;
+
+  /** Deliver one notification into its conversation (the outbox owns the queue). */
+  private async deliverNotification(
+    notification: Notification,
+    conversationId: string,
+  ): Promise<void> {
+    if (notification.id.startsWith('run:')) {
+      const messageId = `run-${createHash('sha256').update(notification.id).digest('hex')}`;
+      this.scopes.sendMessage(
+        notification.scopeId,
+        'run',
+        notification.content,
+        undefined,
+        messageId,
+        messageId,
+      );
+    }
+    await (
+      await this.agents.conversation(conversationId)
+    ).submit(
+      {
+        type: 'input',
+        content: notification.content,
+        requestId: notification.id,
+        whenBusy: 'followUp',
+        // System wake (goal, run, inbox): never a user statement.
+        entry: { kind: 'system.notification' },
+      },
+      BACKGROUND_CONTEXT,
+    );
+  }
+
+  private recordDelivery(
+    notification: Notification,
+    conversationId: string,
+  ): void {
+    this.events.record({
+      id: `notify:${notification.id}:delivered`,
+      type: 'notification.delivered',
+      actor: 'system',
+      scopeId: notification.scopeId,
+      conversationId,
+      summary: `Notification ${notification.id} delivered: ${notification.content.split('\n')[0].slice(0, 120)}`,
     });
-    return this.delivery;
+    this.emit('inbox', notification.scopeId);
   }
 
   getSettings() {
@@ -1067,177 +1070,6 @@ export class Service {
    * (or on service start for older projects) and reused afterwards. The
    * manager channel is reserved — this is its only caller.
    */
-  private async ensureManagerConversation(
-    projectId: string,
-  ): Promise<ConversationInfo> {
-    if (projectId === GLOBAL_SCOPE)
-      throw new Error('the global scope has no project manager');
-    const project = this.db.getProject(projectId);
-    if (!project) throw new Error(`Unknown project: ${projectId}`);
-    const conversation = await this.openBoundSession({
-      channel: 'manager',
-      externalId: projectId,
-      scopeId: projectId,
-    });
-    const title = `Manager · ${project.name}`;
-    this.db.setConversationTitle(conversation.conversationId, title);
-    // setConversationTitle only fills a NULL title — mirror that here so a
-    // renamed conversation keeps its own title in the returned row.
-    return conversation.title == null
-      ? { ...conversation, title }
-      : conversation;
-  }
-
-  /**
-   * D18: every project has its manager. Projects added before that rule get
-   * theirs on service start; for the rest this is a no-op.
-   */
-  private async ensureManagers(): Promise<void> {
-    await Promise.all(
-      this.db
-        .listProjects()
-        .map((project) => this.ensureManagerConversation(project.id)),
-    );
-  }
-
-  /** Wake the manager conversation through the notification pipeline. */
-  private async wakeManager(
-    projectId: string,
-    content: string,
-    notificationId: string,
-  ): Promise<void> {
-    const conversation = await this.ensureManagerConversation(projectId);
-    this.db.queueNotification({
-      id: notificationId,
-      scopeId: projectId,
-      conversationId: conversation.conversationId,
-      content,
-    });
-    await this.deliverNotifications();
-  }
-
-  /**
-   * Chief → manager delegation: one transaction creates the delegated task
-   * (assignee='manager', reportTo=this chief) and the delegation thread row,
-   * then the manager is woken with the task id. Idempotent via operationId.
-   */
-  private async delegateToManager(input: {
-    projectId: string;
-    chiefConversationId: string;
-    title: string;
-    briefing: string;
-    goalId?: string | null;
-    operationId: string;
-  }): Promise<{ task: TaskRow; message: ManagerMessageRow }> {
-    const project = this.db.getProject(input.projectId);
-    if (!project) throw new Error(`Unknown project: ${input.projectId}`);
-    const conversation = await this.ensureManagerConversation(input.projectId);
-    const { task, message } = this.db.once(input.operationId, () => {
-      const task = this.db.insertTask({
-        scopeId: input.projectId,
-        title: input.title,
-        owner: 'agent',
-        assignee: 'manager',
-        reportTo: input.chiefConversationId,
-        goalId: input.goalId ?? null,
-        dedupeKey: `delegate:${input.operationId}`,
-      });
-      const message = this.db.addManagerMessage({
-        id: `mm:${input.projectId}:${input.operationId}`,
-        projectId: input.projectId,
-        sender: 'chief',
-        kind: 'delegation',
-        taskId: task.id,
-        body: input.briefing,
-      });
-      return { task, message };
-    });
-    this.db.queueNotification({
-      id: `mm-notify:${message.id}`,
-      scopeId: input.projectId,
-      conversationId: conversation.conversationId,
-      content: `[delegated task #${task.id} from chief] ${task.title}\n${input.briefing}\n\nstart_task #${task.id}, dispatch runs with task: ${task.id}, then complete_task / fail_task #${task.id} — closing it reports back to the chief automatically. ask_chief(question, task: ${task.id}) only if genuinely blocked; report_chief(text, task: ${task.id}) for interim status.`,
-    });
-    await this.deliverNotifications();
-    this.emitUpdates();
-    return { task, message };
-  }
-
-  /**
-   * Chief → manager message. An answer to an open question is picked up by
-   * the waiting ask_chief — no wake; anything else (and a late answer)
-   * wakes the manager once. Idempotent via operationId.
-   */
-  private async sendManagerMessage(input: {
-    projectId: string;
-    body: string;
-    replyTo?: number;
-    taskId?: number;
-    operationId: string;
-  }): Promise<{
-    message: ManagerMessageRow;
-    delivered: 'waiting' | 'woken';
-  }> {
-    const project = this.db.getProject(input.projectId);
-    if (!project) throw new Error(`Unknown project: ${input.projectId}`);
-    if (input.taskId != null) {
-      const task = this.db.getTask(input.taskId);
-      if (!task) throw new Error(`Unknown task: ${input.taskId}`);
-      if (task.scopeId !== input.projectId)
-        throw new Error(
-          `task #${task.id} belongs to ${task.scopeId}, not ${project.name}`,
-        );
-    }
-    if (input.replyTo != null) {
-      const question = this.db.managerMessageBySeq(
-        input.projectId,
-        input.replyTo,
-      );
-      if (!question || question.kind !== 'question')
-        throw new Error(
-          `reply_to ${input.replyTo} is not a manager question in ${project.name} (seq from list_manager_msgs)`,
-        );
-      const { message, open } = this.db.once(input.operationId, () => {
-        const message = this.db.addManagerMessage({
-          id: `mm:${input.projectId}:${input.operationId}`,
-          projectId: input.projectId,
-          sender: 'chief',
-          kind: 'answer',
-          taskId: question.taskId,
-          replyTo: question.id,
-          body: input.body,
-        });
-        return {
-          message,
-          open: this.db.managerMessage(question.id)?.closedAt == null,
-        };
-      });
-      if (open) return { message, delivered: 'waiting' };
-      await this.wakeManager(
-        input.projectId,
-        `[chief answers your earlier question #${question.seq}]\n${question.body}\n---\n${input.body}`,
-        `mm-notify:${message.id}`,
-      );
-      return { message, delivered: 'woken' };
-    }
-    const { message } = this.db.once(input.operationId, () => ({
-      message: this.db.addManagerMessage({
-        id: `mm:${input.projectId}:${input.operationId}`,
-        projectId: input.projectId,
-        sender: 'chief',
-        kind: 'message',
-        taskId: input.taskId ?? null,
-        body: input.body,
-      }),
-    }));
-    await this.wakeManager(
-      input.projectId,
-      `[chief → ${project.name} manager]\n${input.body}`,
-      `mm-notify:${message.id}`,
-    );
-    return { message, delivered: 'woken' };
-  }
-
   private emitUpdates(): void {
     this.emit('tasks', this.db.listTasks(null));
     this.emit('goals', this.goals.listGoals(null));
