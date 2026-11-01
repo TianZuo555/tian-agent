@@ -928,9 +928,7 @@ test('service start gives every older project its manager', async (t) => {
   const f = await serviceFixture(t);
   // serviceFixture inserts p-1 straight into the database after start.
   assert.equal(f.db.managerConversation('p-1'), undefined);
-  await (
-    f.server.service as unknown as { ensureManagers(): Promise<void> }
-  ).ensureManagers();
+  await f.server.service.managerLink.ensureAll();
   assert.equal(f.db.managerConversation('p-1')?.role, 'manager');
 });
 
@@ -1054,24 +1052,26 @@ test('remember source:user in a Tian turn records the source but waits for revie
 interface ServiceFixture {
   server: ResidentServer;
   service: {
-    delegateToManager: (input: {
-      projectId: string;
-      chiefConversationId: string;
-      title: string;
-      briefing: string;
-      goalId?: string | null;
-      operationId: string;
-    }) => Promise<{ task: TaskRow; message: ManagerMessageRow }>;
-    sendManagerMessage: (input: {
-      projectId: string;
-      body: string;
-      replyTo?: number;
-      taskId?: number;
-      operationId: string;
-    }) => Promise<{
-      message: ManagerMessageRow;
-      delivered: 'waiting' | 'woken';
-    }>;
+    managerLink: {
+      delegate: (input: {
+        projectId: string;
+        chiefConversationId: string;
+        title: string;
+        briefing: string;
+        goalId?: string | null;
+        operationId: string;
+      }) => Promise<{ task: TaskRow; message: ManagerMessageRow }>;
+      send: (input: {
+        projectId: string;
+        body: string;
+        replyTo?: number;
+        taskId?: number;
+        operationId: string;
+      }) => Promise<{
+        message: ManagerMessageRow;
+        delivered: 'waiting' | 'woken';
+      }>;
+    };
     openManager: (projectId: string) => Promise<{ role: string }>;
   };
   db: Db;
@@ -1133,7 +1133,7 @@ test('delegate creates a delegated task, one manager wake, and is replay-safe', 
     goalId: goal.id,
     operationId: 'op-delegate-1',
   };
-  const { task, message } = await f.service.delegateToManager(input);
+  const { task, message } = await f.service.managerLink.delegate(input);
   assert.equal(task.scopeId, 'p-1');
   assert.equal(task.owner, 'agent');
   assert.equal(task.assignee, 'manager');
@@ -1149,7 +1149,7 @@ test('delegate creates a delegated task, one manager wake, and is replay-safe', 
   assert.equal(managerWakes(f).length, 1);
   assert.match(managerWakes(f)[0].content, /delegated task #\d+ from chief/);
   // Replaying the same operation returns the same task, still one wake.
-  const replay = await f.service.delegateToManager(input);
+  const replay = await f.service.managerLink.delegate(input);
   assert.equal(replay.task.id, task.id);
   assert.equal(replay.message.id, message.id);
   assert.equal(managerWakes(f).length, 1);
@@ -1167,7 +1167,7 @@ test('a reply_to answer while the question is open does not wake; a late one doe
   });
   // reply_to must point at a question row.
   await assert.rejects(
-    f.service.sendManagerMessage({
+    f.service.managerLink.send({
       projectId: 'p-1',
       body: 'x',
       replyTo: 999,
@@ -1176,7 +1176,7 @@ test('a reply_to answer while the question is open does not wake; a late one doe
     /not a manager question/,
   );
   // While the manager still waits, the answer is picked up — no wake.
-  const waiting = await f.service.sendManagerMessage({
+  const waiting = await f.service.managerLink.send({
     projectId: 'p-1',
     body: 'private for now',
     replyTo: question.seq,
@@ -1188,7 +1188,7 @@ test('a reply_to answer while the question is open does not wake; a late one doe
   assert.equal(managerWakes(f).length, 0);
   // After the question closed (timeout), an answer wakes the manager once.
   f.db.closeManagerQuestion('p-1', question.id);
-  const late = await f.service.sendManagerMessage({
+  const late = await f.service.managerLink.send({
     projectId: 'p-1',
     body: 'actually, ship it',
     replyTo: question.seq,

@@ -36,7 +36,9 @@ The Chief, Project Managers, and Workers share the service Harness and Pi storag
 | `desktop/app-update.ts`        | Application bundle verification, staging, swap, health checks, and rollback                                                             |
 | `shared/contracts.ts`          | IPC and socket schemas, return types, and message contracts                                                                             |
 | `shared/messages.ts`           | Transforms Pi transcripts into chat snapshots                                                                                           |
-| `worker/service.ts`            | Application wiring, projects, chief/manager sessions, channel bindings, delegation, Inbox, and notifications                            |
+| `worker/service.ts`            | Application wiring, projects, sessions, channel bindings, Inbox, goals, and runs                                                        |
+| `worker/manager-link.ts`       | Project manager conversation binding, startup reconciliation, wakes, delegation, and Chief → Manager messages                           |
+| `worker/outbox.ts`             | Durable notification delivery: coalesced passes, target resolution, per-item failure isolation, and pause/resume                        |
 | `worker/commands.ts`           | Business command handlers shared across transports                                                                                      |
 | `worker/agents.ts`             | Pi API adapter and capability configurations for Chief, Manager, and Worker roles                                                       |
 | `worker/magpie.ts`             | Magpie gateway provider: model discovery and schema mapping                                                                             |

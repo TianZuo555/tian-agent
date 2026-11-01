@@ -36,7 +36,9 @@
 | `desktop/app-update.ts`        | App 校验、独立替换、启动检查与失败恢复                                             |
 | `shared/contracts.ts`          | IPC / socket 参数 schema、返回类型和消息合约                                       |
 | `shared/messages.ts`           | Pi transcript 转换为聊天快照                                                       |
-| `worker/service.ts`            | 应用组装、项目、总管/管理者会话、渠道绑定、委派、Inbox 与通知                      |
+| `worker/service.ts`            | 应用组装、项目、会话、渠道绑定、Inbox、目标与 Run                                  |
+| `worker/manager-link.ts`       | 项目管理者会话绑定、启动补建、唤醒、委派与总管 → 管理者消息                        |
+| `worker/outbox.ts`             | 持久通知投递：合并投递轮次、解析目标、隔离单条失败、暂停与恢复                     |
 | `worker/commands.ts`           | 各 transport 共用的业务命令                                                        |
 | `worker/agents.ts`             | Pi API 适配和总管／管理者／工兵能力配置                                            |
 | `worker/magpie.ts`             | Magpie 网关 provider：模型发现与描述映射                                           |

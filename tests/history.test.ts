@@ -1579,10 +1579,8 @@ test('a notification queued mid-delivery is delivered in the same pass', async (
   });
   const service = server.service;
   const conversation = await service.createConversation('global');
-  const deliver = (
-    service as unknown as { deliverNotifications(): Promise<void> }
-  ).deliverNotifications.bind(service);
-  service.db.queueNotification({
+  const deliver = () => service.outbox.request();
+  service.outbox.queue({
     id: 'n:first',
     scopeId: 'global',
     conversationId: conversation.conversationId,
@@ -1591,7 +1589,7 @@ test('a notification queued mid-delivery is delivered in the same pass', async (
   const first = deliver();
   // The in-flight pass already snapshotted pending rows; a second call while
   // it runs must re-loop instead of leaving this row for the next interval.
-  service.db.queueNotification({
+  service.outbox.queue({
     id: 'n:second',
     scopeId: 'global',
     conversationId: conversation.conversationId,
