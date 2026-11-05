@@ -4,7 +4,7 @@
 
 This document records architectural decisions that are **difficult to reverse and critical to understand**: why this architecture was chosen and what trade-offs were made. Implementation details and operational guides appear in [architecture.md](architecture.md), [memory.md](memory.md), [data.md](data.md), [agent-work.md](agent-work.md), [channels.md](channels.md), [service.md](service.md), and [improvement-log.md](improvement-log.md).
 
-Each decision forms a section numbered D1 through D23, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`. Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty (see [service.md](service.md#service-upgrades)).
+Each decision forms a section numbered D1 through D29, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`; the target client-facing API is Pi Server API v1 ([spec/protocol.md](spec/protocol.md)). Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty, and the target server governs schema and protocol changes with upgrade transactions (see [service.md](service.md#service-upgrades)).
 
 The earlier `docs/adr/` directory has been consolidated into this document:
 
@@ -33,6 +33,12 @@ The earlier `docs/adr/` directory has been consolidated into this document:
 | —          | D21 Pluggable model providers                                          |
 | —          | D22 Unified Seatbelt sandbox for Worker commands                       |
 | —          | D23 Tian Sky visual language for the Native Shell clients              |
+| —          | D24 Pi server is the single writer; clients are renderers              |
+| —          | D25 Native Shell (NSH) is the client framework for six targets         |
+| —          | D26 Tailscale is the trust boundary                                    |
+| —          | D27 Chat-first information architecture: bots are Pi roles             |
+| —          | D28 Pi Server API v1: one frame set, two transports                    |
+| —          | D29 PostgreSQL is the server store                                     |
 
 ---
 
@@ -444,3 +450,83 @@ The Native Shell clients (macOS and iOS first) use the "Tian Sky" visual languag
 - Settings are grouped by owner: Agent (the account), Personal (this device), Operations (the server).
 
 **Consequences**: The research recommendation not to copy coloured avatars is narrowed: identity now uses colour, limited to one hue per Manager and the single gradient of the Chief. The draft UI spec must take the 15 px / 1.7 size when it lands. D1's three-pane layout carries over to the macOS client; its `@pierre/diffs` detail is replaced by NSH `DiffView`. Phosphor remains the only icon set. Manager hue assignment and iOS app-extension support stay open ([design-language.md §14](design-language.md#14-open-questions)).
+
+---
+
+## D24 · Pi Server Is the Single Writer; Clients Are Renderers
+
+The product becomes server-first: one Pi server owns all durable state, and every client is a renderer that submits idempotent intents. This supersedes the Electron-client half of D3; the TypeScript server half stays.
+
+**Context**: The current client is an Electron app on the same Mac as the resident service, reached through a private Unix socket. That model cannot serve several devices: a phone, a web build, or a second computer has no socket, no file permissions, and no local database. Product logic also lives in the React renderer, which makes a second client a second implementation.
+
+**Decision**:
+
+- The Pi server is the only writer of durable state: SQLite databases, Pi Durable conversations, tools, Runs, schedules, and model keys. It runs on one machine and answers one protocol.
+- Clients hold a cache and render server snapshots. They never compute durable state and never keep a write queue; a failed write is retried with the same `requestId`.
+- Two transports, one frame set: a Unix socket when the client runs on the server machine, and WSS otherwise.
+- Read state, presence, and unread counts are server state, so several devices agree without a sync service.
+
+**Consequences**: The product reaches macOS, Windows, Linux, iOS, Android, and the web with one protocol. The server becomes a deployable thing with installs, upgrades, backups, and an incident surface, which the operations spec now covers. Authentication moves from file permissions to the transport ([D26](#d26--tailscale-is-the-trust-boundary)). The desktop app becomes one client among several, so a regression there is no longer a server outage.
+
+---
+
+## D25 · Native Shell (NSH) Is the Client Framework for All Six Targets
+
+**Context**: React and Electron cover three desktop operating systems. Phones and the web need separate stacks, and the existing renderer depends on the React ecosystem (coss, Streamdown, Vite) that has no native counterpart.
+
+**Decision**:
+
+- One TSX UI on Native Shell, rendered by each platform's native backend: AppKit, Win32, GTK 4, UIKit, Android views, HTML.
+- Platform code lives in a Rust host crate: transport, cache, keychain, notifications, menus, packaging. The TSX module keeps product logic and no platform branches.
+- Electron is removed after the NSH client reaches parity, not before.
+
+**Consequences**: One UI codebase instead of three. The trade-offs are real: TSX runs in QuickJS under a capability sandbox with no Node APIs, so the protocol transport must live in Rust; the React component library is replaced by `nsh/base` plus Tailwind; six packaging and signing pipelines replace one. NSH is young, so the client keeps a mixed Rust/TSX project and the server stays independent of the client framework, which limits the blast radius of a framework change.
+
+---
+
+## D26 · Tailscale Is the Trust Boundary
+
+The server is reachable only from the owner's own devices on the tailnet, identified by Tailscale. There is no password system, and the server is never exposed to the public internet.
+
+**Context**: Single user with several devices. A remote client cannot rely on Unix socket permissions, and a personal server should not grow an account service to serve one person.
+
+**Decision**:
+
+- The server verifies every remote peer with `tailscaled` `WhoIs`, records it as a device, and refuses revoked devices.
+- A Tailscale ACL grants the owner's explicit identity (not `autogroup:member`) port 8787 on the server node and nothing else; Funnel stays off.
+- TLS comes from a Tailscale certificate for the server's MagicDNS name; the WebSocket listener binds only to the tailnet interface.
+- The first handshake creates a device record; revocation is per device and per node.
+
+**Consequences**: Onboarding is `join the tailnet and open the app`, with no pairing codes or token lifecycle. Multi-user support would need a real authentication and tenancy layer, so it stays out of v1. The web build is tailnet-only by construction. Tailscale becomes a hard runtime dependency for remote clients; local clients keep the Unix socket path.
+
+---
+
+## D27 · Chat-First Information Architecture: Bots Are Pi Roles
+
+**Context**: The current shell has four top-level views (Chat, Goals, Skills, Inbox) around a three-pane workbench. The product direction is a chat app of the kind that talks to bots: one list of conversations, one conversation at a time.
+
+**Decision**:
+
+- The home surface is the conversation list; the main surface is one conversation. Chat, Goals, Skills, and Inbox are no longer peers.
+- A bot is the conversation identity of a Pi role: one Chief, one Manager per project, one Worker per Run. No external bot registry, no user-defined personas in v1.
+- Goals, Inbox, Skills, Memory, Usage, and Settings move to the inspector, the command palette, Settings pages, or inline cards in a conversation.
+- Worker Runs appear as nested threads under the Manager that dispatched them.
+
+**Consequences**: Fewer surfaces and a natural mobile layout. Dashboard-style visibility is lost; badges, inline cards, and the palette have to carry discovery. The role model and its commands stay unchanged, so this is a presentation decision, not a domain change.
+
+---
+
+## D28 · Pi Server API v1: One Frame Set, Two Transports, Required Idempotency Keys
+
+**Context**: Protocol 10 is Unix-socket only. Events are whole channel snapshots without a sequence or revision, so a reconnecting client cannot tell what it missed. `requestId` is optional and only on `submit`. The server accepts 1 MiB frames while the client allows 16 MiB, so a valid client frame can drop the connection.
+
+**Decision**:
+
+- Keep one frame set over both transports: `hello`/`welcome` with a protocol range and capability list, `request`/`result`, `event` with `seq` and `revision`.
+- Resume by `seq`; a gap or an unavailable cursor forces a bounded full sync instead of patching events.
+- Publish one frame limit (4 MiB), one in-flight request limit, and a streaming rate.
+- Require a stable `requestId` for every write and deduplicate it on the server (7 days or the intent's turn plus 24 h).
+- Add commands the chat-first client needs: `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `listDevices`, `revokeDevice`.
+
+**Consequences**: Reconnect becomes cheap and correct, and the client can always recover from a lost frame. Every client must generate intent keys that survive retries and restarts, which is a client-core responsibility, not a view concern. The server supports two protocol majors, so client and server releases can move independently. `pickDir` stops being a server command for remote clients: project paths are server paths, browsed through `listDirectory`.
+

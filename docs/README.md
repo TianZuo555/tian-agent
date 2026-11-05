@@ -39,7 +39,8 @@ mise run verify   # typecheck + lint + react-doctor + test
 | 文档（中文 / 英文）                                                                              | 内容                                                                            |
 | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
 | [docs/development.md](zh/development.md) · [EN](development.md)                                  | 工具链（mise）、常用任务、本地环境变量、完整测试套件与代码质量要求              |
-| [docs/decisions.md](zh/decisions.md) · [EN](decisions.md)                                        | 架构设计决策 D1–D23：取舍与设计原由                                             |
+| [docs/decisions.md](zh/decisions.md) · [EN](decisions.md)                                        | 架构设计决策 D1–D29：取舍与设计原由                                             |
+| [docs/spec/](spec/README.md) · [EN](spec/README.md)                                              | 服务端优先的规格：Pi Server API v1、聊天式 UI、六端客户端与运维                  |
 | [docs/architecture.md](zh/architecture.md) · [EN](architecture.md)                               | 进程模型、桌面客户端、模块地图、权限与 Scope 隔离                               |
 | [docs/service.md](zh/service.md) · [EN](service.md)                                              | 常驻服务：安装、操作、独占锁、升级事务与回滚机制                                |
 | [docs/agent-work.md](zh/agent-work.md) · [EN](agent-work.md)                                     | 目标、任务生命周期、调度、Run 状态机、管理者与工兵消息                          |
