@@ -530,3 +530,23 @@ The server is reachable only from the owner's own devices on the tailnet, identi
 
 **Consequences**: Reconnect becomes cheap and correct, and the client can always recover from a lost frame. Every client must generate intent keys that survive retries and restarts, which is a client-core responsibility, not a view concern. The server supports two protocol majors, so client and server releases can move independently. `pickDir` stops being a server command for remote clients: project paths are server paths, browsed through `listDirectory`.
 
+
+---
+
+## D29 · PostgreSQL Is the Server Store
+
+The target server stores application data in PostgreSQL running on the server machine, reached through a local socket. SQLite remains only inside Pi Durable until a Postgres storage backend passes its conformance suite.
+
+**Context**: The server-first design makes storage a product surface: several clients read the same state, backups and upgrades become operational duties, and multi-user support may follow. SQLite served the single-process desktop model well, but it cannot answer concurrent readers off-process, has no standard operational tooling, and its SQL dialect (FTS5, `PRAGMA`) would leak into every future backend. Two hard constraints limit how far Postgres can go today: Pi Durable ships SQLite, JSONL, and memory backends only, and its `Storage` interface is the documented seam for a new backend; and the current application database is `node:sqlite` (synchronous) with 400 SQL call sites, 35 transaction sites, and two FTS5 tables.
+
+**Decision**:
+
+- The target server uses PostgreSQL for application data (projects, tasks, goals, memory, Inbox, Runs, settings, events). Postgres runs on the server machine and is reached through a local socket; it is not exposed on the tailnet and has no remote clients.
+- The server process remains the only writer. A Postgres connection pool does not make multiple server processes supported.
+- Pi Durable moves to Postgres only through a `Storage` backend that passes the package's conformance suite. Until then, SQLite stays the implementation inside the Pi library, not the application's store.
+- Full-text search moves from FTS5 to PostgreSQL full-text search; memory and History ranking are re-tuned and re-tested, not translated line by line.
+- The upgrade transaction changes shape: logical schema migrations plus a verified `pg_dump` taken before a release, with restore-based rollback. File snapshots and the SQLite exclusive lock no longer protect the data.
+- This ADR changes the target only. The current Electron service keeps `node:sqlite` and its file-snapshot upgrades until the new server lands; the migration is a data import, not a runtime dual-write.
+
+**Consequences**: Operations now include a database server: installation, upgrades, authentication (peer or socket auth), backups, and a restore test per release. Development and CI need Postgres. The synchronous `node:sqlite` call sites become asynchronous when the server is ported, which is the largest single piece of that work. In exchange, the store has concurrent readers, standard tooling, and a schema boundary that a future multi-user mode can extend. The client-side read cache is out of scope: it stays local to each device and never becomes a second source of truth.
+
