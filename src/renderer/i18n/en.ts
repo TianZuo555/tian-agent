@@ -20,6 +20,15 @@ export type Params = Record<string, string | number>;
 export type Message = string | ((params: Params) => string);
 
 export const en = {
+  'nsh.title': 'Tian Agent NSH',
+  'nsh.readOnly': 'Read-only preview',
+  'nsh.context': 'Context',
+  'nsh.contextPending': 'Tasks and Runs will appear here in a later phase.',
+  'nsh.viewPending': 'This view is planned for a later migration phase.',
+  'nsh.connectionHelp':
+    'Start the development service with the same temporary data directory.',
+  'nsh.languageEnglish': 'English',
+  'nsh.languageChinese': '中文',
   // ─── 1. Common Verbs & Chrome ──────────────────────────────────────────────
   'common.cancel': 'Cancel',
   'common.close': 'Close',

@@ -2,7 +2,9 @@
 
 ## Scope and status
 
-Phase 0 records the migration design. Implementation proceeds in the order below.
+Phase 0 records the migration design. Phase 1 implements a runnable read-only
+native client in `crates/tian-nsh`; see its [run guide](../crates/tian-nsh/README.md).
+Implementation proceeds in the order below.
 The TypeScript resident service, Pi SDK harness, tools, Inbox ingestion, Runs,
 `tian.db`, and `pi-session.sqlite` remain service-owned. NSH replaces the desktop
 client with a Rust host module and TSX screens on the macOS AppKit backend.
@@ -20,7 +22,7 @@ Application baseline: `c7b2fab`; socket protocol 10; database version 8.
 NSH reference: `longbridge/nsh` main at
 `7ed95faf2b6473f3205ac0e756ec51fe2ec3b922` in `/tmp/nsh-main`.
 Installed release CLI: `nsh 0.4.0 (e626a8d)`.
-The reference can contain APIs newer than the release. Pin application crate
+The reference and release have API differences. Pin application crate
 versions to the CLI version and check generated declarations and native behavior
 before adopting an API. If a required feature is absent, record the constraint
 and use a pinned upstream revision only after checking its build cost. Do not
@@ -238,3 +240,35 @@ A phase completes only when its acceptance gate passes. A successful bundle or
 headless test does not prove AppKit input, accessibility or lifecycle behavior.
 Report what runs, what is stubbed, and the next phase at each boundary. Record
 blocked checks with their actual failure rather than marking them passed.
+
+## Phase 1 verification record
+
+The application uses published `nsh-core = 0.4.0` and an app-specific generated
+AppKit runner. No local NSH checkout is a build dependency. `Service.connect`
+opens and validates the Unix socket; native `Connection.next/send/close` own
+framing and cancellation. A small TypeScript adapter owns RPC correlation and
+reconnect, and the NSH store owns selection and watch restoration. Closing the
+socket releases its client IDs and watches through the existing server EOF path.
+
+Verified in this worktree:
+
+- `mise run verify`: passed; 280 tests, typecheck, lint/format, React Doctor.
+  React Doctor excludes the NSH app because it uses a different TSX runtime;
+  Electron application checks remain enabled.
+- TypeScript fallback compiler: passed.
+- Cargo build and four transport tests: passed.
+- `nsh build` and `nsh check`: passed.
+- `nsh test crates/tian-nsh`: passed (four Rust tests and one integration test).
+- `nsh test crates/tian-nsh --target macos`: passed against a real temporary
+  resident service. The test selects a conversation, reads Markdown/Chinese,
+  receives a new event after its initial snapshot, changes views/language, and
+  selects a second conversation without keeping the first transcript.
+- `nsh run crates/tian-nsh --target macos --port 8873`: opened an AppKit window.
+  A native test-agent screenshot was inspected. After the client stopped, a new
+  socket client confirmed that the same temporary service PID remained alive.
+
+The preview is read-only. Goals, Inbox, Skills, full Settings and the right
+context pane remain placeholders. Chat composition, tool disclosures and full
+keyboard/accessibility parity are next. Cua could not resolve the unbundled
+host's AX window; NSH's native agent provided the UI verification. This does
+not establish a manual VoiceOver or real IME acceptance result.
