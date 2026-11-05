@@ -385,6 +385,16 @@ MVP verifies three outcomes: cross-session persistent memory; autonomous schedul
 - M4: Memory Worker model extractors, dreaming loops, vector hybrid search.
 - M5: Multi-agent coordination, automated skill refinement.
 
+### M6 — Role Boundaries, Providers, Worker Runtimes [Planned]
+
+Five phases; each phase ships and is verified on its own. Work list: [todo-agent-refactor.md](todo-agent-refactor.md).
+
+1. **Role and memory boundaries** ([memory.md](memory.md#conversation-boundary-proposal), [agent-work.md](agent-work.md#dispatch-ownership-proposal)): Manager `recall` loses `scope=global`; Workers lose injected context and memory queries; Chief History stays in Global; the Chief loses `dispatch`; Worker tools become `ask_manager` / `tell_manager`; Chief conversations leave Project Scopes; `/scope <project>` routes to the Manager; Goal conversations move to Global. This phase only tightens and removes.
+2. **Providers** ([D21](decisions.md#d21--model-providers-are-pluggable-magpie-is-one-provider-proposal)): `CredentialStore`, Settings → Providers, OAuth login, separate Chief and Manager models, Magpie as a preset entry.
+3. **Runtime abstraction and Intents** ([agent-work.md](agent-work.md#worker-runtimes-proposal)): multi-runtime `WorkerRuntime`, Intents and project default Intent, `dispatch` with `intent` or explicit choice (mutually exclusive), two-level concurrency. Pi is the only runtime in this phase.
+4. **First external runtime: Codex**: one-shot plus resume, event-stream progress, automatic restart resume with guards, sign-in check, environment allow-list and per-runtime opt-in (interim security floor). Codex comes first because it is open source (adapter behavior can be checked in its code) and its macOS sandbox is Seatbelt.
+5. **Unified Seatbelt sandbox** ([todo-worker-sandbox.md](todo-worker-sandbox.md)): one boundary for Pi and external Workers. Target state; it does not block phases 1–4.
+
 ---
 
 ## 10. Acceptance Scenarios

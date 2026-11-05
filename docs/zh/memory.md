@@ -36,6 +36,41 @@
 - 跨 scope 的只读结果带 `read-only` 头，标明所有者，避免模型把对方的 `#seq` 当成自己的去修订。
 - 自动提取（Memory Worker）与 Memory 面板仍按 scope 工作，不受角色限制：候选落在来源会话所在的 scope，用户在面板上的操作视为 user。
 
+### 会话边界（提案）
+
+Scope 与角色一一对应：Global Scope 里只有总管会话（包括所有 Goal 会话），Project Scope 里只有该项目的管理者会话与工兵会话。因此下面的每条边界只按 Scope 执行。
+
+日常对话只留在总管这边。日常对话指 Global scope 会话的内容、Global History 与 Global Notes。边界按通道划分，不按内容划分：系统无法可靠判断一句话属于"日常"还是"项目"，但可以强制规定管理者能读哪些通道。
+
+代码缺口：目前 Project Scope 里有总管会话（项目 Goal 会话、`/scope <项目>` 之后的渠道会话、项目下其他非管理者会话）。按此边界，Goal 会话移到 Global Scope，项目入口路由到管理者（[channels.md](channels.md#telegram)），已有的总管会话迁出 Project Scope。
+
+日常对话中的信息只能经两个通道到达管理者：
+
+1. **Global Core**：从 active Global Memory 中明确选入、有预算的子集，只读注入。管理者没有按需查询 Global 的能力（`recall` 只读本项目）。Core 之外的 Global 事实只能经 `ask_chief` 到达管理者；管理者经常需要的事实应选入 Global Core。
+2. **总管消息**：委派简报、`send_manager_msg`、对 `ask_chief` 的回答。这些由总管专门写给管理者，保存在 `manager_messages` 与管理者 transcript 中。
+
+管理者不能读：
+
+- Global scope 的 transcript 与 Global History。`search_history` / `read_history` 只限本项目。结果中可以出现 Global Memory 的来源引用（`conv:<id>#<entry>`），但管理者无法展开。
+- Global Notes。
+- Core 之外的 Global Memory，包括 Global 的 candidate、superseded 与 deleted 记忆。
+
+判断标准：一条信息既不在 Global Core 里，也不在发给管理者的消息里，管理者就不知道它。要把日常对话中的信息传过去，总管要么把它选入 Global Core（关于 Tian、对所有项目都成立），要么作为总管消息发送（关于这个项目）。
+
+代码缺口：管理者的 `recall` 接受 `scope=global`，加上 `include_history=true` 时还会去掉状态过滤，所以管理者目前能读到全部 Global Memory，包括 candidate、superseded 与 deleted 条目。按此边界，要去掉管理者 `recall` 的 `scope` 参数，并同步修改管理者 prompt 的 `MEMORY` 段。
+
+#### 总管
+
+规则是对称的：整理过的成品可以跨越边界，原始对话不能。总管只读项目的 active Memory 与 Notes。总管不读项目 History（管理者与工兵的 transcript、项目事件、Tian 与管理者的直接对话）。项目进展只经管理者的汇报（`report_chief`、委派 Task 的结果）与管理者的回答到达总管。
+
+代码缺口：总管的 `search_history` 接受项目 scope 或 `all`，`read_history` 可以展开任何引用（`tools-history.ts`）。按此边界，两者都限制在总管可读的 History 内。
+
+#### 工兵
+
+工兵没有记忆：没有跨 Run 的自有记忆，没有注入的上下文，也没有记忆查询。它的输入只有派发简报与 worktree（代码与 `AGENTS.md` 等仓库文档）。简报不够时，工兵向它的上级提问。工兵编码时需要的项目约定应放在仓库里，而不是只放在项目记忆里。
+
+代码缺口：工兵 prompt 注入 `<relevant_context>` 并指向项目 notes 目录，工兵还有 `recall` 与 `read_history`（`agents.ts`、`worker-tools.ts`）。按此边界，这些全部去掉。
+
 ## Core Memory
 
 Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的小集合：

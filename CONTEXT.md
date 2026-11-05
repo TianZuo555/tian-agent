@@ -7,21 +7,21 @@ An always-on personal agent: users manage goals; agents manage tasks. Conversati
 ## Participants
 
 **Chief**:
-The always-on primary conversational agent that interacts with the user; responsible for Global memory (facts about Tian and facts shared across projects), goal planning, work delegation, and status reporting. Project memory is queried read-only when needed. The Chief does not edit code directly.
+The always-on primary conversational agent that interacts with the user, always a Pi Durable conversation; responsible for Global memory (facts about Tian and facts shared across projects), goal planning, work delegation, and status reporting. Project Memory and Notes are queried read-only when needed; project History is not readable, and project progress arrives only through Manager reports. The Chief does not edit code directly.
 _Avoid_: steward, assistant, orchestrator
 
 **Worker**:
-A headless coding agent that executes a single Run inside an isolated Git worktree; reads shared memory but never writes memories.
+A headless coding agent that executes a single Run inside an isolated Git worktree. Only its project's Manager dispatches a Worker and supervises it. A Worker has no memory: it neither reads nor writes Memory, Notes, or History. Its only inputs are the dispatch briefing and the worktree. Its runtime is configurable: Pi Durable by default, or an external coding agent such as Codex or Cursor.
 _Avoid_: sub-agent, executor
 
 **Manager (Project Manager)**:
-Exactly one persistent Pi conversation per project, created when the project is registered, with a required name. The Chief delegates bounded project work to it as a discrete Task assigned to the Manager, which the Manager executes, concludes, and reports back on. Tian can also directly assign tasks inside the Manager conversation—such tasks belong directly to the Manager and conclude quietly without notifying the Chief. The Manager is the sole agent writer of its project's memories and Notes, manages project-scoped Tasks and Runs, and dispatches coding tasks to Workers. Global memory is read-only for the Manager; Goals remain owned by the Chief, and the Manager does not edit code directly.
+Exactly one persistent Pi conversation per project, created when the project is registered, with a required name. The Chief delegates bounded project work to it as a discrete Task assigned to the Manager, which the Manager executes, concludes, and reports back on. Tian can also directly assign tasks inside the Manager conversation—such tasks belong directly to the Manager and conclude quietly without notifying the Chief. The Manager is the sole agent writer of its project's memories and Notes, manages project-scoped Tasks and Runs, and dispatches coding tasks to Workers. Of Global memory, the Manager sees only Global Core Memory, read-only; it never reads Global conversations or their History. Goals remain owned by the Chief, and the Manager does not edit code directly.
 _Avoid_: sub-agent, coordinator
 
 ## Scopes
 
 **Scope**:
-The boundary of ownership for memories, Notes, Inbox messages, and conversations. Only two scope types exist: Global and Project. Global memories and Notes belong to the Chief; Project memories and Notes belong to that project's Manager.
+The boundary of ownership for memories, Notes, Inbox messages, and conversations. Only two scope types exist: Global and Project. Global memories and Notes belong to the Chief; Project memories and Notes belong to that project's Manager. Scope and role align: the Global Scope holds only Chief conversations, and a Project Scope holds only its Manager conversation and its Worker conversations.
 _Avoid_: workspace, context
 
 **Project**:
@@ -41,6 +41,10 @@ _Avoid_: todo, job, ticket
 **Run**:
 A single execution performed by a Worker for a coding task inside an isolated Git worktree; may contain multiple Attempts.
 _Avoid_: job, dispatch (dispatch is an action, not an object)
+
+**Intent**:
+A named kind of Worker work that the user defines in Settings, such as `review` or `simple`, mapped to a Worker runtime, a model, and a thinking level. When it dispatches a Run, the Manager picks either an Intent or an explicit runtime and model, never both; the Run keeps the resolved runtime and model.
+_Avoid_: profile, preset, tier
 
 **Attempt**:
 A single round of input and result within a Run; a follow-up generates a new Attempt, reusing the same Worker conversation and worktree.

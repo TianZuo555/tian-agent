@@ -406,6 +406,16 @@ MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行�
 - M4：Memory Worker（候选提取已实现，模型提取器待问题 6）、Dreaming、向量 + 全文混合检索。
 - M5：Experience Review、Skill（已实现）、多 Agent 协作。
 
+### M6 — 角色边界、Provider、工兵执行器【计划中】
+
+分五期，每期单独发布、单独验证。工作清单：[todo-agent-refactor.md](todo-agent-refactor.md)。
+
+1. **角色与记忆边界**（[memory.md](memory.md#会话边界提案)、[agent-work.md](agent-work.md#派发归属提案)）：管理者 `recall` 去掉 `scope=global`；工兵去掉注入上下文与记忆查询；总管 History 限于 Global；总管去掉 `dispatch`；工兵工具改名为 `ask_manager` / `tell_manager`；总管会话迁出 Project Scope；`/scope <项目>` 路由到管理者；Goal 会话移到 Global。本期只收紧与删除。
+2. **Provider**（D21）：`CredentialStore`、Settings → Providers、OAuth 登录、总管与管理者模型分开设置、Magpie 成为预置条目。
+3. **执行器抽象与 Intent**（[agent-work.md](agent-work.md#工兵执行器提案)）：多执行器的 `WorkerRuntime`、Intent 与项目默认 Intent、`dispatch` 支持 `intent` 或明确选择（互斥）、两层并发限制。本期只有 Pi 一种执行器。
+4. **第一个外部执行器：Codex**：一次性执行 + resume、事件流进度、带护栏的重启自动续接、登录检测、环境变量白名单与按执行器启用确认（过渡安全底线）。先接 Codex，因为它开源（适配行为可在源码中核实），且它在 macOS 上的沙箱就是 Seatbelt。
+5. **统一 Seatbelt 沙箱**（[todo-worker-sandbox.md](todo-worker-sandbox.md)）：Pi 与外部工兵共用一套边界。这是目标状态，不阻塞第 1–4 期。
+
 MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
 
 ---

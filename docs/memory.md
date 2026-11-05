@@ -36,6 +36,41 @@ The legacy `memory_nodes` summary tree was renamed to `memory_nodes_retired` dur
 - Cross-scope read-only results include a header indicating the owner. This prevents agents from confusing external sequence numbers with their own.
 - Candidate extraction (Memory Worker) and the UI Memory panel operate by scope without role restrictions. Candidates attach to the origin scope, and UI actions register as user operations.
 
+### Conversation Boundary (Proposal)
+
+Scope and role align: the Global Scope holds only Chief conversations (including every Goal conversation), and a Project Scope holds only its Manager conversation and its Worker conversations. So every boundary below is enforced by Scope alone.
+
+Daily conversation stays with the Chief. Daily conversation is the content of Global-scope conversations, Global History, and Global Notes. The boundary is set by channel, not by content: the system cannot reliably tell a "daily" sentence from a "project" sentence, but it can enforce which channels a Manager reads.
+
+Code gap: Chief conversations exist in Project Scopes today (project Goal conversations, channel conversations after `/scope <project>`, and other non-Manager conversations under a project). The boundary moves Goal conversations to the Global Scope, routes project entry points to the Manager ([channels.md](channels.md#telegram)), and migrates existing Chief conversations out of Project Scopes.
+
+Information from daily conversation reaches a Manager through two channels only:
+
+1. **Global Core**: the explicitly selected, budgeted subset of active Global Memory, injected read-only. The Manager has no on-demand Global query (`recall` reads its own project only). A Global fact outside Core reaches the Manager only through `ask_chief`; a fact the Manager needs often belongs in Global Core.
+2. **Chief messages**: delegation briefings, `send_manager_msg`, and answers to `ask_chief`. The Chief writes these for the Manager; they persist in `manager_messages` and the Manager transcript.
+
+A Manager does not read:
+
+- Global-scope transcripts or Global History. `search_history` / `read_history` stay inside its project. A Global Memory source ref (`conv:<id>#<entry>`) may appear in results, but the Manager cannot expand it.
+- Global Notes.
+- Global Memory outside Core, including Global candidates, superseded memories, and deleted memories.
+
+Test: if a fact is not in Global Core and not in a message addressed to the Manager, the Manager does not know it. To pass something from daily conversation, the Chief selects it into Global Core (about Tian, valid for all projects) or sends it as a Chief message (about this project).
+
+Code gap: the Manager `recall` accepts `scope=global`, and with `include_history=true` it drops the status filter, so a Manager can currently read all Global Memory, including candidates, superseded, and deleted rows. The boundary removes the `scope` parameter from the Manager `recall` and updates the Manager prompt (`MEMORY` section) to match.
+
+#### Chief
+
+The rule is symmetric: curated artifacts cross the boundary, raw conversation does not. The Chief reads a project's active Memory and Notes read-only. The Chief does not read project History (Manager and Worker transcripts, project events, and Tian's direct conversation with the Manager). Project progress reaches the Chief only through Manager reports (`report_chief`, delegated Task outcomes) and Manager answers.
+
+Code gap: the Chief `search_history` accepts a project scope or `all`, and `read_history` expands any ref (`tools-history.ts`). The boundary limits both to Chief-readable History.
+
+#### Worker
+
+A Worker has no memory. It has no memory of its own across Runs, receives no injected context, and has no memory queries. Its only inputs are the dispatch briefing and the worktree (code and repository docs such as `AGENTS.md`). When the briefing is not sufficient, the Worker asks its supervisor. Project conventions that a Worker needs while it codes belong in the repository, not only in project memory.
+
+Code gap: the Worker prompt injects `<relevant_context>` and points to the project notes directory, and the Worker has `recall` and `read_history` (`agents.ts`, `worker-tools.ts`). The boundary removes all of these.
+
 ## Core Memory
 
 Core Memory is an explicitly selected subset of active facts rather than a truncated summary:

@@ -7,21 +7,21 @@
 ## 参与者
 
 **Chief（总管）**:
-长期在线、与用户对话的主 Agent；负责 Global 记忆（关于 Tian 与跨项目的事实）、规划目标、派发工作和汇报，自己不改代码。项目记忆只按需只读查询，不写入。
+长期在线、与用户对话的主 Agent，始终是 Pi Durable 会话；负责 Global 记忆（关于 Tian 与跨项目的事实）、规划目标、派发工作和汇报，自己不改代码。项目的 Memory 与 Notes 只按需只读查询，不写入；项目 History 不可读，项目进展只经 Manager 汇报到达。
 _Avoid_: steward, assistant, orchestrator
 
 **Worker（工兵）**:
-在隔离 worktree 中无人值守执行一次 Run 的编码 Agent；只读共享记忆，不写记忆。
+在隔离 worktree 中无人值守执行一次 Run 的编码 Agent。只有本项目的 Manager 能派发并监督 Worker。Worker 没有记忆：不读也不写 Memory、Notes 与 History。它的输入只有派发简报与 worktree。执行器可配置：默认 Pi Durable，也可以是 Codex、Cursor 等外部编码 Agent。
 _Avoid_: sub-agent, executor
 
 **Manager（项目管理者）**:
-每个项目恰好一个、随项目创建的长期 Pi 会话，名字必填；Chief 把有边界的项目工作委派给它——每次委派是一条 assignee 为 Manager 的 Task，由它执行、收口并回报。Tian 也可以直接在 Manager 会话里派活——这类 Task 属于 Manager 自己，静默收口、不通知 Chief。Manager 是本项目记忆与 Notes 的唯一 Agent 写入者，管理本项目的 Task 与 Run，可再分发编码工作给 Worker；Global 记忆对它只读，Goal 仍归 Chief，自己不改代码。
+每个项目恰好一个、随项目创建的长期 Pi 会话，名字必填；Chief 把有边界的项目工作委派给它——每次委派是一条 assignee 为 Manager 的 Task，由它执行、收口并回报。Tian 也可以直接在 Manager 会话里派活——这类 Task 属于 Manager 自己，静默收口、不通知 Chief。Manager 是本项目记忆与 Notes 的唯一 Agent 写入者，管理本项目的 Task 与 Run，可再分发编码工作给 Worker；Global 记忆中它只能看到 Global Core，且只读；它不读 Global 会话及其 History。Goal 仍归 Chief，自己不改代码。
 _Avoid_: sub-agent, coordinator
 
 ## 范围
 
 **Scope**:
-记忆、Notes、Inbox 与会话的归属边界，只有 Global 与 Project 两种。Global 的记忆与 Notes 归 Chief，Project 的归该项目 Manager。
+记忆、Notes、Inbox 与会话的归属边界，只有 Global 与 Project 两种。Global 的记忆与 Notes 归 Chief，Project 的归该项目 Manager。Scope 与角色一一对应：Global Scope 里只有 Chief 会话，Project Scope 里只有该项目的 Manager 会话与 Worker 会话。
 _Avoid_: workspace, context
 
 **Project**:
@@ -41,6 +41,10 @@ _Avoid_: todo, job, ticket
 **Run**:
 Worker 为一个代码类 Task 在隔离 worktree 中进行的一次执行，可包含多轮 Attempt。
 _Avoid_: job, dispatch（dispatch 是动作，不是对象）
+
+**Intent**:
+用户在 Settings 中定义的一类工兵工作，例如 `review` 或 `simple`，映射到一个工兵执行器、一个模型与一个思考等级。管理者派发 Run 时选择一个 Intent 或明确的执行器与模型，二者互斥；Run 保存解析后的执行器与模型。
+_Avoid_: profile, preset, tier
 
 **Attempt**:
 Run 内的一轮输入与结果；follow-up 产生新的 Attempt，复用同一 Worker 会话与 worktree。

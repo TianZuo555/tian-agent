@@ -20,7 +20,7 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 ```
 
 - 只有白名单中的 chat 可以触发对话，其余更新只记录 chat ID 并忽略。
-- 每个 chat 维护一个当前 scope（默认 `global`）：`/scope` 查看，`/scope 项目名` 切换；切换后消息进入该 scope 的独立 conversation，选择持久化。`/status` 显示当前 scope 的待办任务与运行中的 Run；`/help` 列出命令，未知命令同样返回帮助。
+- 每个 chat 维护一个当前 scope（默认 `global`）：`/scope` 查看，`/scope 项目名` 切换；切换后消息进入该 scope 的独立 conversation，选择持久化。提案：`/scope 项目名` 路由到该项目的管理者会话，管理者的回复转发回 chat；`global` 仍是总管（[memory.md](memory.md#会话边界提案)）。微信同样适用。`/status` 显示当前 scope 的待办任务与运行中的 Run；`/help` 列出命令，未知命令同样返回帮助。
 - 收到的消息以 `tg:<chatId>:<message_id>` 为稳定 `requestId` 提交，重复投递不会重复提交；`getUpdates` offset 持久化，重启不重放已处理的更新。
 - 所在会话的总管回复（直接回复与主动汇报）以纯文本发回 chat：按行边界拆分为不超过 4096 字符的消息；转发游标持久化，重启不重发也不漏发；流式片段、工具调用与思考内容不转发。
 - 审批等受控操作尚未接入 Telegram，命令入口与推送通道为后续接入预留。

@@ -52,6 +52,8 @@ The desktop UI adopts a three-pane layout: left pane for scopes and conversation
 
 ## D2 · Route Models Through Local Magpie Gateway
 
+> Proposal: to be superseded by [D21](#d21--model-providers-are-pluggable-magpie-is-one-provider-proposal).
+
 All model traffic routes through the local Magpie gateway (default `http://127.0.0.1:3425/v1`), which forwards requests upstream. The desktop application does not connect directly to external provider APIs or parse keys from `~/.pi/agent/auth.json`.
 
 **Context**: Early versions branched by provider and read keys from environment variables. Upstream endpoints reside behind Magpie, and the gateway alone manages model capabilities, reasoning levels, context windows, and modalities.
@@ -374,3 +376,28 @@ The resident service is a composition root. It does not own delivery loops or ma
 - These are implementation parts. They add no Service, Task, Run, or Manager concept.
 
 **Consequences**: Delivery and handoff rules have direct tests and single owners. The service class loses about 170 lines. Behavior stays the same: the queue is durable, failed deliveries retry on the next request or interval, and manager operations stay idempotent. Trade-off: new flows must queue through `service.outbox` and wake managers through `ManagerLink`, not through ad-hoc delivery code.
+
+---
+
+## D21 · Model Providers Are Pluggable; Magpie Is One Provider (Proposal)
+
+Status: Proposal. Supersedes [D2](#d2--route-models-through-local-magpie-gateway) when accepted.
+
+Magpie stops being the only route for model traffic. It becomes one provider among several, and the user chooses the providers for Tian's own agents (Chief, Manager, Pi Worker). External Worker runtimes (Codex, Cursor, and others) manage their own models, credentials, and billing.
+
+**Context**: D2 routed all model traffic through the local Magpie gateway. Two changes break that rule: external coding agents run on their own backends (Cursor CLI cannot point at a custom endpoint), and the user wants to choose providers other than Magpie.
+
+**Decision**:
+
+- Tian's own agents run on Pi and use providers that the user selects. Magpie is one of them.
+- An external Worker runtime receives an opaque model string and uses its own authentication. Tian does not validate it against a provider catalog; [D13](#d13--run-level-worker-models-and-thinking-levels) validation applies to Pi Workers only. Token usage is recorded when the runtime's event stream reports it.
+- Tian owns provider configuration. A Settings → Providers page manages it. Non-secret fields (provider type, base URL, enabled models) live in `settings.json`; secrets live in a 0600 file in the data directory, written only by the service, like `service.env`. At startup the service registers each configured provider with Pi. Tian does not read Pi CLI state (`~/.pi/agent/auth.json`), so changes in the Pi CLI do not affect the service. The UI never echoes a secret (last characters only).
+- Magpie becomes a preset provider entry. `MAGPIE_*` environment variables stay as a compatibility input for one release.
+- The Chief and every Manager always run as Pi Durable conversations; only Workers have a configurable runtime. They depend on custom tools, durable replay, Core Memory injection, and one long-lived conversation, which external CLIs do not provide.
+- Settings holds a Chief model and a default Manager model; each project may override its Manager's model. Intents apply to Workers only. A model change applies from the next turn of the existing conversation (no new conversation) and invalidates the prompt prefix cache once.
+- Tian implements pi-ai's `CredentialStore` (`read` / `list` / `modify` / `delete`) on top of its 0600 secret file. API keys and OAuth tokens share this store; pi-ai refreshes OAuth tokens inside `modify` under a lock.
+- OAuth subscriptions (Anthropic Claude Pro/Max, OpenAI Sign in with ChatGPT, GitHub Copilot, OpenRouter) log in through `models.login(provider, 'oauth', { prompt, notify })`. The Settings → Providers page shows the `auth_url` / `device_code` events and answers the prompts.
+- Built-in providers ship their catalogs with pi-ai. Only dynamic catalogs (Magpie and other gateways) need discovery at startup and an offline cache, as D2 does for Magpie today.
+- External CLI credentials: the CLI's own sign-in state comes first (for example `codex login`); enabling a runtime in Settings runs an installed-and-signed-in check, and only a passing runtime can be enabled. A runtime that needs an API key gets it in Settings; the key is stored per runtime in the 0600 secret file and passed only to that runtime's process through the environment allow-list. `service:env` is not extended: runtime credentials never enter the service's global environment. An adapter reports an expired sign-in as "sign-in required" in the UI, not as a generic failure.
+
+**Consequences**: Tian depends on pi-ai for provider auth and catalogs instead of one gateway. The service holds more secrets (provider keys, OAuth tokens, runtime keys) in one 0600 file, so the file and the environment allow-list become security-critical. Usage and cost tracking is per provider and is missing for external runtimes that do not report usage.

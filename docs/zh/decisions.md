@@ -54,6 +54,8 @@
 
 ## D2 · 模型统一走本地 Magpie 网关
 
+> 提案：将被 [D21](#d21--模型-provider-可插拔magpie-只是其中一个提案) 取代。
+
 所有模型请求都打到本机 Magpie（默认 `http://127.0.0.1:3425/v1`），由它路由到各上游。App 不直连 Anthropic / OpenAI / DeepSeek 官方 API，也不从 `~/.pi/agent/auth.json` 导入 key。
 
 **背景**：项目原先按 provider 分支，key 从环境变量或 pi 的 auth 文件读。实际上游都在 Magpie 后面，且模型清单（含 reasoning level、context window、模态）只有网关知道；维护三套 provider 定义和 key 来源是纯负担。
@@ -401,3 +403,28 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - 两者是实现部件，不新增 Service、Task、Run 或 Manager 概念。
 
 **后果**：投递与交接规则有直接测试与单一所有者；Service 类减少约 170 行。行为不变：队列仍然持久，失败投递在下次请求或定时轮次重试，管理者操作仍然幂等。代价：新流程必须通过 `service.outbox` 入队、通过 `ManagerLink` 唤醒管理者，不能再写临时的投递代码。
+
+---
+
+## D21 · 模型 Provider 可插拔；Magpie 只是其中一个（提案）
+
+状态：提案。通过后取代 [D2](#d2--模型统一走本地-magpie-网关)。
+
+Magpie 不再是模型流量的唯一通道。它成为多个 provider 之一，用户为 Tian 自己的 Agent（总管、管理者、Pi 工兵）选择 provider。外部工兵执行器（Codex、Cursor 等）自己管理模型、凭据与计费。
+
+**背景**：D2 让所有模型流量经过本地 Magpie 网关。两个变化打破了这条规则：外部编码 Agent 运行在自己的后端上（Cursor CLI 不能指向自定义端点）；用户希望选择 Magpie 以外的 provider。
+
+**决定**：
+
+- Tian 自己的 Agent 运行在 Pi 上，使用用户选择的 provider。Magpie 是其中之一。
+- 外部工兵执行器接收不透明的模型字符串，使用它自己的认证。Tian 不按 provider 目录校验它；D13 的校验只对 Pi 工兵生效。执行器事件流报告 token 用量时才记录。
+- provider 配置归 Tian 管理，由 Settings → Providers 页面维护。非敏感字段（provider 类型、base URL、启用的模型）存于 `settings.json`；密钥存于数据目录中的 0600 文件，只由服务写入，与 `service.env` 相同。服务启动时把每个已配置的 provider 注册到 Pi。Tian 不读取 Pi CLI 的状态（`~/.pi/agent/auth.json`），Pi CLI 中的变更不影响服务。UI 不回显密钥（只显示末尾几位）。
+- Magpie 成为预置的 provider 条目。`MAGPIE_*` 环境变量作为兼容入口保留一个版本。
+- 总管与每个管理者始终是 Pi Durable 会话；只有工兵的执行器可配置。它们依赖自定义工具、durable replay、Core Memory 注入与单一长期会话，外部 CLI 都不提供。
+- Settings 中设置总管模型与管理者默认模型；每个项目可覆盖自己管理者的模型。Intent 只用于工兵。切换模型从现有会话的下一轮开始生效（不新建会话），并使 prompt 前缀缓存失效一次。
+- Tian 在 0600 密钥文件之上实现 pi-ai 的 `CredentialStore`（`read` / `list` / `modify` / `delete`）。API key 与 OAuth token 共用这个存储；pi-ai 在 `modify` 内加锁刷新 OAuth token。
+- OAuth 类订阅（Anthropic Claude Pro/Max、OpenAI Sign in with ChatGPT、GitHub Copilot、OpenRouter）经 `models.login(provider, 'oauth', { prompt, notify })` 登录。Settings → Providers 页面展示 `auth_url` / `device_code` 事件并回答 prompt。
+- 内置 provider 的模型目录随 pi-ai 发布。只有动态目录（Magpie 等网关）需要启动时发现与离线缓存，与 D2 目前对 Magpie 的做法相同。
+- 外部 CLI 凭据：优先使用 CLI 自己的登录态（例如 `codex login`）；在 Settings 中启用执行器时先检测“已安装、已登录”，通过后才能启用。需要 API key 的执行器在 Settings 中单独填写；key 按执行器存于 0600 密钥文件，只经环境变量白名单传给该执行器的进程。不扩展 `service:env`：执行器凭据从不进入服务的全局环境。登录态过期时，适配器在 UI 中报告“需要重新登录”，而不是笼统的失败。
+
+**后果**：Tian 依赖 pi-ai 提供 provider 认证与模型目录，而不是依赖单一网关。服务在一个 0600 文件中持有更多密钥（provider key、OAuth token、执行器 key），因此该文件与环境变量白名单成为安全关键点。用量与成本按 provider 统计；不报告用量的外部执行器没有这项数据。
