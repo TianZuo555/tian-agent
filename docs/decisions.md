@@ -4,7 +4,7 @@
 
 This document records architectural decisions that are **difficult to reverse and critical to understand**: why this architecture was chosen and what trade-offs were made. Implementation details and operational guides appear in [architecture.md](architecture.md), [memory.md](memory.md), [data.md](data.md), [agent-work.md](agent-work.md), [channels.md](channels.md), [service.md](service.md), and [improvement-log.md](improvement-log.md).
 
-Each decision forms a section numbered D1 through D19, organized by domain. Current metadata: `DATABASE_VERSION = 8`, `SERVICE_PROTOCOL = 10`. Every schema or protocol change is governed by upgrade transactions (see [service.md](service.md#service-upgrades)).
+Each decision forms a numbered section below. Current metadata: `DATABASE_VERSION = 8`, `SERVICE_PROTOCOL = 10`. Every schema or protocol change is governed by upgrade transactions (see [service.md](service.md#service-upgrades)).
 
 The earlier `docs/adr/` directory has been consolidated into this document:
 
@@ -29,6 +29,8 @@ The earlier `docs/adr/` directory has been consolidated into this document:
 | —          | D17 WeChat integration via official iLink protocol                     |
 | —          | D18 Memory ownership by role: Chief owns Global, Managers own projects |
 | —          | D19 Memory evidence, confirmation, and similarity                      |
+| —          | D20 Notification delivery and Manager handoffs                         |
+| —          | D21 Native Shell desktop client and unchanged resident service         |
 
 ---
 
@@ -69,6 +71,9 @@ All model traffic routes through the local Magpie gateway (default `http://127.0
 ---
 
 ## D3 · Retain TypeScript Resident Service and Electron Client
+
+> The desktop client choice is superseded by [D21](#d21--replace-the-desktop-client-with-native-shell-keep-the-resident-service).
+> The TypeScript service ownership decision remains in effect.
 
 The project continues with its Node resident service (launchd) and Electron/React desktop client instead of migrating to a Rust host and GPUI desktop.
 
@@ -374,3 +379,21 @@ The resident service is a composition root. It does not own delivery loops or ma
 - These are implementation parts. They add no Service, Task, Run, or Manager concept.
 
 **Consequences**: Delivery and handoff rules have direct tests and single owners. The service class loses about 170 lines. Behavior stays the same: the queue is durable, failed deliveries retry on the next request or interval, and manager operations stay idempotent. Trade-off: new flows must queue through `service.outbox` and wake managers through `ManagerLink`, not through ad-hoc delivery code.
+
+---
+
+## D21 · Replace the Desktop Client with Native Shell; Keep the Resident Service
+
+The desktop client will use Native Shell (NSH): a Rust host module and TSX screens on the macOS AppKit backend. The TypeScript resident service remains the sole owner of Pi sessions, tools, scheduling, Inbox, Runs, and application databases. This supersedes only D3's Electron client choice. The migration plan and verification gates are in [nsh-migration.md](nsh-migration.md).
+
+**Context**: The user selected native desktop rendering. The service already exposes application commands and chat snapshots over a private Unix socket. Rewriting its Pi SDK harness and SQLite storage would add migration risk without being required for the UI change. NSH screens run in QuickJS and cannot import the Node ServiceClient; source inspection shows TCP-only `net`, URL-only WebSocket, and no Unix connection API in `fs/promises`.
+
+**Decision**:
+
+- Keep the existing Unix socket protocol and shared application types. Changes to contracts must be additive; a breaking change requires a separate user decision.
+- Use a small native Rust module, registered with NSH macros, for Unix socket IO, bounded JSON framing, request correlation, connection cleanup, and reconnect. TSX owns navigation and subscriptions through typed adapters. No local TCP proxy or second database writer is introduced.
+- Use `nsh/base` TextView for Markdown and streaming prose. Reuse the existing English/Chinese dictionaries and application-owned `ChatSnapshot` rather than coupling the client to Pi transcripts.
+- Port views in stages. Keep Electron working until native parity is verified. Remove Electron only in a dedicated phase after user confirmation.
+- Preserve the service maintenance, backup, health-check and rollback model for later packaging work. NSH signed screen packages do not replace macOS app signing or coordinated application/service upgrades.
+
+**Consequences**: Native UI work can proceed independently from the service. The Rust bridge and app-specific runner add compilation and protocol-test costs. DOM-based rendering, input, accessibility, and desktop lifecycle behavior require native parity checks. Production app identity, signing and distribution remain unresolved until the packaging phase; development uses isolated data and application identity.
