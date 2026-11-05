@@ -7,13 +7,15 @@ import {
 } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { join } from 'node:path';
 import type { Db, RunRow } from './db.js';
-import { MAGPIE_PROVIDER } from './magpie.js';
 import type { Settings } from './settings.js';
+import type { SettingsInfo } from '../shared/types.js';
+import { parseModelRef } from './providers.js';
 import type { SkillRegistry } from './skills.js';
 import type { WorkerConversation, WorkerRuntime } from './runs.js';
 import type { RunToolCall } from './run-progress.js';
@@ -57,6 +59,11 @@ export class AgentRuntime implements WorkerRuntime {
     private db: Db,
     /** Renders approved skills into worker instructions; absent = none. */
     private skills?: SkillRegistry,
+    /**
+     * Seatbelt (todo-worker-sandbox.md): wraps a worker conversation's env.
+     * Called only for conversations that map to a Run; absent = no sandbox.
+     */
+    private sandbox?: (run: RunRow, inner: ExecutionEnv) => ExecutionEnv,
   ) {}
 
   /**
@@ -90,7 +97,13 @@ export class AgentRuntime implements WorkerRuntime {
         models: this.models,
         registry,
         settings: { extensions: [chief], toolExecution: 'sequential' },
-        env: ({ cwd }) => agentEnv(cwd ?? this.globalDir),
+        // Worker conversations (they map to a Run) may be sandboxed; chief
+        // and manager conversations always get the plain env.
+        env: (target) => {
+          const inner = agentEnv(target.cwd ?? this.globalDir);
+          const run = this.db.runByConversation(String(target.conversationId));
+          return run && this.sandbox ? this.sandbox(run, inner) : inner;
+        },
       },
       BACKGROUND_CONTEXT,
     );
@@ -148,13 +161,16 @@ export class AgentRuntime implements WorkerRuntime {
     );
   }
   /** The persistent project manager conversation for one project. */
-  async createManager(cwd: string): Promise<Conversation> {
+  async createManager(
+    cwd: string,
+    model: SettingsInfo['model'],
+  ): Promise<Conversation> {
     if (!this.manager) throw new Error('Manager extension is not installed');
     return this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
         agent: {
-          model: this.settings.get().model,
+          model,
           cwd,
           extensions: [this.manager],
         },
@@ -169,18 +185,23 @@ export class AgentRuntime implements WorkerRuntime {
         ownership: { kind: 'ownerless' },
         agent: {
           // A run may pin its worker's model and thinking level at dispatch
-          // (D13); unpinned runs follow the app-wide model.
+          // (D13); a pin stores 'provider:model' or a bare id resolved against
+          // the default provider, and unpinned runs follow the app-wide model.
           model: run.model
-            ? { provider: MAGPIE_PROVIDER, modelId: run.model }
+            ? parseModelRef(
+                run.model,
+                this.settings.providerIds(),
+                this.settings.get().model.provider,
+              )
             : this.settings.get().model,
           thinkingLevel:
             (run.thinkingLevel as ModelThinkingLevel | null) ?? undefined,
           cwd: run.worktreePath ?? run.rootPath,
           extensions: [CodingTools, this.worker],
           instructions: [
-            'You are a worker coding agent. Complete the task unattended and make reasonable decisions yourself. Only when a decision genuinely needs the chief (destructive or irreversible action, missing credentials, fundamental ambiguity) ask once with ask_chief and wait for its reply; use tell_chief for short progress notes, never for chatter.',
-            'Edit only files inside the current working directory. Do not run git commit, merge, push, or change branches; the application manages Git.',
-            `Task-related project memory, notes and history are provided in <relevant_context> under a token budget. Use recall for further read-only queries and read_history to expand a source. Longer notes are in ${join(run.rootPath, 'notes')}. Never modify the memory export, notes, or the project main checkout. Do not load the full memory export into context.`,
+            'You are a worker coding agent supervised by a project manager. Complete the task unattended and make reasonable decisions yourself. Only when a decision genuinely needs the manager (destructive or irreversible action, missing credentials, fundamental ambiguity) ask once with ask_manager and wait for its reply; use tell_manager for short progress notes, never for chatter.',
+            "Writes outside the working directory fail with 'Operation not permitted' by design. Do not retry with sudo or another path. Ask the chief if the task needs that path. Toolchains that sandbox themselves (SwiftPM, xcodebuild) cannot nest inside yours: run them with their own sandbox off, e.g. `swift build --disable-sandbox`.",
+            'Edit only files inside the current working directory. Do not run git commit, merge, push, or change branches; the application manages Git. Do not touch the project main checkout or anything outside this directory.',
             'Write a report of at most one page to TIAN_REPORT.md in the working directory: changes, validation, key decisions, and limitations.',
             project?.promptPreamble ?? '',
             this.skills?.promptBlock(run) ?? '',

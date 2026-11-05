@@ -5,13 +5,12 @@ import {
 } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import { relevantMemorySection } from './relevant-context.js';
-import { GLOBAL_SCOPE } from './scopes.js';
 import type { AgentMessageRow, RunRow, TaskRow } from './db.js';
+import type { WorkerIntent } from '../shared/types.js';
 import type { GoalStore } from './goals.js';
 import {
   coreMemorySection,
   memoryTools,
-  resolveScope,
   toolErr as err,
   toolText as text,
   type MemoryToolDeps,
@@ -36,11 +35,15 @@ export interface ManagerDeps extends MemoryToolDeps {
     chiefConversationId: string | null;
     taskId?: number;
     operationId: string;
+    intent?: string;
+    runtime?: string;
     model?: string;
     thinkingLevel?: string;
   }) => Promise<RunRow>;
   /** Model ids and thinking levels dispatch may pin for a worker. */
   workerModels: () => WorkerModelChoice[];
+  /** Named worker configurations dispatch may pick with `intent` (M6). */
+  workerIntents: () => WorkerIntent[];
   runReport: (id: string) => string;
   runDiff: (id: string) => Promise<string>;
   /** Live progress snapshot of one of this project's runs. */
@@ -106,9 +109,9 @@ DELEGATED TASKS. A wake starting '[delegated task #N from chief]' assigns task #
 
 REPORTING UP. The chief cannot see your work unless you say so. report_chief(text, task?) posts a status or decision — finished milestones, choices you took, blockers worth escalating. ask_chief(question, task?) blocks until the chief answers — only for decisions you genuinely cannot make (cross-project tradeoffs, missing credentials, an ambiguous delegation). Chief messages that are not answers wake you directly.
 
-MEMORY. You own this project's memory — the chief does not see it unless it looks it up, so everything detailed about the project lives with you: conventions, architecture, decisions, environment, outcomes, lessons. Both Cores are injected below: General (about Tian, kept by the chief) is read-only for you; remember/revise/forget/select/deselect always act on this project's memory. When the chief passes on a project fact, record it. A fact about Tian himself that is not about this project is the chief's: do not store it here and do not write it anywhere — Tian tells the chief directly.
+MEMORY. You own this project's memory — the chief does not see it unless it looks it up, so everything detailed about the project lives with you: conventions, architecture, decisions, environment, outcomes, lessons. Both Cores are injected below: General (about Tian, kept by the chief) is read-only for you, and it is the only part of General memory you can see — recall searches this project's memory only. remember/revise/forget/select/deselect always act on this project's memory. When the chief passes on a project fact, record it. A fact about Tian himself that is not about this project is the chief's: do not store it here and do not write it anywhere — Tian tells the chief directly.
 
-RUNS. dispatch gets a full briefing (the worker sees nothing else); dispatch(prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state>. send_run_msg answers a waiting worker or steers a run; list_runs, run_progress, read_run_report, read_run_diff and list_run_msgs follow progress. run_progress shows a live run's elapsed time, deadline, last words and recent tool calls — check it before dispatching a duplicate when a run goes quiet. stop_run(id, reason) ends an attempt going the wrong way and keeps its worktree for review or a follow-up; discarding stays Tian's call. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
+RUNS. dispatch gets a full briefing (the worker sees nothing else). Pick the worker one of two mutually exclusive ways: dispatch(prompt, task, intent) uses a named intent from the worker intents line in <state>, or dispatch(prompt, task, runtime, model, thinking_level) pins runtime, model and effort explicitly — model ids come from the worker models line. With neither, the project default intent applies. send_run_msg answers a waiting worker or steers a run; list_runs, run_progress, read_run_report, read_run_diff and list_run_msgs follow progress. run_progress shows a live run's elapsed time, deadline, last words and recent tool calls — check it before dispatching a duplicate when a run goes quiet. stop_run(id, reason) ends an attempt going the wrong way and keeps its worktree for review or a follow-up; discarding stays Tian's call. A finished run wakes you — judge the result, close its task, and report_chief what matters. Worker changes live on the run's branch until Tian lands them.
 
 HISTORY & NOTES. search_history reads this project's past sessions, tool calls and events; read_history expands a ref. Notes are this project's long documents — keep plans and standing context there.`;
     },
@@ -155,7 +158,23 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     }
     const models = workerModelLine(deps.workerModels());
     if (models) lines.push(models);
+    const intents = deps.workerIntents();
+    if (intents.length > 0)
+      lines.push(
+        `worker intents: ${intents
+          .map(
+            (intent) =>
+              `${intent.name} → ${intent.runtime}${
+                intent.model ? `/${intent.model}` : ''
+              }${
+                intent.thinkingLevel ? ` think:${intent.thinkingLevel}` : ''
+              }${intent.purpose ? ` — ${intent.purpose}` : ''}`,
+          )
+          .join('; ')}`,
+      );
     const project = db.getProject(scope);
+    if (project?.defaultIntent)
+      lines.push(`project default intent: ${project.defaultIntent}`);
     const header = [
       `project: ${project ? `${project.name} (${project.rootPath})` : scope}`,
       `now: ${new Date().toISOString().slice(0, 16)}`,
@@ -223,7 +242,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
   const recall = defineTool({
     name: 'recall',
     description:
-      "Keyword search over this project's or the global memory (Chinese included; every word must appear, words under 3 characters fall back to substring matching). Active memories by default; each hit shows #seq, kind, trust, date and source.",
+      "Keyword search over this project's memory (Chinese included; every word must appear, words under 3 characters fall back to substring matching). Active memories by default; each hit shows #seq, kind, trust, date and source. General memory beyond the injected Core is not readable.",
     parameters: Type.Object({
       query: Type.String({
         description:
@@ -238,37 +257,14 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
       limit: Type.Optional(
         Type.Integer({ minimum: 1, maximum: 100, description: 'Default 20.' }),
       ),
-      scope: Type.Optional(
-        Type.String({
-          description:
-            '"global" or this project (default). Other projects are not readable.',
-        }),
-      ),
     }),
     execute: async (args, api) => {
       try {
-        const conversationId = String(api.conversationId);
-        const ownScope = own(conversationId);
-        let scope = ownScope;
-        if (args.scope === GLOBAL_SCOPE) scope = GLOBAL_SCOPE;
-        else if (args.scope) {
-          if (resolveScope(deps, conversationId, args.scope) !== ownScope)
-            throw new Error(
-              "a project manager reads only this project's and global memory",
-            );
-        }
-        // General #seq numbers are not this project's: say so, so revise /
-        // forget are never aimed at them.
-        const header =
-          scope === GLOBAL_SCOPE
-            ? "[General — read-only, kept by the chief; these #seq are not this project's.]\n"
-            : '';
         return text(
-          header +
-            scopes.memory(scope).recall(args.query, {
-              includeHistory: args.include_history ?? false,
-              limit: args.limit,
-            }),
+          scopes.memory(own(String(api.conversationId))).recall(args.query, {
+            includeHistory: args.include_history ?? false,
+            limit: args.limit,
+          }),
         );
       } catch (e) {
         return err(String(e));
@@ -381,6 +377,18 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
             'Task id this run advances (from list_tasks). The run is recorded on the task.',
         }),
       ),
+      intent: Type.Optional(
+        Type.String({
+          description:
+            'Named worker configuration from the worker intents line in <state>. Mutually exclusive with runtime/model/thinking_level.',
+        }),
+      ),
+      runtime: Type.Optional(
+        Type.String({
+          description:
+            "Worker runtime id (e.g. 'pi') for an explicit choice. Requires model; mutually exclusive with intent.",
+        }),
+      ),
       model: Type.Optional(
         Type.String({
           description:
@@ -396,6 +404,10 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     }),
     execute: async (args, api) => {
       const scope = own(String(api.conversationId));
+      if (args.intent && (args.runtime || args.model || args.thinking_level))
+        return err(
+          'dispatch failed: intent is mutually exclusive with runtime/model/thinking_level — pass one or the other',
+        );
       try {
         const run = await deps.dispatch({
           projectRef: scope,
@@ -403,11 +415,13 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
           chiefConversationId: String(api.conversationId),
           taskId: args.task,
           operationId: `dispatch:${api.taskId}:${api.callId}`,
+          intent: args.intent,
+          runtime: args.runtime,
           model: args.model,
           thinkingLevel: args.thinking_level,
         });
         return text(
-          `dispatched run ${run.id} on ${run.agentKind}${
+          `dispatched run ${run.id} on ${run.runtime}${
             run.model
               ? ` [model ${run.model}${run.thinkingLevel ? ` think:${run.thinkingLevel}` : ''}]`
               : ''
@@ -432,7 +446,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
           .slice(0, 30)
           .map(
             (r) =>
-              `${r.id} [${r.status}] ${r.agentKind} in ${r.projectId}${r.finishedAt ? ` finished:${r.finishedAt}` : ''}\n  ${r.prompt.split('\n')[0].slice(0, 100)}`,
+              `${r.id} [${r.status}] ${r.runtime} in ${r.projectId}${r.finishedAt ? ` finished:${r.finishedAt}` : ''}\n  ${r.prompt.split('\n')[0].slice(0, 100)}`,
           )
           .join('\n'),
       );
@@ -514,7 +528,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     name: 'send_run_msg',
     replay: 'safe',
     description:
-      'Reply to a run worker waiting on ask_chief, or send it mid-run guidance. A waiting worker receives it immediately; otherwise it reads it on its next check.',
+      'Reply to a run worker waiting on ask_manager, or send it mid-run guidance. A waiting worker receives it immediately; otherwise it reads it on its next check.',
     parameters: Type.Object({
       run: Type.String({
         description: "One of this project's run ids (see list_runs).",
@@ -552,13 +566,33 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
           messages
             .map(
               (m) =>
-                `[${m.createdAt}] ${m.sender === 'chief' ? 'you' : 'worker'}:\n${m.body}`,
+                `[${m.createdAt}] ${m.sender === 'manager' ? 'you' : 'worker'}:\n${m.body}`,
             )
             .join('\n---\n'),
         );
       } catch (e) {
         return err(String(e));
       }
+    },
+  });
+
+  // ---- inbox ---------------------------------------------------------------
+
+  const checkInbox = defineTool({
+    name: 'check_inbox',
+    description:
+      'Read unread inbox messages of this project and mark them read.',
+    parameters: Type.Object({}),
+    execute: async (_args, api) => {
+      const unread = data.checkInbox(own(String(api.conversationId)));
+      if (unread.length === 0) return text('(inbox empty)');
+      return text(
+        unread
+          .map(
+            (m) => `[${m.ts}] ${m.from}${m.to ? ` → ${m.to}` : ''}:\n${m.body}`,
+          )
+          .join('\n---\n'),
+      );
     },
   });
 
@@ -793,7 +827,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
     sections: [
       preamble,
       coreMemorySection(deps, { withProject: true }),
-      relevantMemorySection(deps, true),
+      relevantMemorySection(deps, 'manager'),
       stateSection,
     ],
     tools: [
@@ -825,6 +859,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
         owner: "this project's memory",
       }),
       recall,
+      checkInbox,
       listNotes,
       readNote,
       writeNote,

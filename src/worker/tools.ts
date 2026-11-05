@@ -6,13 +6,7 @@ import {
 import { Type } from '@earendil-works/pi-ai';
 import { relevantMemorySection } from './relevant-context.js';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
-import type {
-  AgentMessageRow,
-  Db,
-  ManagerMessageRow,
-  RunRow,
-  TaskRow,
-} from './db.js';
+import type { AgentMessageRow, Db, ManagerMessageRow, TaskRow } from './db.js';
 import type { DataService } from './data.js';
 import {
   ReadScopeParam,
@@ -28,7 +22,6 @@ import { improvementTools } from './tools-improvements.js';
 import type { ImprovementStore } from './improvements.js';
 import type { GoalStore } from './goals.js';
 import { goalsTools } from './tools-goals.js';
-import { workerModelLine, type WorkerModelChoice } from './run-model.js';
 import { managerClause, managerName } from './manager-label.js';
 import { describeRunProgress, type RunProgress } from './run-progress.js';
 
@@ -39,7 +32,7 @@ export interface ChiefDeps {
   goals: GoalStore;
   improvements: ImprovementStore;
   /** Open (or reuse) a goal's dedicated chief conversation. */
-  openGoalConversation: (goalId: string, scopeId: string) => Promise<string>;
+  openGoalConversation: (goalId: string) => Promise<string>;
   /** Push task/goal updates to clients after chief tool writes. */
   emitUpdates: () => void;
   /** Refresh the Log view after an improvement write. */
@@ -52,27 +45,7 @@ export interface ChiefDeps {
   runDiff: (id: string) => Promise<string>;
   /** Live progress snapshot of a run (state, timing, last output, tool calls). */
   runProgress: (id: string) => Promise<RunProgress>;
-  /** Stop a run's current attempt; the worktree stays for review or follow-up. */
-  stopRun: (id: string, reason?: string) => Promise<RunRow>;
-  /** Dispatch a headless worker run; resolves once the run is queued. */
-  dispatch: (input: {
-    projectRef: string;
-    prompt: string;
-    chiefConversationId: string | null;
-    taskId?: number;
-    operationId: string;
-    model?: string;
-    thinkingLevel?: string;
-  }) => Promise<RunRow>;
-  /** Model ids and thinking levels dispatch may pin for a worker. */
-  workerModels: () => WorkerModelChoice[];
-  /** Post a message into a run's mailbox — a reply or mid-run guidance. */
-  sendRunMessage: (
-    runId: string,
-    body: string,
-    operationId: string,
-  ) => AgentMessageRow;
-  /** Read the durable message thread between the chief and a run's worker. */
+  /** Read the durable message thread between a run's worker and its manager. */
   runMessages: (runId: string) => AgentMessageRow[];
   /**
    * Hand a management assignment to a project's manager: creates the
@@ -140,6 +113,9 @@ export function chiefExtension(deps: ChiefDeps) {
     emitUpdates: deps.emitUpdates,
     emitNotice: deps.emitNotices,
     onTaskCompleted: deps.onTaskCompleted,
+    // The chief works General tasks only — a project's tasks are its
+    // manager's (M6); delegated tasks carry assignee='manager' on top.
+    taskScope: () => GLOBAL_SCOPE,
   });
 
   const preamble = section(
@@ -154,19 +130,17 @@ MEMORY. Your memory outlives every session — without it you do not know who Ti
 - recall "<query>" keyword search over General memory (Chinese included; all words must appear, words under 3 characters use substring matching); results carry #seq, kind, trust, date and source. Pass include_history to see superseded or deleted memories.
 - Core Memory is a small explicit selection, not everything you know. New memories are searchable but NOT resident: call select #seq when a fact must be visible every turn, and deselect #seq to free budget without forgetting. Over-budget selections are rejected with current usage — nothing is silently dropped or evicted. A memory leaving Core is still active and searchable.
 - Project detail is not yours. Each project's manager keeps that project's memory and notes (conventions, architecture, project decisions and outcomes); they are not in your context and you cannot write them. When you learn something about a project, hand it to its manager (send_manager_msg, or the delegate briefing) so it records it. For a quick answer, recall / list_notes / read_note / search_notes with scope set to the project read its memory and notes — read only. Its #seq numbers belong to that project: revise, forget, select and deselect always act on General memory.
-- Dispatched workers read only the project's exported memory/MEMORY.md and never write memory.
+- Workers see none of this: a worker receives only its manager's briefing and the worktree — no memory, notes or history.
 
-WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads messages; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each belongs to a scope with success criteria, constraints, a current state and a next action, and gets its own conversation (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. dispatch(project, prompt, task) records code work on a task id from <state>.
+WORLD. <state> shows unread inbox, active goals, pending tasks and active runs — re-check it each turn rather than asking. check_inbox reads the General inbox; send_msg posts to any scope's inbox. Goals are long-lived outcomes Tian delegated to you; each keeps a project or General reference and gets its own conversation in General (create_goal, list_goals). Schedules wake a goal on a cron (add_schedule); a wake hands you one task — work it in that conversation and END it with complete_task(outcome: achieved | not_achieved | no_change, summary) or fail_task(reason), then update_goal with the new current state and next action. outcome=no_change means nothing changed worth telling Tian: do not notify. When a decision or attention is genuinely needed, notify_user(goal, fingerprint, text) reaches Tian deduped for a day per fingerprint; list_goals shows schedules, remove_schedule drops one. Coding work never runs in this conversation — delegate it to a project manager.
 
-DISPATCH. You command, others execute. You have no shell and cannot edit code — real work is dispatched to coding agents via dispatch(project, prompt): they work in an isolated git worktree, unattended. dispatch returns at once with a run id; when the run finishes you are woken with its report and diffstat — collect it, note what matters, and report back to Tian. dispatch(project, prompt, task, model, thinking_level) can pin a worker's model and effort — pick from the worker models line in <state> when a task needs a stronger or cheaper worker. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Use list_runs to see what is live and run_progress(run) to read its state, elapsed time, last words and recent tool calls — that is how you answer "how is it going" instead of guessing. If a run is going the wrong way, stop_run(run, reason) ends the current attempt and keeps its worktree: its work stays reviewable, landable, and open to a follow-up. Stopping is not discarding — only Tian discards. Tian can also follow up, land, ship or discard a run from the UI.
+PROJECT WORK. You command, others execute. You have no shell and cannot edit code — and you do not dispatch workers yourself. Every project has a manager that owns its tasks and runs and dispatches its own workers; hand project work to it with delegate(project, title, briefing, goal?) — a task is assigned to the manager and you are woken when it closes with the outcome. Collect it, note what matters, and report back to Tian. Runs stay inspectable for you: list_runs shows what is live anywhere, run_progress(run) reads a live run's state, elapsed time and recent tool calls, read_run_report(run) and read_run_diff(run) read a finished run's report and diff, list_run_msgs(run) reads its worker↔manager thread — that is how you answer "how is it going" instead of guessing. IMPORTANT: worker changes live on the run's branch inside the worktree — the project's main checkout stays untouched until Tian lands the run from the Runs panel, so never expect them in the project directory itself. Only a run's manager steers or stops it — to change course, send_manager_msg the manager. Tian can stop, follow up, land, ship or discard a run from the UI.
 
-WORKER QUESTIONS. Workers can ask you questions mid-run with ask_chief — you are woken with the question and the run id while the worker waits. Answer at once with send_run_msg(run, body): short, concrete, self-contained. If only Tian can decide, say so, give your best interim guidance, and tell Tian afterwards. send_run_msg also steers a run proactively; list_run_msgs reviews a thread.
+MANAGERS. Every project has a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. <state> and list_scopes show every project with its manager's name (for example '- tian-agent (/path) — manager: 阿七'). Address the manager by its name when you talk about it. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Project tasks and runs are the manager's — do not start_task/complete_task/fail_task them, and a worker's questions go to its manager, not you. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate all project work — a quick question, a code change, or a multi-step job alike.
 
-MANAGERS. Every project has a project manager — a persistent agent that owns that project's tasks, memory, notes and runs, and dispatches its own workers. <state> and list_scopes show every project with its manager's name (for example '- tian-agent (/path) — manager: 阿七'). Address the manager by its name when you talk about it. delegate(project, title, briefing, goal?) hands it a management task: the task is assigned to the manager and you are woken when it closes with the outcome. Its questions arrive as '[<project> manager asks]' wakes — answer with send_manager_msg(project, body, reply_to) so a waiting manager gets it directly; without reply_to the manager is woken with new guidance. Delegated tasks are the manager's — do not start_task/complete_task/fail_task or send_run_msg its runs yourself; steer with send_manager_msg. Goals stay yours: when a delegated goal task closes, update_goal with the result. list_manager_msgs(project) reads the thread. Delegate substantial multi-step project work; keep one-off questions and quick code changes on dispatch yourself.
+SCOPES. You live in General — every conversation of yours is General. Read tools take an optional scope to look into a project (list_tasks, list_goals, list_runs, recall and the note readers) — reads cross scopes, writes stay General: your tasks, notes and memory are General's. send_msg can post to a project's inbox; for real work use delegate instead.
 
-SCOPES. This conversation is bound to one scope. Task, inbox, goal and history tools take an optional scope parameter to work across scopes — to answer "how are my projects" from General, query them. Memory and notes follow ownership instead: your memory and notes tools default to General and write only General; a scope parameter on recall and the note readers reads a project read-only.
-
-HISTORY. Everything said or done stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. The scope defaults to this conversation's scope; pass scope "all" to search everything. If nothing matches, say plainly that no record was found — never invent history.
+HISTORY. Everything said or done in General stays searchable across sessions. When Tian asks about a past discussion, decision, or what happened before, run search_history(query) instead of guessing: it returns dated lines with refs like conv:12#345 or event:<id> — cite the ref in your answer and use read_history(ref) to expand the surrounding context. History covers General only — project transcripts belong to their managers; read the project's memory and notes, or ask the manager. If nothing matches, say plainly that no record was found — never invent history.
 
 LOG. Use log_improvement for durable product feedback: broken behavior, recurring friction, a concrete idea, or a win worth repeating. Log it when Tian reports it (source "user") or when you notice it while working; skip routine task noise and one-off model hiccups. Entries appear in Tian's Log view, where he triages them and promotes one into a task. Run list_improvements before logging if you are unsure whether it is already there — do not duplicate an open entry.`,
     { tag: false },
@@ -197,15 +171,21 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
             `  [${m.ts}] ${m.from}: ${m.body.split('\n')[0].slice(0, 140)}`,
           );
       }
+      // All goals are the chief's — a project scope on a goal is the
+      // project reference, not another owner (M6).
       const goals = deps.goals
-        .listGoals(scope)
+        .listGoals(null)
         .filter((g) => g.status === 'active');
       if (goals.length > 0) {
         lines.push(`active goals (${goals.length}):`);
         for (const g of goals.slice(0, 10)) {
           const schedule = g.schedules[0];
+          const project =
+            g.scopeId === GLOBAL_SCOPE
+              ? ''
+              : ` [${db.getProject(g.scopeId)?.name ?? g.scopeId}]`;
           lines.push(
-            `  ${g.id} ${g.objective}${g.nextAction ? ` — next: ${g.nextAction}` : ''}${schedule?.enabled ? ` (cron ${schedule.cron})` : ''}`,
+            `  ${g.id}${project} ${g.objective}${g.nextAction ? ` — next: ${g.nextAction}` : ''}${schedule?.enabled ? ` (cron ${schedule.cron})` : ''}`,
           );
         }
       }
@@ -223,16 +203,17 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
             `  #${t.id} [${t.status}] ${t.assignee === 'manager' ? '(manager) ' : ''}${t.title}${t.due ? ` (due ${t.due})` : ''}${t.goalId ? ` [goal ${t.goalId}]` : ''}`,
           );
       }
+      // Oversight over every project's runs — the chief never owns one.
       const running = db
-        .listRuns(scope)
+        .listRuns(null)
         .filter((r) => ['running', 'queued', 'collecting'].includes(r.status));
       if (running.length > 0)
-        lines.push(`active runs: ${running.map((r) => r.id).join(', ')}`);
+        lines.push(
+          `active runs: ${running.map((r) => `${r.id} (${r.projectId})`).join(', ')}`,
+        );
     } catch {
       // scope dirs not created yet — nothing to report
     }
-    const models = workerModelLine(deps.workerModels());
-    if (models) lines.push(models);
     const project = scope === GLOBAL_SCOPE ? null : db.getProject(scope);
     // Every project carries its manager's name (or `无`): the chief addresses
     // the manager by that name and knows which projects it can delegate to.
@@ -309,23 +290,20 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   const addTask = defineTool({
     name: 'add_task',
     replay: 'safe',
-    description: "Add a todo item to a scope's task list.",
+    description:
+      'Add a todo item to the General task list. Project tasks belong to their managers — delegate instead.',
     parameters: Type.Object({
       title: Type.String(),
       due: Type.Optional(Type.String({ description: 'ISO date or datetime.' })),
-      scope: ScopeParam,
     }),
     execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
       const id = data.addTask(
-        scope,
+        GLOBAL_SCOPE,
         args.title,
         args.due ?? null,
         `task:${api.taskId}:${api.callId}`,
       );
-      return text(
-        `task #${id} added in [${scope === GLOBAL_SCOPE ? 'global' : scope}].`,
-      );
+      return text(`task #${id} added in [global].`);
     },
   });
 
@@ -366,9 +344,15 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   const doneTask = defineTool({
     name: 'done_task',
     replay: 'safe',
-    description: 'Mark a task completed by id (or reopen it as pending).',
+    description:
+      'Mark a General task completed by id. Project tasks belong to their managers.',
     parameters: Type.Object({ id: Type.Number() }),
     execute: async (args, api) => {
+      const task = db.getTask(args.id);
+      if (task && task.scopeId !== GLOBAL_SCOPE)
+        return err(
+          `task #${args.id} belongs to the ${db.getProject(task.scopeId)?.name ?? task.scopeId} manager — steer it with send_manager_msg.`,
+        );
       data.doneTask(args.id, true, `done-task:${api.taskId}:${api.callId}`);
       return text(`task #${args.id} done.`);
     },
@@ -376,11 +360,11 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
 
   const checkInbox = defineTool({
     name: 'check_inbox',
-    description: 'Read unread inbox messages of a scope and mark them read.',
-    parameters: Type.Object({ scope: ScopeParam }),
-    execute: async (args, api) => {
-      const scope = resolveScope(deps, String(api.conversationId), args.scope);
-      const unread = data.checkInbox(scope);
+    description:
+      "Read unread inbox messages of General and mark them read. A project's inbox is its manager's.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      const unread = data.checkInbox(GLOBAL_SCOPE);
       if (unread.length === 0) return text('(inbox empty)');
       return text(
         unread
@@ -511,72 +495,6 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     },
   });
 
-  const dispatch = defineTool({
-    name: 'dispatch',
-    replay: 'safe',
-    description:
-      'Dispatch a task to a worker coding agent in an isolated git worktree of a project. Returns immediately with a run id — you are woken with the report and diffstat when it finishes. Only for work that changes files; answer questions yourself.',
-    parameters: Type.Object({
-      project: Type.Optional(
-        Type.String({
-          description:
-            "Project name or id. Default: this conversation's scope (must be a project).",
-        }),
-      ),
-      prompt: Type.String({
-        description:
-          'Full task briefing for the worker — it sees nothing else.',
-      }),
-      task: Type.Optional(
-        Type.Number({
-          description:
-            'Task id this run advances (from list_tasks). The run is recorded on the task.',
-        }),
-      ),
-      model: Type.Optional(
-        Type.String({
-          description:
-            'Worker model id from the worker models line in <state>. Default: the app-wide model.',
-        }),
-      ),
-      thinking_level: Type.Optional(
-        Type.String({
-          description:
-            "Worker thinking level — one of off, minimal, low, medium, high, xhigh, max that the chosen model lists in <state>. Default: the model's own.",
-        }),
-      ),
-    }),
-    execute: async (args, api) => {
-      const scope = resolveScope(
-        deps,
-        String(api.conversationId),
-        args.project,
-      );
-      if (scope === GLOBAL_SCOPE)
-        return err('dispatch needs a project scope — pass a project name.');
-      try {
-        const run = await deps.dispatch({
-          projectRef: scope,
-          prompt: args.prompt,
-          chiefConversationId: String(api.conversationId),
-          taskId: args.task,
-          operationId: `dispatch:${api.taskId}:${api.callId}`,
-          model: args.model,
-          thinkingLevel: args.thinking_level,
-        });
-        return text(
-          `dispatched run ${run.id} on ${run.agentKind}${
-            run.model
-              ? ` [model ${run.model}${run.thinkingLevel ? ` think:${run.thinkingLevel}` : ''}]`
-              : ''
-          } — worktree ${run.worktreePath ?? '(in place, not a git repo)'}. I'll report when it finishes.`,
-        );
-      } catch (e) {
-        return err(`dispatch failed: ${e instanceof Error ? e.message : e}`);
-      }
-    },
-  });
-
   const readRunReport = defineTool({
     name: 'read_run_report',
     description: 'Read the report of a dispatched run by its ID.',
@@ -606,32 +524,6 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     },
   });
 
-  const stopRun = defineTool({
-    name: 'stop_run',
-    replay: 'safe',
-    description:
-      'Stop a run whose current attempt is going the wrong way. The worker is aborted and the run ends interrupted, but its worktree and branch stay: review, land, or follow up afterwards. Not a discard — nothing is deleted.',
-    parameters: Type.Object({
-      id: Type.String({ description: 'Run id from list_runs.' }),
-      reason: Type.Optional(
-        Type.String({
-          description:
-            'One line Tian can read later explaining why it was stopped.',
-        }),
-      ),
-    }),
-    execute: async (args) => {
-      try {
-        const run = await deps.stopRun(args.id, args.reason);
-        return text(
-          `run ${run.id} stopped [${run.status}] — its worktree${run.worktreePath ? ` ${run.worktreePath}` : ''} is kept. Tian can land or discard it from the Runs panel; you can also read_run_diff or ask for a follow-up.`,
-        );
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
   const listRuns = defineTool({
     name: 'list_runs',
     description:
@@ -648,52 +540,17 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
           .slice(0, 30)
           .map(
             (r) =>
-              `${r.id} [${r.status}] ${r.agentKind} in ${r.projectId}${r.finishedAt ? ` finished:${r.finishedAt}` : ''}\n  ${r.prompt.split('\n')[0].slice(0, 100)}`,
+              `${r.id} [${r.status}] ${r.runtime} in ${r.projectId}${r.finishedAt ? ` finished:${r.finishedAt}` : ''}\n  ${r.prompt.split('\n')[0].slice(0, 100)}`,
           )
           .join('\n'),
       );
     },
   });
 
-  const sendRunMsg = defineTool({
-    name: 'send_run_msg',
-    replay: 'safe',
-    description:
-      'Reply to a run worker waiting on ask_chief, or send it mid-run guidance. A waiting worker receives it immediately; otherwise it reads it on its next check.',
-    parameters: Type.Object({
-      run: Type.String({
-        description: 'Run id from the question or list_runs.',
-      }),
-      body: Type.String({
-        description: 'Short, concrete, self-contained answer or instruction.',
-      }),
-    }),
-    execute: async (args, api) => {
-      try {
-        const run = db.getRun(args.run);
-        if (
-          run?.chiefConversationId &&
-          db.isManagerConversation(run.chiefConversationId)
-        )
-          return err(
-            `run ${args.run} is steered by the ${db.getProject(run.projectId)?.name ?? run.projectId} manager — use send_manager_msg.`,
-          );
-        deps.sendRunMessage(
-          args.run,
-          args.body,
-          `send-run-msg:${api.taskId}:${api.callId}`,
-        );
-        return text(`message delivered to run ${args.run}.`);
-      } catch (e) {
-        return err(String(e));
-      }
-    },
-  });
-
   const listRunMsgs = defineTool({
     name: 'list_run_msgs',
     description:
-      "Read the durable message thread between you and a run's worker.",
+      "Read the durable message thread between a run's worker and its manager.",
     parameters: Type.Object({ run: Type.String() }),
     execute: async (args) => {
       try {
@@ -703,7 +560,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
           messages
             .map(
               (m) =>
-                `[${m.createdAt}] ${m.sender === 'chief' ? 'you' : 'worker'}:\n${m.body}`,
+                `[${m.createdAt}] ${m.sender === 'manager' ? 'manager' : 'worker'}:\n${m.body}`,
             )
             .join('\n---\n'),
         );
@@ -717,7 +574,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
     name: 'delegate',
     replay: 'safe',
     description:
-      "Hand a management task to a project's manager — a persistent agent that owns that project's tasks, memory, notes and coding runs. Creates a task assigned to the manager; you are woken when it closes with the outcome. For one-off code changes prefer dispatch.",
+      "Hand a management task to a project's manager — a persistent agent that owns that project's tasks, memory, notes and coding runs, and dispatches its own workers. Creates a task assigned to the manager; you are woken when it closes with the outcome. This is how all project work — questions, code changes, multi-step jobs — gets done.",
     parameters: Type.Object({
       project: Type.String({
         description: 'Project name or id (must be a project, not global).',
@@ -732,7 +589,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       goal: Type.Optional(
         Type.String({
           description:
-            'Goal id this task advances; must belong to the same project.',
+            'Goal id this task advances; a project goal must match this project, a General goal may delegate anywhere.',
         }),
       ),
     }),
@@ -748,7 +605,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       if (!project) return err(`Unknown project: ${scope}`);
       const goal = args.goal ? deps.goals.getGoal(args.goal) : null;
       if (args.goal && !goal) return err(`Unknown goal: ${args.goal}`);
-      if (goal && goal.scopeId !== scope)
+      if (goal && goal.scopeId !== scope && goal.scopeId !== GLOBAL_SCOPE)
         return err(
           `goal ${goal.id} belongs to ${goal.scopeId}, not ${scope} — delegate it to that project instead.`,
         );
@@ -862,7 +719,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       preamble,
       memorySection,
       stateSection,
-      relevantMemorySection(deps, false),
+      relevantMemorySection(deps, 'chief'),
     ],
     tools: [
       ...memoryTools(deps, {
@@ -882,13 +739,10 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
       writeNote,
       appendNote,
       searchNotes,
-      dispatch,
       listRuns,
       readRunReport,
       readRunDiff,
       runProgress,
-      stopRun,
-      sendRunMsg,
       listRunMsgs,
       delegate,
       sendManagerMsg,

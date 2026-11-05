@@ -72,7 +72,6 @@ function fixture(
     rootPath: project,
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',

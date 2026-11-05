@@ -79,6 +79,11 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     }),
     getSettings: async () => ({
       model: { provider: 'anthropic', modelId: 'test' },
+      workers: {
+        maxConcurrent: 3,
+        runtimes: [{ id: 'pi', enabled: true }],
+        intents: [],
+      },
     }),
     listTasks: async () => [],
     memoryDump: async () => ({
@@ -195,6 +200,24 @@ function mockApi(overrides: Partial<CommandApi> = {}) {
     discardRun: async () => {},
     shipRun: async () => '',
     setModel: async () => {},
+    setManagerModel: async () => {},
+    setWorkers: async () => {},
+    runtimeStatus: async () => ({
+      id: 'codex',
+      installed: false,
+      signedIn: null,
+      detail: 'not installed',
+    }),
+    builtinProviders: async () => [],
+    listProviders: async () => [],
+    addProvider: async () => [],
+    updateProvider: async () => [],
+    removeProvider: async () => [],
+    setProviderKey: async () => [],
+    deleteProviderKey: async () => [],
+    providerLogin: async () => [],
+    providerLoginAnswer: async () => {},
+    providerLoginCancel: async () => {},
     usageStats: async () => ({ days: [] }),
     modelCatalog: async () => ({
       models: [],

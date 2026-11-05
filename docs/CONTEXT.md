@@ -105,7 +105,7 @@ _Avoid_: confidence score
 _Avoid_: mention
 
 **Relevant Context（任务相关上下文）**:
-为当前输入或 Task 在参与者可读 Scope 内检索出的、有独立预算的 Memory、Notes 与 History 子集；它独立于稳定的 Core Memory 选择。
+为当前输入或 Task 在参与者自己的 Scope 内检索出的、有独立预算的 Memory、Notes 与 History 子集：Chief 检索 Global，Manager 检索本项目，Worker 没有这一部分。它独立于稳定的 Core Memory 选择。
 
 **History**:
 所有已发生的会话内容和事件的可检索记录；只有沉淀为 Memory 的内容才会自动进入其他会话。

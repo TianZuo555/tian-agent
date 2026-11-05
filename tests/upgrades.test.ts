@@ -99,16 +99,9 @@ test('pending work refuses maintenance and leaves the original service usable', 
     const database = new DatabaseSync(join(paths.dataDir, 'tian.db'));
     database
       .prepare(
-        'INSERT INTO runs(id,project_id,agent_kind,prompt,status,started_at) VALUES (?,?,?,?,?,?)',
+        'INSERT INTO runs(id,project_id,prompt,status,started_at) VALUES (?,?,?,?,?)',
       )
-      .run(
-        'pending',
-        'project',
-        'durable-worker',
-        'test',
-        'queued',
-        new Date().toISOString(),
-      );
+      .run('pending', 'project', 'test', 'queued', new Date().toISOString());
     database.close();
     await assert.rejects(
       client.invoke('beginMaintenance', []),
@@ -233,6 +226,72 @@ test('an older service refuses a newer database without rewriting its version', 
     const check = new DatabaseSync(join(root, 'tian.db'));
     assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 99);
     check.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a v8 database is snapshotted then recreated empty (M6)', () => {
+  const root = temporary();
+  const dataDir = join(root, 'data');
+  mkdirSync(dataDir, { recursive: true });
+  try {
+    // Build a current-schema database, fill it with the pre-M6 layout (Chief
+    // conversations in a Project Scope), then downgrade the version: reopening
+    // must snapshot it and recreate it empty — schema bumps do not migrate.
+    const seed = new Db(dataDir);
+    seed.addProject({
+      id: 'p1',
+      name: 'alpha',
+      rootPath: '/tmp/alpha',
+      autoLand: 0,
+      allowInPlace: 0,
+      runTimeoutMin: 30,
+      baseBranch: 'main',
+      promptPreamble: '',
+      managerName: 'M',
+    });
+    // A Chief conversation in a Project Scope, bound to a chat.
+    seed.mapConversation('chief-p1', 'p1');
+    seed.bindSession(
+      { channel: 'telegram', externalId: 'chat:1', scopeId: 'p1' },
+      'chief-p1',
+    );
+    seed.close();
+
+    const sqlite = new DatabaseSync(join(dataDir, 'tian.db'));
+    sqlite.exec('PRAGMA user_version = 8');
+    sqlite.close();
+    const db = new Db(dataDir);
+    try {
+      // Reset semantics: old rows are gone from the live database...
+      assert.equal(
+        db.sqlite.prepare('SELECT COUNT(*) AS n FROM conversations').get()?.n,
+        0,
+      );
+      // ...but the snapshot keeps them for recovery.
+      const backup = new DatabaseSync(join(dataDir, 'tian.db_v8.backup'), {
+        readOnly: true,
+      });
+      try {
+        assert.equal(
+          backup.prepare('PRAGMA user_version').get()?.user_version,
+          8,
+        );
+        assert.equal(
+          backup
+            .prepare(
+              "SELECT scope_id FROM conversations WHERE conversation_id = 'chief-p1'",
+            )
+            .get()?.scope_id,
+          'p1',
+        );
+      } finally {
+        backup.close();
+      }
+    } finally {
+      db.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

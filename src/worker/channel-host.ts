@@ -9,6 +9,8 @@ export interface ChannelHost {
   db: Db;
   scopes: Scopes;
   openSession(binding: SessionBinding): Promise<ConversationInfo>;
+  /** The project's persistent manager conversation, opened lazily. */
+  openManager(projectId: string): Promise<ConversationInfo>;
   submit(
     conversationId: string,
     content: string,

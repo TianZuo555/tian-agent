@@ -139,7 +139,7 @@ test('conversations archive and restore through the command surface', async (t) 
   );
 });
 
-test('the same external chat can bind separate sessions to different scopes', async (t) => {
+test('external chats bind to Global; project scopes hold only the manager', async (t) => {
   const f = await fixture(t);
   const client = f.client();
   const project = join(f.root, 'project');
@@ -156,10 +156,15 @@ test('the same external chat can bind separate sessions to different scopes', as
     scopeId: 'global',
   };
   const general = await client.invoke('openSession', [binding]);
-  const scoped = await client.invoke('openSession', [
-    { ...binding, scopeId: projectId },
-  ]);
-  assert.notEqual(general.conversationId, scoped.conversationId);
+  // A non-manager channel cannot bind to a project scope (M6): adapters
+  // route project-bound chats through openManager instead.
+  await assert.rejects(
+    client.invoke('openSession', [{ ...binding, scopeId: projectId }]),
+    /only its manager/,
+  );
+  const manager = await client.invoke('openManager', [projectId]);
+  assert.equal(manager.role, 'manager');
+  assert.notEqual(general.conversationId, manager.conversationId);
   f.server.service.data.remember(projectId, 'Project memory stays scoped');
   assert.equal((await client.invoke('memoryDump', ['global'])).items.length, 0);
   assert.equal(
@@ -223,7 +228,7 @@ test('usage stats bucket assistant tokens by local day for each scope', async (t
     projectId,
     conversationId: String(worker.id),
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'work',
     currentPrompt: 'work',
     rootPath: project,
@@ -369,8 +374,11 @@ test('openManager exposes the project manager conversation to Tian directly', as
   // Repeat calls are idempotent: same bound conversation.
   const again = await client.invoke('openManager', [projectId]);
   assert.equal(again.conversationId, manager.conversationId);
-  // listConversations carries the role for both kinds.
-  const chief = await client.invoke('createConversation', [projectId]);
+  // listConversations carries the role for both kinds. Asking for a
+  // conversation inside a project scope routes to the manager (M6).
+  const routed = await client.invoke('createConversation', [projectId]);
+  assert.equal(routed.conversationId, manager.conversationId);
+  const chief = await client.invoke('createConversation', ['global']);
   const listed = await client.invoke('listConversations', []);
   assert.equal(
     listed.find((c) => c.conversationId === manager.conversationId)?.role,
@@ -382,6 +390,80 @@ test('openManager exposes the project manager conversation to Tian directly', as
   );
   // Global has no manager.
   await assert.rejects(client.invoke('openManager', ['global']), /project/i);
+});
+
+test('a project goal keeps its project reference; its conversation lives in Global', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const scopes = await client.invoke('addProject', [
+    'alpha',
+    project,
+    'Manager',
+  ]);
+  const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
+  const goal = await client.invoke('createGoal', [
+    projectId,
+    'Keep CI green',
+    'green main',
+    'no force-push',
+    3,
+  ]);
+  // The project id stays the goal's reference; the chief conversation that
+  // works the goal is Global (M6).
+  assert.equal(goal.scopeId, projectId);
+  assert.ok(goal.conversationId);
+  assert.equal(
+    f.server.service.db.conversationScope(goal.conversationId),
+    'global',
+  );
+  // A second call reuses the same Global conversation.
+  const again = await client.invoke('createGoal', [
+    projectId,
+    'Watch releases',
+    '',
+    '',
+    3,
+  ]);
+  assert.notEqual(again.conversationId, undefined);
+});
+
+test('only a project manager dispatches workers', async (t) => {
+  const f = await fixture(t);
+  const client = f.client();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const scopes = await client.invoke('addProject', [
+    'alpha',
+    project,
+    'Manager',
+  ]);
+  const projectId = scopes.find((scope) => scope.kind === 'project')!.id;
+  const service = f.server.service;
+  const chief = await client.invoke('createConversation', ['global']);
+  for (const supervisor of [chief.conversationId, null])
+    assert.throws(
+      () =>
+        service.dispatchRun({
+          projectRef: projectId,
+          prompt: 'change something',
+          chiefConversationId: supervisor,
+        }),
+      /only a project manager dispatches/,
+    );
+  // The manager passes the gate; a later stage may still fail (the test
+  // project is not a git repo), but never with the guard's message.
+  const manager = await client.invoke('openManager', [projectId]);
+  const outcome = await service
+    .dispatchRun({
+      projectRef: projectId,
+      prompt: 'change something',
+      chiefConversationId: manager.conversationId,
+    })
+    .then(() => 'dispatched')
+    .catch((error: Error) => error.message);
+  assert.doesNotMatch(String(outcome), /only a project manager dispatches/);
 });
 
 test('service restart restores sessions and memory; existing clients reconnect', async (t) => {
@@ -469,7 +551,7 @@ test('a refused maintenance request leaves the scheduler firing', async (t) => {
     projectId: 'p-none',
     conversationId: null,
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'busy',
     currentPrompt: 'busy',
     rootPath: '/tmp',

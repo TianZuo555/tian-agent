@@ -16,7 +16,7 @@
 
 服务收到 SIGTERM 后有序关闭；下次启动恢复会话、collector 和原截止时间。恢复遵循工具自己的 replay 策略，不保证任意外部操作恰好一次。
 
-Run 结果与完成通知在同一个业务数据库事务中记录。通知用稳定 `requestId` 提交给派发会话（总管或项目管理者），再标记 delivered；崩溃后可重投并由 Durable 去重。接收方忙时进入 follow-up 队列。投递进行中新排入的通知会立即再跑一轮投递，不等下一次 60 秒扫描。
+Run 结果与完成通知在同一个业务数据库事务中记录。通知用稳定 `requestId` 提交给派发它的项目管理者会话，再标记 delivered；崩溃后可重投并由 Durable 去重。接收方忙时进入 follow-up 队列。投递进行中新排入的通知会立即再跑一轮投递，不等下一次 60 秒扫描。
 
 ## History 与 Event
 
@@ -29,7 +29,7 @@ Pi transcript 是会话内容的唯一来源；`tian.db` 里只有可丢弃重�
 
 同步时机：启动后后台补齐（不阻塞启动）；会话有新输入、watch 推送变化或空闲后延迟补同步；每次检索前对目标 scope 惰性补齐。维护模式下后台同步暂停。
 
-结果按 FTS rank、再按时间倒序排列，去重后按约 1500 token（`ceil(utf8Bytes/3)` 估算）截断。总管检索工具：
+结果按 FTS rank、再按时间倒序排列，去重后按约 1500 token（`ceil(utf8Bytes/3)` 估算）截断。总管与项目管理者共用这两个检索工具；检索范围由角色固定，没有 scope 参数（[memory.md](memory.md#会话边界)）：总管检索 Global，管理者检索本项目，工兵没有 History 工具。
 
-- `search_history(query, scope?, since?, until?, limit?)`：默认本会话 scope，`scope: "all"` 检索全部。返回 `[2026-10-11 14:02] conv:12#345 user: …片段…`，无命中返回 `(no matches)`。
-- `read_history(ref, offset?, limit?, around?)`：从原始 transcript（或完整可重建索引）分页展开目标条目，返回 `chars a-b of n` 与 continuation offset；`around` 同时显示相邻轮次；`event:<id>` 显示事件。Unicode 按 code point 分页。
+- `search_history(query, since?, until?, limit?)`：检索调用者的 scope。返回 `[2026-10-11 14:02] conv:12#345 user: …片段…`，无命中返回 `(no matches)`。
+- `read_history(ref, offset?, limit?, around?)`：从原始 transcript（或完整可重建索引）分页展开目标条目，返回 `chars a-b of n` 与 continuation offset；`around` 同时显示相邻轮次；`event:<id>` 显示事件。Unicode 按 code point 分页。其他 scope 的引用被拒绝。

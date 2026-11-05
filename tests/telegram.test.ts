@@ -282,7 +282,7 @@ test('a proactive assistant turn is forwarded without an inbound message', async
   );
 });
 
-test('/scope switches to a separate project conversation and persists', async (t) => {
+test('/scope routes the chat to the project manager and persists', async (t) => {
   const f = await fixture(t);
   let service = await f.start();
   const project = join(f.root, 'project');
@@ -296,22 +296,28 @@ test('/scope switches to a separate project conversation and persists', async (t
   f.api.push(message(3, 31, CHAT, '在项目 scope 里说话'));
   let projectConversation = '';
   await until(async () => {
+    // A project scope holds only its manager (M6): the chat's messages land
+    // in the manager conversation, never in a project chief.
     const scoped = service
       .listConversations()
-      // The project's manager conversation exists from the start (D18).
-      .find((row) => row.scopeId === projectId && row.role !== 'manager');
+      .find((row) => row.scopeId === projectId);
     if (!scoped) return false;
+    assert.equal(scoped.role, 'manager');
     projectConversation = scoped.conversationId;
     return (await userEntries(service, projectConversation)) === 1;
   });
   assert.notEqual(projectConversation, globalConversation);
+  // The manager's reply goes back to the chat.
+  await reply(service, projectConversation, '管理者的回复');
+  await until(() => f.api.sent.some((sent) => sent.text === '管理者的回复'));
+  // The chat's scope binding lives in telegram_chats, not channel_sessions.
   assert.equal(
     service.db.channelSession({
       channel: 'telegram',
       externalId: String(CHAT),
       scopeId: projectId,
-    })?.conversationId,
-    projectConversation,
+    }),
+    undefined,
   );
   await service.close();
   f.forget();
@@ -482,7 +488,7 @@ test('refused maintenance restarts the gateway', async (t) => {
     projectId: 'project',
     conversationId: null,
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'busy',
     currentPrompt: 'busy',
     rootPath: '/tmp',

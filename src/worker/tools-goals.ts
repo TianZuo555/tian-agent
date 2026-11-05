@@ -8,8 +8,8 @@ import { parseCron } from './scheduler.js';
 export interface GoalsToolDeps {
   db: Db;
   goals: GoalStore;
-  /** Open (or reuse) the goal's dedicated chief conversation. */
-  openGoalConversation: (goalId: string, scopeId: string) => Promise<string>;
+  /** Open (or reuse) the goal's dedicated chief conversation in Global. */
+  openGoalConversation: (goalId: string) => Promise<string>;
   /** Resolve a scope parameter against the calling conversation. */
   resolveScope: (conversationId: string, param?: string) => string;
   /** Push task/goal updates to clients after a tool write. */
@@ -17,6 +17,11 @@ export interface GoalsToolDeps {
   emitNotice: (scopeId: string) => void;
   /** An extraction trigger fires when the chief completes a task (PRD §4.4). */
   onTaskCompleted?: (scopeId: string) => void;
+  /**
+   * When set, start/complete/fail refuse tasks outside this scope. The chief
+   * passes Global: a project's tasks are its manager's (M6).
+   */
+  taskScope?: (conversationId: string) => string;
 }
 
 export interface TaskToolDeps {
@@ -144,7 +149,7 @@ export function goalsTools(deps: GoalsToolDeps): ToolRegistration[] {
             maxRunsPerDay: args.max_runs_per_day ?? DEFAULT_MAX_RUNS_PER_DAY,
           }),
         );
-        const conversationId = await deps.openGoalConversation(goal.id, scope);
+        const conversationId = await deps.openGoalConversation(goal.id);
         goals.setGoalConversation(goal.id, conversationId);
         changed();
         return text(
@@ -363,12 +368,14 @@ export function taskExecutionTools(deps: TaskToolDeps): ToolRegistration[] {
   const requireTask = (id: number, conversationId: string) => {
     const task = db.getTask(id);
     if (!task) throw new Error(`Unknown task: ${id}`);
-    if (deps.taskScope && task.scopeId !== deps.taskScope(conversationId))
-      throw new Error(`task #${id} belongs to another scope`);
+    // The delegation message comes first: it tells the chief where the task
+    // went instead of just naming a foreign scope.
     if (deps.refuseAssignee && task.assignee === deps.refuseAssignee)
       throw new Error(
         `task #${id} is delegated to the ${db.getProject(task.scopeId)?.name ?? task.scopeId} manager — use send_manager_msg`,
       );
+    if (deps.taskScope && task.scopeId !== deps.taskScope(conversationId))
+      throw new Error(`task #${id} belongs to another scope`);
     return task;
   };
 

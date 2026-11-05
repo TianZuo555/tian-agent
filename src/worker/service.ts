@@ -12,13 +12,30 @@ import {
   type FSWatcher,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
-import { Db, type Notification } from './db.js';
+import { homedir } from 'node:os';
+import {
+  SandboxedExecutionEnv,
+  pathLines,
+  sandboxAvailable,
+  worktreeGitDir,
+  writeProfile,
+  type SandboxSpec,
+} from './sandbox.js';
+import { Db, type Notification, type RunRow } from './db.js';
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { collectUsage, usageConversationIds } from './usage.js';
 import { GLOBAL_SCOPE, Scopes } from './scopes.js';
+import { FileCredentialStore } from './credentials.js';
+import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { Settings } from './settings.js';
 import { DataService } from './data.js';
 import { AgentRuntime } from './agents.js';
-import { RunOrchestrator, type DispatchInput } from './runs.js';
+import { CodexRuntime } from './codex.js';
+import {
+  RunOrchestrator,
+  type DispatchInput,
+  type WorkerChoice,
+} from './runs.js';
 import { resolveWorkerSpec, workerModelChoices } from './run-model.js';
 import { EventLog } from './events.js';
 import {
@@ -55,25 +72,33 @@ import type {
   ImprovementItem,
   ImprovementSummary,
   ProjectPatch,
+  ProviderConfig,
+  ProviderInfo,
+  ProviderLoginEvent,
   ScopeInfo,
   SettingsInfo,
+  WorkerSettingsInfo,
+  RuntimeStatusInfo,
   SessionBinding,
   ConversationInfo,
   TaskItem,
   MemoryRevisionResult,
 } from '../shared/types.js';
 
-/** Deps the chief and manager extensions both wire to the same run surface. */
-type SharedToolDeps =
-  | 'dispatch'
+/**
+ * The read-only run surface the chief keeps for oversight (M6): reports,
+ * diffs, progress and the run↔manager message thread. Dispatch and mutation
+ * belong to the manager alone.
+ */
+type ChiefRunDeps =
   | 'runReport'
   | 'runDiff'
   | 'runProgress'
-  | 'stopRun'
-  | 'sendRunMessage'
   | 'runMessages'
-  | 'workerModels'
   | 'history';
+
+/** Codex configuration and instructions: read-only inside the Run sandbox. */
+const CODEX_CONFIG_FILES = ['config.toml', 'AGENTS.md', 'AGENTS.override.md'];
 
 /** Application composition and conversation/project operations; owned by one resident service. */
 export class Service {
@@ -81,6 +106,7 @@ export class Service {
   readonly scopes: Scopes;
   readonly data: DataService;
   readonly runs: RunOrchestrator;
+  private readonly codex: CodexRuntime;
   readonly events: EventLog;
   readonly improvements: ImprovementStore;
   readonly skills: SkillRegistry;
@@ -92,7 +118,14 @@ export class Service {
   private wechat: WechatAdapter | null = null;
   private agents: AgentRuntime;
   private settings: Settings;
+  private credentials: FileCredentialStore;
   private globalDir: string;
+  private loginPrompts = new Map<
+    string,
+    { resolve: (value: string) => void; reject: (error: Error) => void }
+  >();
+  private loginAborts = new Map<string, AbortController>();
+  private promptSeq = 0;
   private watches = new Map<
     string,
     { clientId: number; stop: () => Promise<void> }
@@ -110,20 +143,24 @@ export class Service {
   private historyBackfill: Promise<void> | null = null;
 
   constructor(
-    userDataDir: string,
+    private userDataDir: string,
     private emit: Emit,
     /** Telegram setup resolved by the service entry; absent = adapter off. */
     private telegramSetup: TelegramSetup = {},
     /** WeChat setup resolved by the service entry; absent = adapter off. */
     private wechatSetup: WechatSetup | null = null,
-    private options: { warmModels?: boolean } = {},
+    private options: { warmModels?: boolean; socketPath?: string } = {},
   ) {
     this.db = new Db(userDataDir);
     this.outbox = new NotificationOutbox({
       store: this.db,
+      // A scope-level wake with no explicit target (M6): project scopes wake
+      // their manager; Global wakes the latest chief conversation (or a fresh
+      // one when none exists).
       resolveConversation: async (notification) =>
-        this.db.latestConversation(notification.scopeId)?.conversationId ??
-        (await this.createConversation(notification.scopeId)).conversationId,
+        notification.scopeId === GLOBAL_SCOPE
+          ? await this.chiefConversationId()
+          : (await this.openManager(notification.scopeId)).conversationId,
       deliver: (notification, conversationId) =>
         this.deliverNotification(notification, conversationId),
       delivered: (notification, conversationId) =>
@@ -140,7 +177,8 @@ export class Service {
     });
     this.globalDir = join(userDataDir, 'scopes', GLOBAL_SCOPE);
     this.scopes = new Scopes(this.globalDir, this.db);
-    this.settings = new Settings(userDataDir);
+    this.credentials = new FileCredentialStore(userDataDir);
+    this.settings = new Settings(userDataDir, this.credentials);
     this.events = new EventLog(this.db);
     this.skills = new SkillRegistry(this.db, this.events, undefined, () =>
       this.emit('skills', this.skills.list(null)),
@@ -151,6 +189,7 @@ export class Service {
       this.settings,
       this.db,
       this.skills,
+      (run, inner) => this.sandboxEnv(run, inner),
     );
     this.improvements = new ImprovementStore(this.db);
     this.history = new HistoryIndex(
@@ -176,23 +215,55 @@ export class Service {
       onCorrection: (scopeId) =>
         this.triggerMemory(scopeId, 'user-correction', { force: true }),
     });
+    this.codex = new CodexRuntime(this.db, {
+      sandboxProfile: (run) => this.codexSandboxProfile(run),
+      onUsage: (runId, usage) => {
+        const run = this.db.getRun(runId);
+        this.events?.record({
+          id: `run:${runId}:usage:${randomUUID()}`,
+          type: 'run.usage',
+          actor: 'system',
+          scopeId: run?.projectId ?? '',
+          runId,
+          summary: `codex usage: ${JSON.stringify(usage)}`,
+          payload: { usage },
+        });
+      },
+      // Non-blocking: the notice is queued, the resume does not wait for it.
+      onAutoResume: (run) => {
+        this.db.queueNotification({
+          id: `run:${run.id}:attempt:${run.attempt}:auto-resume`,
+          scopeId: run.projectId,
+          conversationId: run.chiefConversationId,
+          content: `[run ${run.id} resumed]\nThe service restarted while this codex worker ran. Attempt ${run.attempt} resumed automatically from its session (one automatic resume per attempt); the original deadline still applies.`,
+        });
+        void this.outbox.request();
+      },
+    });
     this.runs = new RunOrchestrator(
       this.db,
       this.scopes,
-      this.agents,
+      {
+        pi: this.agents,
+        codex: this.codex,
+      },
       userDataDir,
       emit,
       () => this.outbox.request(),
       this.events,
       (area, error, context) => this.reportIssue(area, error, context),
       this.skills,
+      {
+        limits: () => this.settings.workerLimits(),
+        resolveChoice: (input, project) =>
+          this.resolveWorkerChoice(input, project),
+      },
     );
     this.goals = new GoalStore(this.db);
     this.scheduler = new GoalScheduler({
       db: this.db,
       goals: this.goals,
-      ensureGoalConversation: (goalId, scopeId) =>
-        this.ensureGoalConversation(goalId, scopeId),
+      ensureGoalConversation: (goalId) => this.ensureGoalConversation(goalId),
       notify: () => this.outbox.request(),
       isPaused: () => this.closing || this.maintenanceMode,
       reportIssue: (area, error, context) =>
@@ -214,21 +285,19 @@ export class Service {
         currentInput: (conversationId) => this.currentInput(conversationId),
         goals: this.goals,
         improvements: this.improvements,
-        openGoalConversation: (goalId, scopeId) =>
-          this.ensureGoalConversation(goalId, scopeId),
+        openGoalConversation: (goalId) => this.ensureGoalConversation(goalId),
         emitUpdates: () => this.emitUpdates(),
         emitImprovements: () => this.emitImprovements(),
         emitNotices: () => this.emit('notices', this.goals.listNotices(null)),
         onTaskCompleted: (scopeId) =>
           this.triggerMemory(scopeId, 'task-completed'),
-        ...this.runToolDeps('chief'),
+        ...this.sharedRunDeps(),
         delegateToManager: (input) => this.managerLink.delegate(input),
         sendManagerMessage: (input) => this.managerLink.send(input),
         managerMessages: (projectId) => this.data.managerMessages(projectId),
       }),
       workerExtension({
         db: this.db,
-        scopes: this.scopes,
         wake: async (notification) => {
           this.outbox.queue(notification);
           await this.outbox.request();
@@ -245,15 +314,18 @@ export class Service {
         emitUpdates: () => this.emitUpdates(),
         onTaskCompleted: (scopeId) =>
           this.triggerMemory(scopeId, 'task-completed'),
-        ...this.runToolDeps('manager'),
+        ...this.runToolDeps(),
         wakeChief: async (projectId, content, notificationId, taskId) => {
           this.outbox.queue({
             id: notificationId,
             scopeId: projectId,
             // Routed per task: its reportTo, else the latest delegated
-            // task's reportTo, else the scope fallback (latest chief
-            // conversation).
-            conversationId: this.data.managerReportTarget(projectId, taskId),
+            // task's reportTo, else the latest chief conversation (the
+            // project-scope fallback cannot apply — a project scope holds
+            // only its manager).
+            conversationId:
+              this.data.managerReportTarget(projectId, taskId) ??
+              (await this.chiefConversationId()),
             content,
           });
           await this.outbox.request();
@@ -317,6 +389,7 @@ export class Service {
       db: this.db,
       scopes: this.scopes,
       openSession: (binding) => this.openSession(binding),
+      openManager: (projectId) => this.openManager(projectId),
       submit: async (conversationId, content, requestId) => {
         await this.submit(conversationId, content, requestId);
       },
@@ -446,6 +519,9 @@ export class Service {
     await Promise.all([...this.watches.values()].map((watch) => watch.stop()));
     this.watches.clear();
     await this.agents.close();
+    // External workers are child processes, not durable: kill them so the
+    // collectors settle; the next start resumes them automatically.
+    await this.codex.close();
     await this.runs.join();
     this.db.close();
   }
@@ -468,10 +544,16 @@ export class Service {
           settings: {
             autoLand: project.autoLand === 1,
             allowInPlace: project.allowInPlace === 1,
-            agentKind: 'durable-worker',
+            defaultIntent: project.defaultIntent,
             runTimeoutMin: project.runTimeoutMin,
             baseBranch: project.baseBranch,
             promptPreamble: project.promptPreamble,
+            managerModel: project.managerModel,
+            sandboxMode:
+              project.sandboxMode === 'off' ? 'off' : 'workspace-write',
+            sandboxNetwork: project.sandboxNetwork === 1,
+            sandboxExtraWrite: project.sandboxExtraWrite,
+            sandboxAllowRead: project.sandboxAllowRead,
           },
         }),
       ),
@@ -509,7 +591,6 @@ export class Service {
       rootPath: root,
       autoLand: 0,
       allowInPlace: 0,
-      agentKind: 'durable-worker',
       runTimeoutMin: 0,
       baseBranch: 'main',
       promptPreamble: '',
@@ -549,6 +630,10 @@ export class Service {
         )
     )
       throw new Error('Project name and directory must be unique');
+    if (patch.managerModel !== undefined && patch.managerModel?.trim())
+      this.assertManagerModelRef(patch.managerModel.trim());
+    if (patch.defaultIntent !== undefined && patch.defaultIntent?.trim())
+      this.settings.assertIntent(patch.defaultIntent.trim());
     this.stopInbox(id);
     this.scopes.forget(id);
     this.db.updateProject(id, {
@@ -557,6 +642,16 @@ export class Service {
       rootPath,
       // A manager is always named (D18): a blank rename keeps the old name.
       managerName: patch.managerName?.trim() || existing.managerName,
+      // '' clears the project-level manager model override (D21).
+      managerModel:
+        patch.managerModel === undefined
+          ? existing.managerModel
+          : patch.managerModel?.trim() || null,
+      // '' clears the project's default worker Intent (M6).
+      defaultIntent:
+        patch.defaultIntent === undefined
+          ? existing.defaultIntent
+          : patch.defaultIntent?.trim() || null,
       autoLand:
         patch.autoLand === undefined
           ? existing.autoLand
@@ -565,6 +660,15 @@ export class Service {
         patch.allowInPlace === undefined
           ? existing.allowInPlace
           : Number(patch.allowInPlace),
+      sandboxMode: patch.sandboxMode ?? existing.sandboxMode,
+      sandboxNetwork:
+        patch.sandboxNetwork === undefined
+          ? existing.sandboxNetwork
+          : Number(patch.sandboxNetwork),
+      sandboxExtraWrite:
+        patch.sandboxExtraWrite?.trim() ?? existing.sandboxExtraWrite,
+      sandboxAllowRead:
+        patch.sandboxAllowRead?.trim() ?? existing.sandboxAllowRead,
     });
     const cwd = this.scopes.ensureDirs(id);
     await Promise.all(
@@ -579,9 +683,27 @@ export class Service {
     );
     this.watchInbox(id);
     this.scanInbox(id);
+    if (patch.managerModel !== undefined) {
+      const manager = this.db.managerConversation(id);
+      if (manager)
+        await (
+          await this.agents.conversation(manager.conversationId)
+        ).configure({ model: this.managerModelFor(id) }, BACKGROUND_CONTEXT);
+    }
     const scopes = this.listScopes();
     this.emit('scopes', scopes);
     return scopes;
+  }
+
+  private assertManagerModelRef(ref: string): void {
+    const index = ref.indexOf(':');
+    if (index <= 0 || !ref.slice(index + 1).trim())
+      throw new Error("Manager model must be 'provider:model'");
+    const provider = ref.slice(0, index);
+    const config = this.settings
+      .providers()
+      .find((entry) => entry.id === provider);
+    if (!config?.enabled) throw new Error(`Unknown provider '${provider}'`);
   }
   async removeProject(id: string): Promise<ScopeInfo[]> {
     if (this.db.projectHasRuns(id))
@@ -620,9 +742,12 @@ export class Service {
     return this.db.listConversations();
   }
   async createConversation(scopeId: string, manager = false) {
+    // A project scope holds only its manager and workers (M6): asking for a
+    // conversation in a project opens the manager instead.
+    if (!manager && scopeId !== GLOBAL_SCOPE) return this.openManager(scopeId);
     const cwd = this.scopes.ensureDirs(scopeId);
     const conversation = manager
-      ? await this.agents.createManager(cwd)
+      ? await this.agents.createManager(cwd, this.managerModelFor(scopeId))
       : await this.agents.createChief(cwd);
     const result = this.db.mapConversation(String(conversation.id), scopeId);
     this.emit('conversations', this.listConversations());
@@ -633,6 +758,12 @@ export class Service {
     // created internally through ManagerLink.
     if (binding.channel === 'manager')
       throw new Error('channel "manager" is reserved');
+    // A project scope holds only its manager (M6); every other channel
+    // binding lives in the Global scope.
+    if (binding.scopeId !== GLOBAL_SCOPE)
+      throw new Error(
+        'a project scope holds only its manager conversation — use openManager',
+      );
     return this.openBoundSession(binding);
   }
 
@@ -833,7 +964,7 @@ export class Service {
           id: `inbox:${scopeId}:${message.id}`,
           scopeId,
           conversationId: null,
-          content: `[inbox message ${message.id} from ${message.from}]\n${message.body.slice(0, 12_000)}\nRead with check_inbox and tell Tian what came in.`,
+          content: `[inbox message ${message.id} from ${message.from}]\n${message.body.slice(0, 12_000)}\nRead with check_inbox and act on it.`,
         })
       )
         changed = true;
@@ -916,18 +1047,328 @@ export class Service {
     this.emit('settings', this.settings.get());
     return catalog;
   }
-  async setModel(model: SettingsInfo['model']): Promise<void> {
-    this.settings.setModel(model);
+  /**
+   * The model a conversation runs on: managers use their project's override
+   * or the default Manager model (D21), every other conversation the Chief
+   * model.
+   */
+  private managerModelFor(projectId: string): SettingsInfo['model'] {
+    const ref = this.db.getProject(projectId)?.managerModel?.trim();
+    if (ref) {
+      const index = ref.indexOf(':');
+      if (index > 0) {
+        const provider = ref.slice(0, index);
+        const modelId = ref.slice(index + 1);
+        if (this.settings.providerIds().has(provider) && modelId)
+          return { provider, modelId };
+      }
+    }
+    return this.settings.managerModel();
+  }
+
+  private conversationModel(conversationId: string): SettingsInfo['model'] {
+    const projectId = this.db.managerProjectId(conversationId);
+    return projectId
+      ? this.managerModelFor(projectId)
+      : this.settings.get().model;
+  }
+
+  /** Push each conversation's effective model onto the live harness. */
+  private async applyConversationModels(): Promise<void> {
     await Promise.all(
       this.db
         .listConversations()
         .map(async (conversation) =>
           (
             await this.agents.conversation(conversation.conversationId)
-          ).configure({ model }, BACKGROUND_CONTEXT),
+          ).configure(
+            { model: this.conversationModel(conversation.conversationId) },
+            BACKGROUND_CONTEXT,
+          ),
         ),
     );
+  }
+
+  async setModel(model: SettingsInfo['model']): Promise<void> {
+    this.settings.setModel(model);
+    await this.applyConversationModels();
     this.emit('settings', this.settings.get());
+  }
+
+  async setManagerModel(model: SettingsInfo['model'] | null): Promise<void> {
+    this.settings.setManagerModel(model);
+    await this.applyConversationModels();
+    this.emit('settings', this.settings.get());
+  }
+
+  /** Worker runtimes, concurrency limits and intents (M6). */
+  /** `<dataDir>/sandbox/<runId>.sb` — kept for audit; unreadable to workers. */
+  private get sandboxDir(): string {
+    return join(this.userDataDir, 'sandbox');
+  }
+
+  /**
+   * The Seatbelt spec for one Run, or null when its project opted out.
+   * Throws (fail closed) when the sandbox is required but unavailable.
+   */
+  private sandboxSpec(run: RunRow): SandboxSpec | null {
+    const project = this.db.getProject(run.projectId);
+    if (project?.sandboxMode !== 'workspace-write') return null;
+    if (!sandboxAvailable())
+      throw new Error(
+        'sandbox-exec is unavailable; the project requires the Seatbelt sandbox',
+      );
+    const workRoot = realpathSync(run.worktreePath ?? run.rootPath);
+    return {
+      runId: run.id,
+      workRoot,
+      gitDir: worktreeGitDir(workRoot),
+      dataDir: this.userDataDir,
+      socketPath: this.options.socketPath ?? null,
+      network: project.sandboxNetwork === 1,
+      extraWrite: pathLines(project.sandboxExtraWrite),
+      allowRead: pathLines(project.sandboxAllowRead),
+    };
+  }
+
+  /** AgentRuntime hook: wrap a worker conversation's env when required. */
+  private sandboxEnv(run: RunRow, inner: ExecutionEnv): ExecutionEnv {
+    const spec = this.sandboxSpec(run);
+    if (!spec) return inner;
+    return new SandboxedExecutionEnv(
+      inner,
+      spec,
+      writeProfile(spec, this.sandboxDir),
+    );
+  }
+
+  /**
+   * CodexRuntime hook: the per-Run profile for a sandboxed project. Codex
+   * keeps its state dir writable — sessions, logs, auth refresh, and the
+   * app-server socket live under $CODEX_HOME (verified: a bare `sessions`
+   * allow breaks startup) — but its configuration and instructions stay
+   * read-only, so a run cannot rewrite the policy of later runs.
+   */
+  private codexSandboxProfile(run: RunRow): string | null {
+    const spec = this.sandboxSpec(run);
+    if (!spec) return null;
+    const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex');
+    spec.extraWrite.push(codexHome);
+    spec.readOnly = CODEX_CONFIG_FILES.map((file) => join(codexHome, file));
+    return writeProfile(spec, this.sandboxDir);
+  }
+
+  /** Whether an external runtime's CLI is installed and signed in right now. */
+  async runtimeStatus(id: string): Promise<RuntimeStatusInfo> {
+    if (id === 'pi')
+      return { id, installed: true, signedIn: null, detail: 'built in' };
+    if (id === 'codex') return { id, ...(await this.codex.probe()) };
+    throw new Error(`Unknown runtime '${id}'`);
+  }
+
+  /**
+   * Store the worker block. An external runtime that is switched on here
+   * must pass its installed-and-signed-in check first (D21).
+   */
+  async setWorkers(workers: WorkerSettingsInfo): Promise<void> {
+    const enabled = this.settings.enabledRuntimes();
+    for (const runtime of workers.runtimes) {
+      if (runtime.id === 'pi' || !runtime.enabled || enabled.has(runtime.id))
+        continue;
+      const status = await this.runtimeStatus(runtime.id);
+      if (!status.installed)
+        throw new Error(
+          `Runtime '${runtime.id}' is not installed: ${status.detail}`,
+        );
+      if (!status.signedIn)
+        throw new Error(`Runtime '${runtime.id}': sign-in required`);
+    }
+    this.settings.setWorkers(workers);
+    this.emit('settings', this.settings.get());
+  }
+
+  /** pi-ai built-in provider ids for the add-provider form (D21). */
+  builtinProviderOptions(): {
+    id: string;
+    name: string;
+    oauth: boolean;
+  }[] {
+    return builtinProviders().map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      oauth: Boolean(provider.auth?.oauth),
+    }));
+  }
+
+  /** Providers with credential metadata — never the secret itself (D21). */
+  async listProviders(): Promise<ProviderInfo[]> {
+    const credentials = await this.settings.providerInfos();
+    const oauth = new Set(
+      builtinProviders()
+        .filter((provider) => provider.auth?.oauth)
+        .map((provider) => provider.id),
+    );
+    return this.settings.providers().map((config) => {
+      const credential = credentials.get(config.id);
+      return {
+        ...config,
+        enabled: config.enabled ?? true,
+        models: this.settings.catalogFor(config.id),
+        hasKey: credential?.hasKey ?? false,
+        keyTail: credential?.keyTail,
+        credentialType: credential?.type as 'api_key' | 'oauth' | undefined,
+        oauth:
+          config.kind === 'builtin' && oauth.has(config.builtinId ?? config.id),
+      };
+    });
+  }
+
+  private async providersChanged(): Promise<void> {
+    this.agents.refreshModels();
+    this.emit('settings', this.settings.get());
+    this.emit('providers', await this.listProviders());
+  }
+
+  async addProvider(config: ProviderConfig): Promise<ProviderInfo[]> {
+    this.settings.addProvider(config);
+    await this.providersChanged();
+    return this.listProviders();
+  }
+
+  async updateProvider(
+    id: string,
+    config: ProviderConfig,
+  ): Promise<ProviderInfo[]> {
+    this.settings.updateProvider(id, config);
+    await this.providersChanged();
+    return this.listProviders();
+  }
+
+  async removeProvider(id: string): Promise<ProviderInfo[]> {
+    await this.settings.removeProvider(id);
+    await this.providersChanged();
+    return this.listProviders();
+  }
+
+  async setProviderKey(id: string, key: string): Promise<ProviderInfo[]> {
+    const trimmed = key.trim();
+    if (!trimmed) throw new Error('Empty API key');
+    if (!this.settings.providerIds().has(id))
+      throw new Error(`Unknown provider '${id}'`);
+    await this.credentials.modify(id, async () => ({
+      type: 'api_key',
+      key: trimmed,
+    }));
+    await this.providersChanged();
+    return this.listProviders();
+  }
+
+  async deleteProviderKey(id: string): Promise<ProviderInfo[]> {
+    await this.credentials.delete(id);
+    await this.providersChanged();
+    return this.listProviders();
+  }
+
+  /**
+   * OAuth login through pi-ai: notify events and interactive prompts stream
+   * to the renderer as 'providerLogin' events; answers come back through
+   * `providerLoginAnswer`, `providerLoginCancel` aborts.
+   */
+  async providerLogin(providerId: string): Promise<ProviderInfo[]> {
+    const config = this.settings
+      .providers()
+      .find((entry) => entry.id === providerId && entry.enabled);
+    if (!config) throw new Error(`Unknown provider '${providerId}'`);
+    if (config.kind !== 'builtin')
+      throw new Error(
+        `Provider '${providerId}' has no OAuth login — set an API key`,
+      );
+    const controller = new AbortController();
+    this.loginAborts.set(providerId, controller);
+    const emit = (event: ProviderLoginEvent['event']) =>
+      this.emit('providerLogin', { providerId, event });
+    try {
+      await this.settings.models().login(providerId, 'oauth', {
+        signal: controller.signal,
+        prompt: (prompt) =>
+          new Promise<string>((resolve, reject) => {
+            const promptId = `${providerId}:${++this.promptSeq}`;
+            this.loginPrompts.set(promptId, { resolve, reject });
+            emit({
+              type: 'prompt',
+              promptId,
+              message: prompt.message,
+              secret: prompt.type === 'secret',
+              placeholder:
+                'placeholder' in prompt ? prompt.placeholder : undefined,
+              options:
+                prompt.type === 'select'
+                  ? prompt.options.map((option) => ({
+                      id: option.id,
+                      label: option.label,
+                    }))
+                  : undefined,
+            });
+          }),
+        notify: (event) => {
+          if (event.type === 'auth_url')
+            emit({
+              type: 'auth_url',
+              url: event.url,
+              instructions: event.instructions,
+            });
+          else if (event.type === 'device_code')
+            emit({
+              type: 'device_code',
+              userCode: event.userCode,
+              verificationUri: event.verificationUri,
+              expiresInSeconds: event.expiresInSeconds,
+            });
+          else
+            emit({
+              type: event.type === 'info' ? 'info' : 'progress',
+              message: event.message,
+            });
+        },
+      });
+      emit({ type: 'done' });
+    } catch (error) {
+      emit({
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    } finally {
+      this.loginAborts.delete(providerId);
+      for (const [key, pending] of this.loginPrompts)
+        if (key.startsWith(`${providerId}:`)) {
+          pending.reject(new Error('Login ended'));
+          this.loginPrompts.delete(key);
+        }
+      await this.providersChanged();
+    }
+    return this.listProviders();
+  }
+
+  providerLoginAnswer(
+    providerId: string,
+    promptId: string,
+    answer: string,
+  ): void {
+    const pending = this.loginPrompts.get(promptId);
+    if (!pending || !promptId.startsWith(`${providerId}:`))
+      throw new Error('No pending login prompt');
+    this.loginPrompts.delete(promptId);
+    pending.resolve(answer);
+  }
+
+  providerLoginCancel(providerId: string): void {
+    this.loginAborts.get(providerId)?.abort();
+    for (const [key, pending] of this.loginPrompts)
+      if (key.startsWith(`${providerId}:`)) {
+        pending.reject(new Error('Login cancelled'));
+        this.loginPrompts.delete(key);
+      }
   }
   taskList(scopeId: string | null) {
     return this.db.listTasks(scopeId);
@@ -1051,15 +1492,22 @@ export class Service {
     this.emit('improvements', this.improvements.list());
   }
 
+  /** The Global chief conversation untargeted wakes may fall back to. */
+  private async chiefConversationId(): Promise<string> {
+    return (
+      this.db.latestConversation(GLOBAL_SCOPE)?.conversationId ??
+      (await this.createConversation(GLOBAL_SCOPE)).conversationId
+    );
+  }
+
   /** The goal's dedicated chief conversation, created once per goal. */
-  private async ensureGoalConversation(
-    goalId: string,
-    scopeId: string,
-  ): Promise<string> {
+  private async ensureGoalConversation(goalId: string): Promise<string> {
+    // Goals belong to the chief: their conversations live in the Global
+    // scope also when the goal's work concerns a project (M6).
     const conversation = await this.openSession({
       channel: 'goal',
       externalId: goalId,
-      scopeId,
+      scopeId: GLOBAL_SCOPE,
     });
     this.goals.setGoalConversation(goalId, conversation.conversationId);
     return conversation.conversationId;
@@ -1097,7 +1545,7 @@ export class Service {
       constraints,
       maxRunsPerDay,
     });
-    await this.ensureGoalConversation(goal.id, scopeId);
+    await this.ensureGoalConversation(goal.id);
     this.emitUpdates();
     return this.goals.getGoal(goal.id)!;
   }
@@ -1337,50 +1785,122 @@ export class Service {
   skillRollback(id: string, reason: string | null) {
     return this.skills.rollback(id, reason);
   }
-  /**
-   * The run-related deps the chief and manager extensions share; `actor`
-   * marks who issued a stop so the run's record names the right agent.
-   */
-  private runToolDeps(actor: 'chief' | 'manager') {
+  /** The read-only run deps the chief keeps for oversight. */
+  private sharedRunDeps() {
     return {
-      dispatch: (input: DispatchInput) => this.dispatchRun(input),
       runReport: (id: string) => this.runs.report(id),
       runDiff: (id: string) => this.runs.diff(id),
       runProgress: (id: string) => this.runs.progress(id),
-      stopRun: (id: string, reason?: string) =>
-        this.runs.stop(id, { reason, actor, strict: true }),
-      sendRunMessage: (runId: string, body: string, operationId: string) =>
-        this.data.sendRunMessage(runId, body, operationId),
       runMessages: (runId: string) => this.data.runMessages(runId),
-      workerModels: () =>
-        workerModelChoices(
-          this.settings.catalogState().models,
-          this.settings.get().model.modelId,
-        ),
       history: {
         db: this.db,
         events: this.events,
         history: this.history,
       },
-    } satisfies Pick<ChiefDeps, SharedToolDeps> &
-      Pick<ManagerDeps, SharedToolDeps>;
+    } satisfies Pick<ChiefDeps, ChiefRunDeps> & Pick<ManagerDeps, ChiefRunDeps>;
+  }
+
+  /** The full run surface — only the manager extension wires it (M6). */
+  private runToolDeps() {
+    return {
+      dispatch: (input: DispatchInput) => this.dispatchRun(input),
+      ...this.sharedRunDeps(),
+      stopRun: (id: string, reason?: string) =>
+        this.runs.stop(id, { reason, actor: 'manager', strict: true }),
+      sendRunMessage: (runId: string, body: string, operationId: string) =>
+        this.data.sendRunMessage(runId, body, operationId),
+      workerModels: () =>
+        workerModelChoices(
+          this.settings.workerCatalogs(),
+          this.settings.get().model,
+        ),
+      workerIntents: () => this.settings.workerSettings().intents,
+    } satisfies Pick<
+      ManagerDeps,
+      | 'dispatch'
+      | 'stopRun'
+      | 'sendRunMessage'
+      | 'workerModels'
+      | 'workerIntents'
+      | ChiefRunDeps
+    >;
   }
 
   /**
-   * Every dispatch path lands here (chief and manager tools alike): a pinned
-   * model / thinking level is validated against the catalog before the run
-   * exists — bad ids must never create a run.
+   * Turn a dispatch's worker choice into the stored runtime/model/thinking
+   * triple (M6, D13). An `intent` is mutually exclusive with explicit
+   * runtime/model pins; with neither, the project's default intent applies,
+   * falling back to pi with the app-wide model. Pi models validate against
+   * the provider catalogs — bad ids must never create a run.
+   */
+  private resolveWorkerChoice(
+    input: DispatchInput,
+    project: { defaultIntent: string | null },
+  ): WorkerChoice {
+    const explicit =
+      input.runtime?.trim() ||
+      input.model?.trim() ||
+      input.thinkingLevel?.trim();
+    if (input.intent?.trim() && explicit)
+      throw new Error(
+        'intent is mutually exclusive with runtime/model/thinking_level — pass one or the other',
+      );
+    const intentName = input.intent?.trim() || project.defaultIntent;
+    if (intentName) {
+      const intent = this.settings.assertIntent(intentName);
+      if (!this.settings.enabledRuntimes().has(intent.runtime))
+        throw new Error(
+          `intent '${intentName}' uses runtime '${intent.runtime}', which is not enabled`,
+        );
+      if (intent.runtime === 'pi')
+        return {
+          runtime: 'pi',
+          ...resolveWorkerSpec(
+            this.settings.workerCatalogs(),
+            this.settings.get().model,
+            intent.model,
+            intent.thinkingLevel,
+          ),
+        };
+      return {
+        runtime: intent.runtime,
+        model: intent.model ?? null,
+        thinkingLevel: intent.thinkingLevel ?? null,
+      };
+    }
+    const runtime = input.runtime?.trim() || 'pi';
+    if (!this.settings.enabledRuntimes().has(runtime))
+      throw new Error(`Worker runtime '${runtime}' is not enabled`);
+    if (runtime === 'pi')
+      return {
+        runtime,
+        ...resolveWorkerSpec(
+          this.settings.workerCatalogs(),
+          this.settings.get().model,
+          input.model,
+          input.thinkingLevel,
+        ),
+      };
+    return {
+      runtime,
+      model: input.model?.trim() || null,
+      thinkingLevel: input.thinkingLevel?.trim() || null,
+    };
+  }
+
+  /**
+   * Every dispatch lands here: intent/explicit/default resolution validates
+   * the worker choice before the run exists — bad ids must never create a
+   * run. Only a project manager may dispatch (M6), so the supervising
+   * conversation must be a manager conversation.
    */
   dispatchRun(input: DispatchInput) {
-    return this.runs.dispatch({
-      ...input,
-      ...resolveWorkerSpec(
-        this.settings.catalogState().models,
-        this.settings.get().model.modelId,
-        input.model,
-        input.thinkingLevel,
-      ),
-    });
+    if (
+      !input.chiefConversationId ||
+      !this.db.isManagerConversation(input.chiefConversationId)
+    )
+      throw new Error('only a project manager dispatches workers');
+    return this.runs.dispatch(input);
   }
   followUpRun(id: string, prompt: string) {
     return this.runs.followUp(id, prompt);

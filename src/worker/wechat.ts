@@ -7,7 +7,7 @@ import {
   type IncomingMessage,
   type QrLoginCallbacks,
 } from '@wechatbot/wechatbot';
-import type { WechatStatus } from '../shared/types.js';
+import type { ConversationInfo, WechatStatus } from '../shared/types.js';
 import { GLOBAL_SCOPE } from './scopes.js';
 import { assistantText, type ChannelHost } from './channel-host.js';
 import type { IssueContext } from './improvements.js';
@@ -343,13 +343,26 @@ export class WechatAdapter {
   ): Promise<void> {
     const scopeId = this.userScope(userId) ?? GLOBAL_SCOPE;
     this.bindUser(userId, scopeId);
-    const conversation = await this.host.openSession({
-      channel: WECHAT_CHANNEL,
-      externalId: userId,
-      scopeId,
-    });
+    const conversation = await this.scopeConversation(userId, scopeId);
     await this.attachWatch(userId, conversation.conversationId);
     await this.host.submit(conversation.conversationId, text, requestId);
+  }
+
+  /**
+   * The conversation a user's scope routes to (M6): a project scope is the
+   * manager's line; Global keeps its own chief conversation.
+   */
+  private async scopeConversation(
+    userId: string,
+    scopeId: string,
+  ): Promise<ConversationInfo> {
+    if (scopeId === GLOBAL_SCOPE)
+      return this.host.openSession({
+        channel: WECHAT_CHANNEL,
+        externalId: userId,
+        scopeId,
+      });
+    return this.host.openManager(scopeId);
   }
 
   private async handleCommand(userId: string, text: string): Promise<void> {
@@ -386,13 +399,10 @@ export class WechatAdapter {
         ? GLOBAL_SCOPE
         : (this.host.db.projectByName(arg) ?? this.host.db.getProject(arg))!.id;
     this.bindUser(userId, scopeId);
-    const conversation = await this.host.openSession({
-      channel: WECHAT_CHANNEL,
-      externalId: userId,
-      scopeId,
-    });
+    const conversation = await this.scopeConversation(userId, scopeId);
     await this.attachWatch(userId, conversation.conversationId);
-    return `已切换到 scope：${this.scopeLabel(scopeId)}`;
+    const manager = this.host.db.getProject(scopeId)?.managerName;
+    return `已切换到 scope：${this.scopeLabel(scopeId)}${manager ? `（项目管理者 ${manager}）` : ''}`;
   }
 
   private statusCommand(userId: string): string {
@@ -739,21 +749,29 @@ export class WechatAdapter {
 
   private listUsers(): UserRow[] {
     const rows = this.host.db.sqlite
-      .prepare(
-        `SELECT u.user_id, u.scope_id, s.conversation_id FROM wechat_users u
-         JOIN channel_sessions s ON s.channel = 'wechat' AND s.external_id = u.user_id AND s.scope_id = u.scope_id
-         ORDER BY u.user_id`,
-      )
-      .all() as {
-      user_id: string;
-      scope_id: string;
-      conversation_id: string;
-    }[];
-    return rows.map((row) => ({
-      userId: row.user_id,
-      scopeId: row.scope_id,
-      conversationId: row.conversation_id,
-    }));
+      .prepare(`SELECT user_id, scope_id FROM wechat_users ORDER BY user_id`)
+      .all() as { user_id: string; scope_id: string }[];
+    // A project-scoped user talks to the manager conversation (M6); Global
+    // keeps its own channel binding. Both may not exist yet — skip them.
+    return rows.flatMap((row) => {
+      const conversationId =
+        row.scope_id === GLOBAL_SCOPE
+          ? this.host.db.channelSession({
+              channel: WECHAT_CHANNEL,
+              externalId: row.user_id,
+              scopeId: GLOBAL_SCOPE,
+            })?.conversationId
+          : this.host.db.managerConversation(row.scope_id)?.conversationId;
+      return conversationId
+        ? [
+            {
+              userId: row.user_id,
+              scopeId: row.scope_id,
+              conversationId,
+            },
+          ]
+        : [];
+    });
   }
 
   private loadCursor(conversationId: string): number {

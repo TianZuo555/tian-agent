@@ -24,7 +24,7 @@ Seatbelt 是 macOS 内核沙箱。`sandbox-exec` 先给自身进程套上规则�
 | 容器（Docker、Apple container）          | macOS 上需 Linux 虚拟机 | 数百 MB 起         | 否决：耗内存，且 Linux 里跑不了 macOS 工具链   |
 | macOS 虚拟机（Virtualization.framework） | 完整客户机系统          | 数 GB              | 否决：耗内存，且每台主机最多 2 个 macOS 客户机 |
 
-2026-10-25 实测：常驻服务 RSS 约 30 MB（16 个会话）；Magpie 约 318 MB，其 plugin host 约 348 MB，由所有工兵共用。工兵是服务进程里的一个 Pi 会话，不是独立进程。同时开 8–10 个工兵时，内存压力来自它们跑的命令（`pnpm install`、`tsc`、构建、测试、dev server），Seatbelt 不改变这部分开销。控制内存靠全局 attempt 上限（`src/worker/runs.ts` 的 `MAX_ACTIVE_ATTEMPTS`），不靠沙箱。
+2026-10-25 实测：常驻服务 RSS 约 30 MB（16 个会话）；Magpie 约 318 MB，其 plugin host 约 348 MB，由所有工兵共用。工兵是服务进程里的一个 Pi 会话，不是独立进程。同时开 8–10 个工兵时，内存压力来自它们跑的命令（`pnpm install`、`tsc`、构建、测试、dev server），Seatbelt 不改变这部分开销。控制内存靠全局 attempt 上限（Settings → 工兵，默认 3），不靠沙箱。
 
 先例：Bazel 在 macOS 上用 `sandbox-exec` 并发执行大量构建动作，规则写法与第 4 节相同；Codex CLI 与 Claude Code 在 macOS 上也用 Seatbelt。
 
@@ -70,7 +70,7 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 | `sandboxExtraWrite` | 绝对路径，每行一个                 | 空                        |
 | `sandboxAllowRead`  | 从禁读列表中移除的路径             | 空                        |
 
-需要：`projects` 新列（经现有升级事务提升 `DATABASE_VERSION`）、`src/shared/contracts.ts` 的 `updateProject` patch schema、`src/shared/types.ts` 的 `ProjectSettings`、`ProjectSettingsDialog.tsx`，以及 `en.ts` / `zh.ts` 的 i18n key。
+需要：`projects` 新列（提升 `DATABASE_VERSION`；数据库先快照再重建）、`src/shared/contracts.ts` 的 `updateProject` patch schema、`src/shared/types.ts` 的 `ProjectSettings`、`ProjectSettingsDialog.tsx`，以及 `en.ts` / `zh.ts` 的 i18n key。
 
 ### 3.7 失败即拒绝（fail closed）
 
@@ -109,7 +109,8 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 (allow file-write*
   (subpath "<workRoot>")                ; worktree；in-place Run 为 rootPath
   (subpath "<worktreeGitDir>")          ; <repo>/.git/worktrees/<runId>：index 与锁文件
-  (subpath "<tmpDir>")                  ; 规范化后的 $TMPDIR（/private/var/folders/...）
+  (subpath "<tmpDir>")                  ; 规范化后的 $TMPDIR（/private/var/folders/.../T）
+  (subpath "<userCacheDir>")            ; $TMPDIR 的同级 C 目录：clang/swift 模块缓存
   (subpath "/private/tmp")
   (subpath "<home>/Library/Caches")
   (subpath "<home>/.cache")
@@ -120,6 +121,7 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
   (subpath "<home>/.cargo/registry")
   (subpath "<home>/go/pkg/mod")
   (subpath "<home>/Library/Developer/Xcode/DerivedData")
+  (subpath "<home>/Library/org.swift.swiftpm")
   ; 以及 sandboxExtraWrite 中的每个路径
   (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty")
   (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))
@@ -137,14 +139,44 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 
 ## 5. 待验证的已知不兼容
 
-- **嵌套沙箱**：已在沙箱中的进程不能再套一层 Seatbelt。SwiftPM 用 `sandbox-exec` 解析 `Package.swift`，所以 `swift build` 可能需要 `--disable-sandbox`；`xcodebuild` 同样需要检查。
+- **嵌套沙箱**：已验证——Seatbelt 内 `sandbox_apply` 一律失败，`(allow default)` 下也一样。SwiftPM 对 `Package.swift` 清单与插件求值套沙箱，所以裸 `swift build` 失败；`swift build --disable-sandbox` 在外层 profile 下构建正常。工兵指令已写明该旗标。`xcodebuild` 同样待查。
 - **基于 Chromium 的工具**（Electron、Playwright、Puppeteer）会启动自己的沙箱，在 Seatbelt 内可能需要 `--no-sandbox`。本仓库的 `pnpm test:runtime` 与 `pnpm test:app-upgrade` 都会启动 Electron。
 - **写到根目录以外的工具**：全局安装（`npm i -g`、`brew`）、装到自定义路径的 `mise install`、使用自定义缓存路径的 language server。解决办法是 `sandboxExtraWrite`，而不是放宽默认规则。
 - **私有 registry**：`~/.npmrc` 可能含 token，默认禁读；需要它的项目用 `sandboxAllowRead` 放行。
 
+## 5a. 实测开销与实机验证（2026-…）
+
+本机 100 次串行 `/usr/bin/true`：无沙箱 225 ms（约 2.3 ms/次），
+`sandbox-exec -f` 1 215 ms（约 12.2 ms/次）——每条命令约 10 ms 固定
+开销，对真实构建命令可忽略。
+
+内存：本仓库 10 个并行 `tsrs --noEmit` 类型检查（每个峰值 RSS 约
+560 MB），用 `/usr/bin/time -l` 的 `maximum resident set size` 求和，
+16 GB MacBook 上两种模式各测两轮：无沙箱 3 108 / 3 902 MB，沙箱
+3 503 / 3 298 MB。轮次之间的波动大于两种模式的差别：Seatbelt 不增加
+可测的内存。
+
+Codex 状态映射：`$CODEX_HOME`（默认 `~/.codex`）可写，其中的
+`config.toml`、`AGENTS.md`、`AGENTS.override.md` 在放行规则之后被禁止写入。
+在该 profile 下，`codex login status` 通过，
+`codex exec --sandbox danger-full-access resume <id>` 能启动 app-server 并
+进行到会话查找。随后在临时仓库中，同一 profile 下真实跑通一轮 `codex exec`
+和一轮 `codex exec … resume <id>`：两轮都通过 shell 命令写入 `hello.txt`，退出码为 0。
+
+真实 `codex exec` 在外层 profile 下（内层 `--sandbox
+danger-full-access`、`~/.codex` 整体可写）跑通一轮；app-server socket
+位于 `~/.codex` 根部，因此必须放行整个目录。
+
+真实模型 e2e（`mise run test:dispatch` / `tsx scripts/e2e-dispatch.mts`）：
+临时项目上派发的 Pi 工兵在 Seatbelt 下写出 `hello.txt`、生成报告、
+落地并唤醒总管。`--swift` 变体在真实 SwiftPM 包上同样端到端通过，
+工兵按指令使用了 `swift build --disable-sandbox`。为工具链补了两个默认可写根：
+`$TMPDIR` 同级的每用户 `C` 缓存目录（clang 模块缓存）与
+`~/Library/org.swift.swiftpm`。
+
 ## 6. 可观测性
 
-- 被拒的操作会在工具输出里报 `Operation not permitted`（EPERM）。在 `AgentRuntime.create` 的工兵指令里加一句："Writes outside the working directory fail with 'Operation not permitted' by design. Do not retry with sudo or another path. Ask the chief if the task needs that path."
+- 被拒的操作会在工具输出里报 `Operation not permitted`（EPERM）。在 `AgentRuntime.create` 的工兵指令里加一句："Writes outside the working directory fail with 'Operation not permitted' by design. Do not retry with sudo or another path. Ask the chief if the task needs that path. Toolchains that sandbox themselves (SwiftPM, xcodebuild) must run with their own sandbox off, e.g. `swift build --disable-sandbox`."
 - 在 `run.dispatched` 事件 payload 中记录沙箱模式、网络模式与规则文件路径，审查时能看出该 Run 是否在沙箱内运行。
 - 排查时用 `log stream --style compact --predicate 'sender == "Sandbox"'` 查看每次拒绝及其路径。
 
@@ -153,34 +185,34 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 ### 阶段 0：验证与环境变量清洗
 
 - [x] 清洗工兵子进程环境（3.5 节）。测试：工兵 `exec` 执行 `env`，输出中没有 `TELEGRAM_*`、`WECHAT_*`、`MAGPIE_*`、`TIAN_AGENT_*`。已完成：`agentShellEnv`。
-- [ ] 在 `src/worker/sandbox.ts` 实现规则生成（路径规范化与转义），对生成文本做单元测试。
-- [ ] 用仅限 macOS 的测试确认规则优先级（后写的 `allow` 覆盖先写的 `deny`）。
-- [ ] 测量：100 条短命令在有无 `sandbox-exec` 时的启动延迟；10 个并行沙箱构建与 10 个无沙箱构建的总 RSS。把数据记入本文档。
+- [x] 在 `src/worker/sandbox.ts` 实现规则生成（路径规范化与转义），对生成文本做单元测试。
+- [x] 用仅限 macOS 的测试确认规则优先级（后写的 `allow` 覆盖先写的 `deny`）。
+- [x] 测量：100 条短命令在有无 `sandbox-exec` 时的启动延迟；10 个并行沙箱构建与 10 个无沙箱构建的总 RSS。把数据记入本文档。
 
 ### 阶段 1：按项目手动开启
 
-- [ ] `SandboxedExecutionEnv`：字符串与 argv 命令的 `exec` 改写、文件方法的路径检查、清洗后的环境变量。
-- [ ] `AgentRuntime.open` 的 env 工厂：只给工兵会话（`db.runByConversation`）且项目设置为 `sandboxMode = workspace-write` 时套沙箱。
-- [ ] 在 `prepare` 阶段于 worktree 内用 `git rev-parse --path-format=absolute --git-dir` 解析 `<worktreeGitDir>`。
-- [ ] 项目设置、schema、迁移、设置对话框与 i18n（3.6 节）。
-- [ ] 启动自检与 fail-closed 的 Run 启动（3.7 节）。
-- [ ] 工兵指令新增的一句与 `run.dispatched` payload 字段（第 6 节）。
-- [ ] 仅限 macOS 的集成测试（其他平台跳过）：
-  - [ ] worktree 内写入成功；写 `rootPath` 返回 EPERM。
-  - [ ] 写 `$TMPDIR` 成功；读 `<dataDir>/service.env` 失败。
-  - [ ] argv `exec` 与字符串 `exec` 一样受沙箱约束。
-  - [ ] 根目录以外的 `writeFile` 被进程内检查拒绝，返回 `FileError`。
-  - [ ] `sandboxNetwork = off` 时，外部连接失败、localhost 连接成功。
-  - [ ] 无论网络设置如何，连接服务 socket 都失败。
-  - [ ] 停止 Run 时能杀掉沙箱内的整棵进程树。
-  - [ ] worktree 内 `git status` 正常；`git add` 失败。
+- [x] `SandboxedExecutionEnv`：字符串与 argv 命令的 `exec` 改写、文件方法的路径检查、清洗后的环境变量。
+- [x] `AgentRuntime.open` 的 env 工厂：只给工兵会话（`db.runByConversation`）且项目设置为 `sandboxMode = workspace-write` 时套沙箱。
+- [x] 在 `prepare` 阶段于 worktree 内用 `git rev-parse --path-format=absolute --git-dir` 解析 `<worktreeGitDir>`。
+- [x] 项目设置、schema、迁移、设置对话框与 i18n（3.6 节）。
+- [x] 启动自检与 fail-closed 的 Run 启动（3.7 节）。
+- [x] 工兵指令新增的一句与 `run.dispatched` payload 字段（第 6 节）。
+- [x] 仅限 macOS 的集成测试（其他平台跳过）：
+  - [x] worktree 内写入成功；写 `rootPath` 返回 EPERM。
+  - [x] 写 `$TMPDIR` 成功；读 `<dataDir>/service.env` 失败。
+  - [x] argv `exec` 与字符串 `exec` 一样受沙箱约束。
+  - [x] 根目录以外的 `writeFile` 被进程内检查拒绝，返回 `FileError`。
+  - [x] `sandboxNetwork = off` 时，外部连接失败、localhost 连接成功。
+  - [x] 无论网络设置如何，连接服务 socket 都失败。
+  - [x] 停止 Run 时能杀掉沙箱内的整棵进程树。
+  - [x] worktree 内 `git status` 正常；`git add` 失败（对象写进主仓库 `.git`，在可写根之外）。
 
 ### 阶段 2：新项目默认开启
 
-- [ ] 新项目默认 `sandboxMode = workspace-write`。
-- [ ] 用真实模型在本仓库和一个 Swift / Xcode 项目上跑一遍 `scripts/e2e-dispatch.mts` 手动检查，把结果更新到第 5 节。
+- [x] 新项目默认 `sandboxMode = workspace-write`。
+- [x] 用真实模型在本仓库和一个 Swift / Xcode 项目上跑一遍 `scripts/e2e-dispatch.mts` 手动检查，把结果更新到第 5 节。
 
 ### 阶段 3：所有项目默认开启
 
-- [ ] 把现有项目迁移为 `workspace-write`，并在项目设置中保留 `off` 作为显式选项。
-- [ ] 更新 [architecture.md](architecture.md#权限与-scope)（删掉"不提供操作系统文件访问沙箱"）、PRD §13 第 8 问，并在 [decisions.md](decisions.md) 新增一条决策（用下一个空号；D19 已是记忆证据决策）。所有改动同步到英文文档。
+- [x] 把现有项目迁移为 `workspace-write`，并在项目设置中保留 `off` 作为显式选项。
+- [x] 更新 [architecture.md](architecture.md#权限与-scope)（删掉"不提供操作系统文件访问沙箱"）、PRD §13 第 8 问，并在 [decisions.md](decisions.md) 新增一条决策（用下一个空号；D19 已是记忆证据决策）。所有改动同步到英文文档。

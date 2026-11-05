@@ -3,6 +3,7 @@ import type { EntryId } from '@earendil-works/pi-durable';
 import { GLOBAL_SCOPE } from './scopes.js';
 import { assistantText, type ChannelHost } from './channel-host.js';
 import type { IssueContext } from './improvements.js';
+import type { ConversationInfo } from '../shared/types.js';
 
 export const TELEGRAM_CHANNEL = 'telegram';
 
@@ -361,13 +362,26 @@ export class TelegramAdapter {
   ): Promise<void> {
     const scopeId = this.chatScope(chatId) ?? GLOBAL_SCOPE;
     this.bindChat(chatId, scopeId);
-    const conversation = await this.host.openSession({
-      channel: TELEGRAM_CHANNEL,
-      externalId: chatId,
-      scopeId,
-    });
+    const conversation = await this.scopeConversation(chatId, scopeId);
     await this.attachWatch(chatId, conversation.conversationId);
     await this.host.submit(conversation.conversationId, text, requestId);
+  }
+
+  /**
+   * The conversation a chat's scope routes to (M6): a project scope is the
+   * manager's line; Global keeps its own chief conversation.
+   */
+  private async scopeConversation(
+    chatId: string,
+    scopeId: string,
+  ): Promise<ConversationInfo> {
+    if (scopeId === GLOBAL_SCOPE)
+      return this.host.openSession({
+        channel: TELEGRAM_CHANNEL,
+        externalId: chatId,
+        scopeId,
+      });
+    return this.host.openManager(scopeId);
   }
 
   private async handleCommand(chatId: string, text: string): Promise<void> {
@@ -401,13 +415,10 @@ export class TelegramAdapter {
         ? GLOBAL_SCOPE
         : (this.host.db.projectByName(arg) ?? this.host.db.getProject(arg))!.id;
     this.bindChat(chatId, scopeId);
-    const conversation = await this.host.openSession({
-      channel: TELEGRAM_CHANNEL,
-      externalId: chatId,
-      scopeId,
-    });
+    const conversation = await this.scopeConversation(chatId, scopeId);
     await this.attachWatch(chatId, conversation.conversationId);
-    return `已切换到 scope：${this.scopeLabel(scopeId)}`;
+    const manager = this.host.db.getProject(scopeId)?.managerName;
+    return `已切换到 scope：${this.scopeLabel(scopeId)}${manager ? `（项目管理者 ${manager}）` : ''}`;
   }
 
   private statusCommand(chatId: string): string {
@@ -593,21 +604,29 @@ export class TelegramAdapter {
 
   private listChats(): ChatRow[] {
     const rows = this.host.db.sqlite
-      .prepare(
-        `SELECT c.chat_id, c.scope_id, s.conversation_id FROM telegram_chats c
-         JOIN channel_sessions s ON s.channel = 'telegram' AND s.external_id = c.chat_id AND s.scope_id = c.scope_id
-         ORDER BY c.chat_id`,
-      )
-      .all() as {
-      chat_id: string;
-      scope_id: string;
-      conversation_id: string;
-    }[];
-    return rows.map((row) => ({
-      chatId: row.chat_id,
-      scopeId: row.scope_id,
-      conversationId: row.conversation_id,
-    }));
+      .prepare(`SELECT chat_id, scope_id FROM telegram_chats ORDER BY chat_id`)
+      .all() as { chat_id: string; scope_id: string }[];
+    // A project-scoped chat talks to the manager conversation (M6); Global
+    // keeps its own channel binding. Both may not exist yet — skip them.
+    return rows.flatMap((row) => {
+      const conversationId =
+        row.scope_id === GLOBAL_SCOPE
+          ? this.host.db.channelSession({
+              channel: TELEGRAM_CHANNEL,
+              externalId: row.chat_id,
+              scopeId: GLOBAL_SCOPE,
+            })?.conversationId
+          : this.host.db.managerConversation(row.scope_id)?.conversationId;
+      return conversationId
+        ? [
+            {
+              chatId: row.chat_id,
+              scopeId: row.scope_id,
+              conversationId,
+            },
+          ]
+        : [];
+    });
   }
 
   private loadOffset(): number {

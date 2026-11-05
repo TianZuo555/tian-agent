@@ -108,7 +108,6 @@ async function harness(t: TestContext): Promise<Harness> {
     rootPath: join(root, 'project'),
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -138,15 +137,9 @@ async function harness(t: TestContext): Promise<Harness> {
     emitUpdates: () => {},
     emitImprovements: () => {},
     emitNotices: () => {},
-    dispatch: () => Promise.reject(new Error('not used here')),
-    workerModels: () => [],
     runReport: () => '',
     runDiff: () => Promise.resolve(''),
     runProgress: () => Promise.reject(new Error('unused')),
-    stopRun: () => Promise.reject(new Error('unused')),
-    sendRunMessage: () => {
-      throw new Error('not used here');
-    },
     runMessages: () => [],
     delegateToManager: () => Promise.reject(new Error('not used here')),
     sendManagerMessage: () => Promise.reject(new Error('not used here')),
@@ -294,7 +287,7 @@ test('the event log is idempotent and filterable', (t) => {
 
 test('chief turns are indexed, searchable, and expandable through refs', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   await f.append(
     conversation,
     userTurn('We chose SQLite over Postgres for the cache', 0),
@@ -337,7 +330,7 @@ test('chief turns are indexed, searchable, and expandable through refs', async (
 
 test('a multi-message entry is indexed message by message', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   // A forked or codemode transcript can carry several messages in one entry.
   await f.append(conversation, {
     kind: 'pi.assistant',
@@ -409,8 +402,9 @@ test('a multi-message entry is indexed message by message', async (t) => {
   );
 });
 
-test('search scope defaults isolate projects and "all" spans scopes', async (t) => {
+test('the chief searches Global only: project and worker turns stay out', async (t) => {
   const f = await harness(t);
+  // A project-scope transcript (e.g. a pre-migration chief or the manager).
   const project = await f.openConversation('p1');
   const general = await f.openConversation('global');
   await f.append(project, userTurn('The importer must never block startup', 0));
@@ -421,36 +415,22 @@ test('search scope defaults isolate projects and "all" spans scopes', async (t) 
   await f.history.syncAll();
   const search = f.tool('search_history');
 
-  const scoped = toolText(
-    await call(search, String(project.id), { query: 'importer' }),
+  // Global turns are found from any chief conversation.
+  assert.match(
+    toolText(await call(search, String(general.id), { query: 'summaries' })),
+    /dashboards/,
   );
-  assert.match(scoped, /importer/);
-  assert.doesNotMatch(scoped, /dashboards/);
-
+  // Project turns never are — the boundary is the scope, not the caller.
   assert.equal(
     toolText(await call(search, String(general.id), { query: 'importer' })),
     '(no matches)',
   );
 
-  const everything = toolText(
-    await call(search, String(project.id), { query: 'importer', scope: 'all' }),
-  );
-  assert.match(everything, /importer/);
-  assert.match(
+  // Time bounds still filter the Global search.
+  assert.equal(
     toolText(
       await call(search, String(general.id), {
         query: 'summaries',
-        scope: 'all',
-      }),
-    ),
-    /dashboards/,
-  );
-
-  // Time bounds filter the same search.
-  assert.equal(
-    toolText(
-      await call(search, String(project.id), {
-        query: 'importer',
         until: '2026-10-11T13:00:00.000Z',
       }),
     ),
@@ -458,23 +438,24 @@ test('search scope defaults isolate projects and "all" spans scopes', async (t) 
   );
   assert.match(
     toolText(
-      await call(search, String(project.id), {
-        query: 'importer',
+      await call(search, String(general.id), {
+        query: 'summaries',
         since: '2026-10-11T13:00:00.000Z',
         until: '2026-10-11T15:00:00.000Z',
       }),
     ),
-    /importer/,
+    /summaries/,
   );
 
-  // A worker conversation is indexed under its run's project, not the chief's scope.
+  // A worker conversation is indexed under its run's project, so the chief
+  // cannot read it through history either.
   const worker = await f.agents.createChief(f.scopes.root('global'));
   f.db.addRun({
     id: 'r-worker',
     projectId: 'p1',
     conversationId: String(worker.id),
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'work',
     currentPrompt: 'work',
     rootPath: f.scopes.root('p1'),
@@ -493,30 +474,35 @@ test('search scope defaults isolate projects and "all" spans scopes', async (t) 
     finishedAt: null,
     deadlineAt: '',
   });
+  const projectTurn = await f.append(
+    project,
+    userTurn('Project-only turn for the read boundary', 6),
+  );
   await f.append(
     worker,
     assistantTurn('Ran the migration twice by accident', 5),
   );
   await f.history.syncAll();
-  assert.match(
-    plain(
-      toolText(
-        await call(search, String(project.id), { query: 'migration twice' }),
-      ),
-    ),
-    new RegExp(`conv:${worker.id}#\\d+ assistant: Ran the migration twice`),
-  );
   assert.equal(
     toolText(
       await call(search, String(general.id), { query: 'migration twice' }),
     ),
     '(no matches)',
   );
+
+  // read_history refuses project refs outright instead of leaking content.
+  const read = f.tool('read_history');
+  const refused = toolText(
+    await call(read, String(general.id), {
+      ref: `conv:${project.id}#${projectTurn.id}`,
+    }),
+  );
+  assert.match(refused, /belongs to a project/);
 });
 
 test('Chinese phrases search through trigram and short queries fall back to LIKE', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const userEntry = await f.append(
     conversation,
     userTurn('我们决定使用 SQLite 存储记忆，因为部署最简单', 0),
@@ -568,7 +554,7 @@ test('Chinese phrases search through trigram and short queries fall back to LIKE
 
 test('the index survives a restart and incremental sync does not duplicate entries', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   await f.append(
     conversation,
     userTurn('Keep the worker on its own branch', 0),
@@ -631,7 +617,7 @@ test('the index survives a restart and incremental sync does not duplicate entri
 
 test('dropping the derived index and resyncing restores every result', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   await f.append(
     conversation,
     userTurn('The scheduler must merge missed firings', 0),
@@ -778,7 +764,6 @@ function runsFixture(t: TestContext) {
     rootPath: projectPath,
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -903,7 +888,7 @@ test('run lifecycle produces events exactly once, including across a restart', a
 
 test('a tool call ref resolves its own args even when the message also has text', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const entry = await f.append(conversation, {
     kind: 'pi.assistant',
     model: [
@@ -947,7 +932,7 @@ test('a tool call ref resolves its own args even when the message also has text'
 
 test('tool calls are numbered across all messages of a multi-message entry', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const entry = await f.append(conversation, {
     kind: 'pi.assistant',
     model: [
@@ -1058,7 +1043,7 @@ test('read_history pages the full indexed unit when the transcript is unavailabl
 
 test('default read output stays bounded and neighbours are previews', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const long = 'L'.repeat(30_000);
   await f.append(conversation, userTurn('run the long job', 0));
   const target = await f.append(conversation, toolResultTurn('bash', long, 1));
@@ -1097,7 +1082,7 @@ test('long events page with offsets and never invert the character range', async
     id: 'ev-long',
     type: 'run.finished',
     actor: 'system',
-    scopeId: 'p1',
+    scopeId: 'global',
     summary: 'finished',
     payload: { detail: 'E'.repeat(6_000) + 'EVENT_TAIL' },
   });
@@ -1129,7 +1114,7 @@ test('long events page with offsets and never invert the character range', async
 
 test('tool payloads beyond 60k code points stay searchable and pageable', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const tail = ' IMPORTANT_TAIL_SENTINEL after a very long log';
   await f.append(
     conversation,
@@ -1150,7 +1135,6 @@ test('tool payloads beyond 60k code points stay searchable and pageable', async 
     toolText(
       await call(search, String(conversation.id), {
         query: 'IMPORTANT_TAIL_SENTINEL',
-        scope: 'p1',
       }),
     ),
   );
@@ -1161,7 +1145,6 @@ test('tool payloads beyond 60k code points stay searchable and pageable', async 
       toolText(
         await call(search, String(conversation.id), {
           query: 'TAIL_SENTINEL long log',
-          scope: 'p1',
         }),
       ),
     ),
@@ -1173,7 +1156,6 @@ test('tool payloads beyond 60k code points stay searchable and pageable', async 
       toolText(
         await call(search, String(conversation.id), {
           query: 'TAIL_ARG',
-          scope: 'p1',
         }),
       ),
     ),
@@ -1203,7 +1185,7 @@ test('tool payloads beyond 60k code points stay searchable and pageable', async 
 
 test('an entry with only tool calls is reported clearly and previews stay bounded', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const entry = await f.append(conversation, {
     kind: 'pi.assistant',
     model: [
@@ -1261,7 +1243,7 @@ test('an entry with only tool calls is reported clearly and previews stay bounde
 
 test('a keyword split across the old chunk boundary is still searchable', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   // Put the marker exactly across the former 1,500-char chunk boundary.
   const long = `${'x'.repeat(1_495)}CROSSBOUNDARYMARKER${'y'.repeat(100)}`;
   await f.append(conversation, toolResultTurn('bash', long, 0));
@@ -1272,7 +1254,6 @@ test('a keyword split across the old chunk boundary is still searchable', async 
       toolText(
         await call(search, String(conversation.id), {
           query: 'CROSSBOUNDARYMARKER',
-          scope: 'p1',
         }),
       ),
     ),
@@ -1284,7 +1265,6 @@ test('a keyword split across the old chunk boundary is still searchable', async 
       toolText(
         await call(search, String(conversation.id), {
           query: 'CROSSBOUNDARYMARKER yyy',
-          scope: 'p1',
         }),
       ),
     ),
@@ -1370,7 +1350,7 @@ test('searching 5000 indexed entries stays well under 300ms', async (t) => {
 
 test('an index format upgrade resets every derived cursor and rebuilds without loss', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   await f.append(conversation, userTurn('The old index format row', 0));
   await f.history.syncAll();
   const count = () =>
@@ -1410,7 +1390,9 @@ test('an index format upgrade resets every derived cursor and rebuilds without l
   assert.equal(count(), 1);
   assert.match(
     plain(
-      (await upgraded.search('old index format', { scopeId: 'p1' })).join('\n'),
+      (await upgraded.search('old index format', { scopeId: 'global' })).join(
+        '\n',
+      ),
     ),
     /The old index format row/,
   );
@@ -1418,7 +1400,7 @@ test('an index format upgrade resets every derived cursor and rebuilds without l
 
 test('system notifications are indexed and shown as system, never as the user', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   await f.append(conversation, {
     kind: 'system.notification',
     model: [
@@ -1445,7 +1427,7 @@ test('system notifications are indexed and shown as system, never as the user', 
   );
   // The notification text is still searchable, but attributed to the system.
   const hits = await f.history.search('nightly job', {
-    scopeId: 'p1',
+    scopeId: 'global',
   });
   assert.match(
     plain(hits.join('\n')),

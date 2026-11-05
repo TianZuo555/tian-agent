@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,7 +108,6 @@ async function fixture(t: TestContext): Promise<Fixture> {
     rootPath: projectPath,
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -295,8 +288,7 @@ test('approval is user-only, recorded, and turns on injection with provenance', 
     name: 'other',
     rootPath: f.projectPath,
     autoLand: 0,
-    allowInPlace: 1,
-    agentKind: 'durable-worker',
+    allowInPlace: 0,
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -386,8 +378,7 @@ test('a failing extractor damages nothing', async (t) => {
     name: 'project',
     rootPath: '/tmp/nowhere',
     autoLand: 0,
-    allowInPlace: 1,
-    agentKind: 'durable-worker',
+    allowInPlace: 0,
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -416,7 +407,7 @@ test('a failing extractor damages nothing', async (t) => {
     projectId: 'p1',
     conversationId: null,
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'Fix the flaky login test',
     currentPrompt: 'Fix the flaky login test',
     rootPath: '/tmp/nowhere',
@@ -495,7 +486,7 @@ test('extractor evidence rules are deterministic', () => {
     projectId: 'p1',
     conversationId: null,
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'Ship the release checklist',
     currentPrompt: 'Ship the release checklist',
     rootPath: '/tmp',
@@ -600,7 +591,7 @@ test('stopping a run reviews the attempt but never fails its injected skills', a
   assert.deepEqual(candidates[0].sourceRefs, [`run:${run.id}:attempt:1`]);
 });
 
-test('a v3 database upgrades in one transaction and leaves a backup', (t) => {
+test('a v3 database is snapshotted then recreated empty', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'tian-skills-upgrade-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const legacy = new DatabaseSync(join(dir, 'tian.db'));
@@ -634,13 +625,25 @@ test('a v3 database upgrades in one transaction and leaves a backup', (t) => {
     db.sqlite.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
   ).map((column) => column.name);
   assert.ok(columns.includes('injected_skills'));
-  const migrated = db.getRun('r-old')!;
-  assert.equal(migrated.prompt, 'legacy');
-  assert.equal(migrated.injectedSkills ?? null, null);
-  assert.ok(existsSync(join(dir, 'tian.db_v3.backup')));
+  // Reset semantics: the old row is gone from the live database...
+  assert.equal(db.getRun('r-old'), undefined);
+  // ...but the consistent snapshot keeps it for recovery.
+  const backup = new DatabaseSync(join(dir, 'tian.db_v3.backup'), {
+    readOnly: true,
+  });
+  try {
+    assert.equal(backup.prepare('PRAGMA user_version').get()?.user_version, 3);
+    assert.equal(
+      backup.prepare("SELECT prompt FROM runs WHERE id = 'r-old'").get()
+        ?.prompt,
+      'legacy',
+    );
+  } finally {
+    backup.close();
+  }
 
-  // Reopening the upgraded database takes no second backup.
+  // Reopening at the current version takes no second backup and stays empty.
   const reopened = new Db(dir);
   t.after(() => reopened.close());
-  assert.deepEqual(reopened.getRun('r-old')!.injectedSkills ?? null, null);
+  assert.equal(reopened.getRun('r-old'), undefined);
 });

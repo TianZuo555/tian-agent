@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -60,8 +60,8 @@ function rig(db: Db, clock: { now: Date }) {
   const deps: SchedulerDeps = {
     db,
     goals,
-    ensureGoalConversation: (goalId, scopeId) => {
-      openers.push(`${goalId}@${scopeId}`);
+    ensureGoalConversation: (goalId) => {
+      openers.push(goalId);
       return Promise.resolve(`conv-${goalId}`);
     },
     notify: async () => {},
@@ -109,10 +109,10 @@ function dailySchedule(f: Fixture, goalId: string, when = f.clock.now) {
   });
 }
 
-test('tasks migrate from the old todo schema, idempotently', (t) => {
+test('an old-schema database is snapshotted then recreated empty', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'tian-goals-migrate-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  // A database created by the previous schema, before this branch.
+  // A database written by an older build: no user_version, old task shape.
   const legacy = new DatabaseSync(join(dir, 'tian.db'));
   legacy.exec(`
     CREATE TABLE tasks (
@@ -125,33 +125,23 @@ test('tasks migrate from the old todo schema, idempotently', (t) => {
       "INSERT INTO tasks (scope_id,title,status,created_at) VALUES ('global','legacy open','open','2026-01-01T08:00:00.000Z')",
     )
     .run();
-  legacy
-    .prepare(
-      "INSERT INTO tasks (scope_id,title,status,created_at,done_at) VALUES ('global','legacy done','done','2026-01-01T09:00:00.000Z','2026-01-02T09:00:00.000Z')",
-    )
-    .run();
   legacy.close();
 
   const db = new Db(dir);
   t.after(() => db.close());
-  const byTitle = (title: string) =>
-    db.listTasks(null).find((task) => task.title === title)!;
-  const open = byTitle('legacy open');
-  const done = byTitle('legacy done');
-  assert.equal(open.status, 'pending');
-  assert.equal(open.owner, 'user');
-  assert.equal(open.trigger, 'manual');
-  assert.equal(open.goalId, null);
-  assert.equal(open.updatedAt, '2026-01-01T08:00:00.000Z');
-  assert.equal(done.status, 'completed');
-  assert.equal(done.doneAt, '2026-01-02T09:00:00.000Z');
-  // Reopening the same database must not change anything again.
+  // Reset semantics: the live database starts empty at the current version.
+  assert.equal(db.listTasks(null).length, 0);
+  // The snapshot keeps the old rows for recovery.
+  const backup = new DatabaseSync(join(dir, 'tian.db_v0.backup'), {
+    readOnly: true,
+  });
+  t.after(() => backup.close());
+  assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM tasks').get()?.n, 1);
+  // Reopening stays clean and does not snapshot again.
   const reopened = new Db(dir);
   t.after(() => reopened.close());
-  assert.deepEqual(
-    reopened.listTasks(null).map((task) => [task.title, task.status]),
-    db.listTasks(null).map((task) => [task.title, task.status]),
-  );
+  assert.equal(reopened.listTasks(null).length, 0);
+  assert.equal(existsSync(join(dir, 'tian.db_v0.backup.backup')), false);
 });
 
 test('task transitions are enforced in one place and illegal moves throw', (t) => {
@@ -331,9 +321,9 @@ test('the daily cap blocks extra runs and leaves a deduped user notice', async (
   assert.equal(f.db.pendingNotifications().length, 1);
 });
 
-test('a migrated database still dedupes blocked tasks to one per day', (t) => {
-  // The real user database is a migrated one: dedupe_key arrived by ALTER
-  // TABLE, so uniqueness must come from the index, not the column.
+test('a reset database still dedupes blocked tasks to one per day', (t) => {
+  // The service opens over a foreign database: the old file is snapshotted
+  // and wiped, and the recreated schema must still dedupe via dedupe_key.
   const dir = mkdtempSync(join(tmpdir(), 'tian-goals-migrated-'));
   const legacy = new DatabaseSync(join(dir, 'tian.db'));
   legacy.exec(`
@@ -393,7 +383,7 @@ test('the goal conversation is stable across restarts', async (t) => {
   });
   dailySchedule(f, goal.id);
   await f.scheduler.fireDue();
-  assert.deepEqual(f.openers, [`${goal.id}@global`]);
+  assert.deepEqual(f.openers, [`${goal.id}`]);
   assert.equal(f.goals.getGoal(goal.id)!.conversationId, `conv-${goal.id}`);
 
   // A completely fresh store + scheduler (service restart) reuses the binding.
@@ -424,7 +414,7 @@ test('the goal conversation is stable across restarts', async (t) => {
     nextFireAt: f.clock.now.toISOString(),
   });
   await healed.scheduler.fireDue();
-  assert.deepEqual(healed.openers, [`${goal.id}@global`]);
+  assert.deepEqual(healed.openers, [`${goal.id}`]);
   assert.equal(
     healed.goals.getGoal(goal.id)!.conversationId,
     `conv-${goal.id}`,

@@ -2,11 +2,11 @@
 
 [English](../prd.md) | **简体中文**
 
-版本：v0.4（v0.3 + 项目管理者（Manager）与 Tian 直连派活）
+版本：v0.5（v0.4 + M6 角色与记忆边界）
 状态：Draft
 产品类型：Always-on Personal Agent
 平台：macOS 优先；Linux / Windows 后续
-技术方向：TypeScript 常驻服务（launchd）+ Pi Durable + Electron/React 客户端 + SQLite（见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)）
+技术方向：TypeScript 常驻服务（launchd）+ Pi Durable + Electron/React 客户端 + SQLite（见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)）；模型 Provider 可插拔（见 [D21](decisions.md#d21--模型-provider-可插拔magpie-只是其中一个)）
 
 术语以 [CONTEXT.md](CONTEXT.md)（[英文原版](../../CONTEXT.md)）为准。每项需求标注现状：**【已有】** 已实现并有测试覆盖；**【部分】** 有基础但不满足需求；**【缺失】** 尚未开始。标注"建议"的是待确认的设计；标注"待验证"的是尚未在代码中确认的假设。
 
@@ -56,7 +56,7 @@
 | Goal                    | 用户希望长期达成或维持的结果                         | 数天至数年 | 【已有】`goals` + Goal 专属会话 + 调度                                                                                                                                                                                      |
 | Task                    | 为 Goal（或独立）完成的一件具体工作                  | 分钟至数天 | 【已有】状态机、`owner`、`trigger`、`dedupe_key`、`assignee`/`report_to`（[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)、[D12](decisions.md#d12--项目管理者每项目一条持久会话委派即-task-的三级链路)） |
 | Run                     | Worker 对代码类 Task 的一次隔离执行                  | 分钟至小时 | 【已有】`runs` + `run_attempts`                                                                                                                                                                                             |
-| Conversation（Session） | 一次 Chief / Manager / Worker 的持久 Pi 会话，可归档 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`；归档标记在 `conversations.archived_at`；角色经 `ConversationInfo.role` 透出                                                                                                   |
+| Conversation（Session） | 一次 Chief / Manager / Worker 的持久 Pi 会话，可归档 | 分钟至长期 | 【已有】Pi Durable，存于 `pi-session.sqlite`；归档标记在 `conversations.archived_at`；角色经 `ConversationInfo.role` 透出；Global 里只有 Chief 会话，项目里只有该项目的 Manager 与 Worker 会话                              |
 | Memory                  | 跨会话保留的事实与经验                               | 长期       | 【已有】SQLite、来源与版本、显式选择的 Core Memory（[D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)）                                                                                        |
 | Skill                   | 可复用、可验证的工作流程                             | 长期       | 【部分】`skills` 表、版本与人工审批；语义匹配与模型提取待做                                                                                                                                                                 |
 
@@ -145,7 +145,7 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.3 F02 — History 与检索　P0　【已有】
 
-现状：`history_entries` + `history_fts` + `history_cursors` 按游标增量索引 Pi transcript 与 `events`；Chief 用 `search_history` / `read_history` 检索并展开上下文，结果带 `conv:<id>#<entry>` / `event:<id>` 引用。
+现状：`history_entries` + `history_fts` + `history_cursors` 按游标增量索引 Pi transcript 与 `events`；Chief 与项目管理者用 `search_history` / `read_history` 检索并展开上下文，结果带 `conv:<id>#<entry>` / `event:<id>` 引用。History 跟随 Scope（[memory.md](memory.md#会话边界)）：Chief 只读 Global History，管理者只读本项目 History，Worker 不读 History。
 
 需求：可按时间、Scope、Conversation、关键词检索以下内容，并定位到原始记录：
 
@@ -204,15 +204,15 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 - 操作者（谁执行写入）、来源（谁陈述事实）与确认（谁审核存储正文）分开；`source: "user"` 需要当前请求确实由真实用户轮次发起的 Runtime 证据，系统唤醒/通知不算，否则降为 `agent_inferred`。确认只来自真实用户操作（Memory 面板审核）或经服务校验的明确保存请求（锚定的 `记住：<正文>`）；用户原话与模型提炼的正文相同只证明来源，不构成确认，条目仍是候选。历史引用只提供证据，不能授权确认。
 - 证据引用由服务校验存在、属于写入 scope 且片段确在原文中；模型不能伪造引用。
 - 外部工具结果和第三方内容不得以高优先级指令的形式进入 Prompt。
-- 现有 `LOG.txt` 一次性导入；旧 `TREE/` 只移入 legacy、不再读取；之后单向导出供 Worker 与人阅读。升级时旧记录获得 `legacy` 证据（原 `user_confirmed` 另有 `legacy` 确认记录），原有正文、状态、版本与候选全部保留。
+- 现有 `LOG.txt` 一次性导入；旧 `TREE/` 只移入 legacy、不再读取；之后单向导出供人阅读（Worker 不读记忆）。升级时旧记录获得 `legacy` 证据（原 `user_confirmed` 另有 `legacy` 确认记录），原有正文、状态、版本与候选全部保留。
 
 ---
 
 ### 4.7 F07 — 任务相关上下文　P1　【已有】
 
-现状：Core 仍是按轮次稳定的显式快照；另有独立 token 预算（默认 1200）的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索本 Scope 的 Memory、Notes 与 History。它使用共享 `planSearch` 与少量显式同义词（中文/Chinese、postgres/PostgreSQL、production/prod 等），不引入向量库、知识图谱或强制模型调用。Worker 获得本项目任务相关上下文，并可只读 `recall` 继续查询、`read_history` 展开原始证据；不加载全量记忆，不跨项目。
+现状：Core 仍是按轮次稳定的显式快照；另有独立 token 预算（默认 1200）的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索 Memory、Notes 与 History。它只检索参与者自己的 Scope：Chief 检索 Global，管理者检索本项目。它使用共享 `planSearch` 与少量显式同义词（中文/Chinese、postgres/PostgreSQL、production/prod 等），不引入向量库、知识图谱或强制模型调用。Worker 没有任务相关上下文，也没有记忆或 History 工具；它的输入只有派发简报与 worktree。
 
-验收：预算覆盖完整输出；被取代事实的旧 transcript 证据不回到默认上下文；Worker 无写工具且只能读本项目；项目隔离测试通过。
+验收：预算覆盖完整输出；被取代事实的旧 transcript 证据不回到默认上下文；Worker prompt 中没有 `<relevant_context>`，Worker 工具列表中没有记忆、Notes 或 History 工具；项目隔离测试通过。
 
 ## 5. 目标与任务（Goal Engine）
 
@@ -224,7 +224,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 已实现的要点：
 
-- 每个 Goal 有一个专属 Chief Conversation，复用渠道绑定：`openSession({ channel: 'goal', externalId: goalId, scopeId })`。Goal 的长期上下文落在 Goal 字段与 Memory 中，而不是无限增长的会话。
+- 每个 Goal 有一个专属 Chief Conversation，复用渠道绑定：`openSession({ channel: 'goal', externalId: goalId, scopeId: 'global' })`。该会话与 Goal 自己的 Task 都在 Global Scope，Goal 涉及项目时也一样；Goal 保留项目关联，项目工作经 `delegate` 交给管理者。Goal 的长期上下文落在 Goal 字段与 Memory 中，而不是无限增长的会话。
 - Chief 每次执行后通过 `update_goal` 写回 Current State、Next Action、Last Execution（回答 v0.1 问题 7）；进度以 Success Criteria 清单衡量。
 
 ### 5.2 F07 — Task Orchestration　P0　【部分】
@@ -237,7 +237,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 - 字段：`goal_id`、`owner`（user / agent）、`trigger`（manual / schedule / event）与 `trigger_ref`、唯一 `dedupe_key`、`attempts` / `max_attempts`、结果摘要。
 - 有限次数重试、失败退避；用户可 Steer、Pause、Resume。
 - 重启不重复执行同一 Task：创建靠 `dedupe_key`，投递靠 Notification ID，执行靠 Pi Durable 的 `requestId`。
-- 代码类 Task 派发 Run（`runs.task_id`）；Run 完成后由 Chief 判断 Task 是否达成。
+- 代码类 Task 派发 Run（`runs.task_id`）；只有项目管理者能派发，Run 完成后由管理者判断 Task 是否达成并向 Chief 汇报。
 - MVP 单 Chief 串行处理调度 Task；Run 可并行。
 
 ### 5.3 F08 — Scheduler　P0　【已有】
@@ -284,7 +284,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 ### 7.1 F11 — 多入口 Gateway　P0　【部分】
 
-现状：`openSession({channel, externalId, scopeId})` 为渠道创建稳定 Conversation，绑定持久化，所有渠道共享 Scope Memory；外部输入可带 `requestId` 去重。Telegram Bot 适配器已接入（long polling、白名单、`/scope` 切换、回复转发，见 [D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)）；Inbox 文件邮箱作为通用事件入口。
+现状：`openSession({channel, externalId, scopeId})` 为渠道创建稳定 Conversation，绑定持久化，所有渠道共享 Scope Memory；外部输入可带 `requestId` 去重。Telegram Bot 适配器已接入（long polling、白名单、`/scope` 切换、回复转发，见 [D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)）。Global 入口到达 Chief；项目入口（Telegram 与微信的 `/scope <项目>`、桌面端项目下新建会话、项目 Inbox）到达该项目的管理者（[channels.md](channels.md#telegram)）。Inbox 文件邮箱作为通用事件入口。
 
 需求（M3）：
 
@@ -307,8 +307,8 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 现状：
 
-- Chief 没有 shell 和编码工具；Land / Ship / Discard 只能由用户在 UI 中执行，事实上是人工审批。
-- Worker 拥有完整编码工具（含 shell），隔离仅为 Git worktree；"不要 push" 只是指令，没有操作系统级沙箱。
+- Chief 没有 shell 和编码工具，也不派发、中止 Worker 或给 Worker 发消息，这些只由项目管理者做；Land / Ship / Discard 只能由用户在 UI 中执行，事实上是人工审批。
+- Worker 拥有完整编码工具（含 shell）。macOS 上工兵命令在按 Run 生成的 Seatbelt profile（`sandboxMode = workspace-write`，默认开）下运行：写限定在 work 根目录与缓存，服务数据与服务 socket 拒绝访问，外网可按项目关闭。Git worktree 仍是代码边界。
 - 幂等：`operations` 表、稳定操作 ID、`requestId`。【已有】
 
 权限分级：
@@ -325,7 +325,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 - `approvals`：操作类型、对象引用、payload 摘要、请求方、状态（pending / approved / rejected / expired）、决定人、渠道、时间。
 - Chief 获得 `request_land` / `request_ship` 等工具：只创建审批，不直接执行；用户在 Desktop 或 Telegram 批准后，由服务调用现有 `runs.land` / `runs.ship`。
 - 执行前校验审批状态与 payload 摘要一致；被拒绝的审批不可复用，同一对象重新申请需要新的审批记录。
-- MVP 的强制边界是 worktree + 受审批的 Land/Ship；PRD 中 Worker 级别的 Controlled Write 在 MVP 中只能做到"指令 + 事后审查"。建议另行评估：Worker worktree 禁用推送地址、去除推送凭据，或 macOS 沙箱。
+- MVP 的强制边界是 worktree + 受审批的 Land/Ship；PRD 中 Worker 级别的 Controlled Write 在 MVP 中只能做到"指令 + 事后审查"。Worker 命令在按 Run 生成的 Seatbelt profile 中运行（D22）。建议另行评估：Worker worktree 禁用推送地址、去除推送凭据。
 - 审批粒度（回答 v0.1 问题 5，建议）：Goal 的 Constraints 声明允许的操作类别；每一次具体的受控操作单独审批。
 - 审计：所有 Controlled 及以上操作写入 Event（操作者、Trigger、审批 ID、结果）。
 
@@ -370,7 +370,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 
 文件：Notes（Markdown，可读写）、Inbox、Run 报告；Memory 导出（只读，单向）。
 
-每次 schema 变化提升 `DATABASE_VERSION`，并由现有升级事务覆盖备份与回滚。
+每次 schema 变化提升 `DATABASE_VERSION`。数据不迁移：旧 `tian.db` 先快照到 `tian.db_v<N>.backup`，再重建为空库（[service.md](service.md#服务升级)）。
 
 ---
 
@@ -406,15 +406,15 @@ MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行�
 - M4：Memory Worker（候选提取已实现，模型提取器待问题 6）、Dreaming、向量 + 全文混合检索。
 - M5：Experience Review、Skill（已实现）、多 Agent 协作。
 
-### M6 — 角色边界、Provider、工兵执行器【计划中】
+### M6 — 角色边界、Provider、工兵执行器【已完成】
 
 分五期，每期单独发布、单独验证。工作清单：[todo-agent-refactor.md](todo-agent-refactor.md)。
 
-1. **角色与记忆边界**（[memory.md](memory.md#会话边界提案)、[agent-work.md](agent-work.md#派发归属提案)）：管理者 `recall` 去掉 `scope=global`；工兵去掉注入上下文与记忆查询；总管 History 限于 Global；总管去掉 `dispatch`；工兵工具改名为 `ask_manager` / `tell_manager`；总管会话迁出 Project Scope；`/scope <项目>` 路由到管理者；Goal 会话移到 Global。本期只收紧与删除。
-2. **Provider**（D21）：`CredentialStore`、Settings → Providers、OAuth 登录、总管与管理者模型分开设置、Magpie 成为预置条目。
-3. **执行器抽象与 Intent**（[agent-work.md](agent-work.md#工兵执行器提案)）：多执行器的 `WorkerRuntime`、Intent 与项目默认 Intent、`dispatch` 支持 `intent` 或明确选择（互斥）、两层并发限制。本期只有 Pi 一种执行器。
-4. **第一个外部执行器：Codex**：一次性执行 + resume、事件流进度、带护栏的重启自动续接、登录检测、环境变量白名单与按执行器启用确认（过渡安全底线）。先接 Codex，因为它开源（适配行为可在源码中核实），且它在 macOS 上的沙箱就是 Seatbelt。
-5. **统一 Seatbelt 沙箱**（[todo-worker-sandbox.md](todo-worker-sandbox.md)）：Pi 与外部工兵共用一套边界。这是目标状态，不阻塞第 1–4 期。
+1. **角色与记忆边界**【已完成】（[memory.md](memory.md#会话边界)、[agent-work.md](agent-work.md#派发归属)）：管理者 `recall` 已去掉 `scope=global`；工兵已去掉注入上下文与记忆查询；总管 History 限于 Global；总管已去掉 `dispatch`；工兵工具改名为 `ask_manager` / `tell_manager`；总管会话迁出 Project Scope（schema 升级不迁移数据：旧数据库先做快照，再重建为空库）；`/scope <项目>` 路由到管理者；Goal 会话移到 Global。
+2. **Provider**【已完成】（[D21](decisions.md#d21--模型-provider-可插拔magpie-只是其中一个)）：0600 `credentials.json` 上的 `FileCredentialStore`；配置的 provider 在启动时注册到 pi-ai（Magpie 预设、网关与 pi-ai 内置）；按 provider 缓存目录并可离线使用；Settings → Providers 管理 provider 与密钥（只显尾号），OAuth 登录展示 `auth_url` / `device_code` 事件；总管模型与默认管理者模型分开设置，项目可覆盖管理者模型（`SERVICE_PROTOCOL = 11`）。
+3. **执行器抽象与 Intent**【已完成】（[agent-work.md](agent-work.md#工兵执行器)）：`WorkerRuntime` 注册表，解析后的执行器/模型/思考强度随 Run 落库；Intent 在 Settings → 工兵 中定义，项目级 `default_intent` 取代 `projects.agent_kind`（schema v10）；`dispatch` 支持 `intent` 或明确选择（互斥）；两层实时并发限制——某执行器满员的 Attempt 不会阻塞其他执行器。本期只有 Pi 一种执行器（`SERVICE_PROTOCOL = 12`）。
+4. **第一个外部执行器：Codex**【已完成】：一次性执行 + resume、事件流进度、带护栏的重启自动续接、登录检测、环境变量白名单（按执行器启用确认的过渡底线已在第 5 期删除）。先接 Codex，因为它开源（适配行为可在源码中核实），且它在 macOS 上的沙箱就是 Seatbelt。
+5. **统一 Seatbelt 沙箱**【已完成】（[todo-worker-sandbox.md](todo-worker-sandbox.md)）：Pi 与外部工兵共用一套按 Run 生成的 profile；Codex 在其中运行时关掉自身沙箱，状态目录可写，配置只读。
 
 MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
 
@@ -424,17 +424,18 @@ MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复
 
 每个场景对应 `pnpm test` 中的自动化测试（临时数据库、真实临时 Git 仓库、可控 Worker，不调用模型）。
 
-| 场景 | 描述                         | 预期                                                    | 当前                                                                |
-| ---- | ---------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------- |
-| A    | 告知长期偏好，结束会话并重启 | 新 Conversation 的 Core Memory 包含该偏好               | 已有（`memory.test.ts`）                                            |
-| B    | 询问一周前的开发决定         | `search_history` 命中原始记录并返回引用                 | 已有（`history.test.ts`）                                           |
-| C    | 每天自动检查 GitHub 项目     | 按 Schedule 生成 Task、记录结果；无变化不重复通知       | 已有（`goals.test.ts`：单事务触发、错过合并、每日预算与通知去重）   |
-| D    | 执行中应用崩溃               | 重启后恢复 Task 与 Run；已执行的外部操作不盲目重试      | 已有（`goals.test.ts` 触发重放、`service.test.ts` Run 恢复）        |
-| E    | 用户纠正旧偏好               | 旧 Memory 被取代并保留版本，Core Memory 不再包含旧内容  | 已有（`memory.test.ts`）                                            |
-| F    | Agent 想推送代码             | 审批前不执行；审批持久化；拒绝后无法绕过                | 部分（仅 UI 手动 Ship；approvals 在 `m3-approvals` 分支）           |
-| G    | 用户归档一个已结束的会话     | 侧栏收起但 History 仍可检索；Scope 级唤醒不再落在它上面 | 已有（`service.test.ts` 归档与恢复、`latestConversation` 排除归档） |
-| H    | 用户折叠侧栏后重启 App       | 折叠状态保留，标题栏给红绿灯留位                        | 部分（`state.test.ts` 覆盖存储初始化；折叠布局靠人工验证）          |
-| I    | 总管委派或直接给管理者派活   | 委派 Task 收口后回报发起总管；直连派的 Task 静默收口    | 已有（`manager.test.ts` 委派链路、Tian 轮次守卫与静默收口）         |
+| 场景 | 描述                         | 预期                                                        | 当前                                                                |
+| ---- | ---------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------- |
+| A    | 告知长期偏好，结束会话并重启 | 新 Conversation 的 Core Memory 包含该偏好                   | 已有（`memory.test.ts`）                                            |
+| B    | 询问一周前的开发决定         | `search_history` 命中原始记录并返回引用                     | 已有（`history.test.ts`）                                           |
+| C    | 每天自动检查 GitHub 项目     | 按 Schedule 生成 Task、记录结果；无变化不重复通知           | 已有（`goals.test.ts`：单事务触发、错过合并、每日预算与通知去重）   |
+| D    | 执行中应用崩溃               | 重启后恢复 Task 与 Run；已执行的外部操作不盲目重试          | 已有（`goals.test.ts` 触发重放、`service.test.ts` Run 恢复）        |
+| E    | 用户纠正旧偏好               | 旧 Memory 被取代并保留版本，Core Memory 不再包含旧内容      | 已有（`memory.test.ts`）                                            |
+| F    | Agent 想推送代码             | 审批前不执行；审批持久化；拒绝后无法绕过                    | 部分（仅 UI 手动 Ship；approvals 在 `m3-approvals` 分支）           |
+| G    | 用户归档一个已结束的会话     | 侧栏收起但 History 仍可检索；Scope 级唤醒不再落在它上面     | 已有（`service.test.ts` 归档与恢复、`latestConversation` 排除归档） |
+| H    | 用户折叠侧栏后重启 App       | 折叠状态保留，标题栏给红绿灯留位                            | 部分（`state.test.ts` 覆盖存储初始化；折叠布局靠人工验证）          |
+| I    | 总管委派或直接给管理者派活   | 委派 Task 收口后回报发起总管；直连派的 Task 静默收口        | 已有（`manager.test.ts` 委派链路、Tian 轮次守卫与静默收口）         |
+| J    | 升级后 chat 切到项目 scope   | 消息进入该项目的管理者会话；v8 数据库先做快照，再重建为空库 | 已有（`wechat.test.ts`、`telegram.test.ts`、`upgrades.test.ts`）    |
 
 ---
 
@@ -442,7 +443,7 @@ MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复
 
 | 维度     | 目标                                                                                                                              |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 持久性   | 已确认的写入在正常重启和升级后不丢失（WAL + 升级备份）【已有】                                                                    |
+| 持久性   | 已确认的写入在重启和同 schema 升级后不丢失（WAL）；schema 升级只保留备份快照【已有】                                              |
 | 故障恢复 | 恢复未完成 Task，核对外部操作状态                                                                                                 |
 | 检索     | 本地常规查询 p95 < 300ms，不含模型                                                                                                |
 | 性能     | 后台处理在常驻服务内，不阻塞 renderer【已有】                                                                                     |
@@ -468,16 +469,16 @@ MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复
 
 ## 13. 设计问题
 
-| #   | 问题                               | 结论                                                                                                                             |
-| --- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Always-on Runtime 是否独立后台进程 | **已决**：是，launchd 常驻服务（已实现）                                                                                         |
-| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，显式选择 + 原子超限拒绝，会话内快照                                                  |
-| 3   | History 是否复用 Pi 原生存储       | **建议**：Pi 为唯一来源，`tian.db` 建可重建的派生 FTS 索引                                                                       |
-| 4   | 多 Gateway 并发执行同一任务        | **建议**：只有常驻服务执行，渠道只提交；`dedupe_key` + Durable 去重                                                              |
-| 5   | 权限按 Agent / Goal / Task 授权    | **建议**：Goal 声明允许的操作类别，每次受控操作单独审批                                                                          |
-| 6   | Memory Worker 是否用廉价模型       | **未决**（M4）：通过 Magpie 可单独配置模型；F03 现用确定性启发式提取器，`MemoryExtractor` 接口已预留接入点，接入与否待此问题决定 |
-| 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量                                         |
-| 8   | Worker 的写权限如何真正受限        | **未决**：MVP 以 worktree + 审批 Land/Ship 为边界；沙箱或去除推送凭据另行评估                                                    |
+| #   | 问题                               | 结论                                                                                                                                                                                                                  |
+| --- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Always-on Runtime 是否独立后台进程 | **已决**：是，launchd 常驻服务（已实现）                                                                                                                                                                              |
+| 2   | Core Memory 预算与更新策略         | **建议**：Global / Project 各 1,500 tokens，显式选择 + 原子超限拒绝，会话内快照                                                                                                                                       |
+| 3   | History 是否复用 Pi 原生存储       | **建议**：Pi 为唯一来源，`tian.db` 建可重建的派生 FTS 索引                                                                                                                                                            |
+| 4   | 多 Gateway 并发执行同一任务        | **建议**：只有常驻服务执行，渠道只提交；`dedupe_key` + Durable 去重                                                                                                                                                   |
+| 5   | 权限按 Agent / Goal / Task 授权    | **建议**：Goal 声明允许的操作类别，每次受控操作单独审批                                                                                                                                                               |
+| 6   | Memory Worker 是否用廉价模型       | **未决**（M4）：provider 与模型经 Settings → Providers 配置（[D21](decisions.md#d21--模型-provider-可插拔magpie-只是其中一个)）；F03 现用确定性启发式提取器，`MemoryExtractor` 接口已预留接入点，接入与否待此问题决定 |
+| 7   | Goal 如何确定下一步与衡量进展      | **建议**：Chief 每次执行后写回 Current State / Next Action；按 Success Criteria 清单衡量                                                                                                                              |
+| 8   | Worker 的写权限如何真正受限        | **已定**：macOS 按 Run 生成 Seatbelt profile（`sandboxMode = workspace-write`），写限定在 work 根目录；worktree 与审批 Land/Ship 仍是代码边界                                                                         |
 
 问题 2–5、7 已分别落到 [D4](decisions.md#d4--memory-以-sqlite-为唯一写入来源core-memory-改为显式选择)、[D6](decisions.md#d6--history-是-pi-transcript-的派生索引业务事实统一写入-event)、[D5](decisions.md#d5--task-由待办演进而来run-是代码类-task-的执行)、[D7](decisions.md#d7--调度以一次触发一个事务推进唤醒内容只带-goal-状态与-task)；问题 1 见 [D3](decisions.md#d3--保留-typescript-常驻服务与-electron-客户端)。设计决策集中在 [decisions.md](decisions.md)。
 
