@@ -1,7 +1,0 @@
-{
-  "name": "Tian Agent NSH",
-  "id": "dev.tian.agent.nsh.preview",
-  "version": "0.1.0",
-  "build": 1,
-  "rust": "."
-}

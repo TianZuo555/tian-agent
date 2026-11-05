@@ -11,9 +11,7 @@ import { defineConfig } from 'react-doctor/api';
 export default defineConfig({
   ignore: {
     // Build output, not source: the renderer bundle and the service payload.
-    files: ['.vite/**', 'dist/**', 'out/**', 'crates/tian-nsh/**'],
-    // NSH TSX uses native signals and compiler-provided If/Each, not React.
-    // `nsh check` and native integration tests verify that application.
+    files: ['.vite/**', 'dist/**', 'out/**'],
   },
   rules: {
     'react-doctor/use-lazy-motion': 'off',

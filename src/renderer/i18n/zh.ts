@@ -23,14 +23,6 @@ import type { Messages } from './en';
  * - Supersede → 取代
  */
 export const zh: Partial<Messages> = {
-  'nsh.title': 'Tian Agent NSH',
-  'nsh.readOnly': '只读预览',
-  'nsh.context': '上下文',
-  'nsh.contextPending': '任务和 Run 将在后续阶段显示。',
-  'nsh.viewPending': '此视图将在后续迁移阶段提供。',
-  'nsh.connectionHelp': '使用相同的临时数据目录启动开发服务。',
-  'nsh.languageEnglish': 'English',
-  'nsh.languageChinese': '中文',
   // ─── 1. Common Verbs & Chrome ──────────────────────────────────────────────
   'common.cancel': '取消',
   'common.close': '关闭',
