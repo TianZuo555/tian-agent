@@ -1,0 +1,28 @@
+/* Shared identity treatment for both Tian Sky mockups. Light stays on surfaces. */
+.orb[data-avatar],
+.planet[data-avatar] {
+  background: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+  overflow: visible;
+}
+.orb[data-avatar]::before,
+.orb[data-avatar]::after,
+.planet[data-avatar] > .core {
+  display: none;
+}
+[data-avatar] > .tian-avatar {
+  position: absolute;
+  inset: -18%;
+  width: 136%;
+  height: 136%;
+  pointer-events: none;
+}
+.planet[data-avatar] > .orbit {
+  inset: -8%;
+  border-color: transparent;
+}
+.planet[data-avatar] > .orbit i {
+  width: 4px;
+  height: 4px;
+}

@@ -4,7 +4,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D22，按领域排序。当前 `DATABASE_VERSION = 13`、`SERVICE_PROTOCOL = 13`。每次 schema 变化都提升版本；旧数据库先做快照，再重建为空库（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D23，按领域排序。当前 `DATABASE_VERSION = 13`、`SERVICE_PROTOCOL = 13`。每次 schema 变化都提升版本；旧数据库先做快照，再重建为空库（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -32,6 +32,7 @@
 | —      | D20 通知投递与管理者交接移出 Service 类                                         |
 | —      | D21 模型 Provider 可插拔                                                        |
 | —      | D22 统一 Seatbelt 工兵沙箱                                                      |
+| —      | D23 Native Shell 客户端采用「天色」视觉语言                                     |
 
 > 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时追加为下一个空闲编号。D12–D22 为后续架构演进决策。
 
@@ -451,3 +452,23 @@ Magpie 不再是模型流量的唯一通道。它成为多个 provider 之一，
 - 工兵指令告知模型：工作目录外的写入按设计失败；`run.dispatched` 记录沙箱模式与网络开关。
 
 **后果**：`sandbox-exec` 已被 Apple 标为弃用但仍在 macOS 提供；自检在 Apple 移除它时失败关闭。与 SwiftPM、Xcode 构建、Chromium/Playwright 或 CLI 自带沙箱的嵌套冲突仍需按项目用 `off` 或额外可写根绕开——这些绕开手段是项目设置，不另立决策。
+
+## D23 — Native Shell 客户端采用「天色」视觉语言
+
+状态：已通过。
+
+Native Shell 客户端（先做 macOS 和 iOS）采用 [design-language.md](design-language.md) 中的「天色」视觉语言。可交互设计稿 [`docs/design/client-mockup.html`](../design/client-mockup.html) 是它的视觉参照。Electron 客户端在移除前沿用旧的墨色单色语言。
+
+**背景**：墨色单色语言只把颜色留给警告和 diff，总管、管理者、工兵看起来一样；用户要打开 Context → Runs 才知道谁在工作（[persistent-agent-ui.md](research/persistent-agent-ui.md)）。NSH 客户端以对话为中心，且必须在手机上可用：手机上原始的工兵 CLI 输出无法阅读，一屏也只放得下一个对话。
+
+**决策**：
+
+- 表面保持无彩。颜色只表示身份（总管的黎明渐变光球、每位管理者一种色相）、状态（工作中、等你、失败）和 diff 增删行。
+- 只有一个光源：总管，位于左上。五个层级（L0–L4）。卡片只有顶部边缘高光，没有投影；只有浮层有投影。玻璃用 NSH `glassEffect`，并提供不透明的退化方案和「玻璃强度」设置。
+- 每个动画都表示一个状态。开启减少动效时，状态只用颜色表示。
+- 工兵只显示四个阶段（理解、修改、验证、汇报），由服务端按固定规则从工具调用推出。不显示原始 CLI 输出。
+- 对话正文 15px / 1.7（手机 14px），最宽 720px。取代草案 `docs/spec/ui.md` §11 中的 16px / 1.5。
+- 选中的行只用底色，不用左侧高光条。
+- 设置按归属分组：智能体（账号）、个人（这台设备）、运行（服务器）。
+
+**后果**：调研中「不要照搬彩色头像」的建议收窄为：身份可以用颜色，但每位管理者只有一种色相，总管只有一条渐变。草案 UI 规范落地时必须改用 15px / 1.7。D1 的三栏布局沿用到 macOS 客户端；其中 `@pierre/diffs` 的细节由 NSH `DiffView` 取代。图标仍然只用 Phosphor。管理者色相的分配方式、iOS App Extension 支持仍待确认（[design-language.md §14](design-language.md#14-待确认)）。

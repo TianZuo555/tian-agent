@@ -36,21 +36,21 @@ Toolchain details (Node 26 + pnpm 12.5.1), environment variables, and testing gu
 
 ## Documentation
 
-| Document                                                         | Description                                                                                     |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [docs/development.md](docs/development.md)                       | Toolchain (mise), common commands, local env vars, test suites, and React Doctor standards      |
-| [docs/decisions.md](docs/decisions.md)                           | Architectural design decisions D1–D21: rationales and trade-offs                                |
-| [docs/architecture.md](docs/architecture.md)                     | Process model, desktop client, module map, permissions, and scope isolation                     |
-| [docs/service.md](docs/service.md)                               | Resident service: installation, operations, exclusive locks, and transactional upgrade/rollback |
-| [docs/agent-work.md](docs/agent-work.md)                         | Goals, task lifecycle, scheduling, Run state machines, Manager delegation, and messaging        |
-| [docs/memory.md](docs/memory.md)                                 | SQLite memory engine, explicit Core Memory, provenance tracking, and candidate extraction       |
-| [docs/channels.md](docs/channels.md)                             | Channels and session bindings, Telegram / WeChat setup, and the Inbox file drop protocol        |
-| [docs/data.md](docs/data.md)                                     | Schema design, crash recovery, notifications, History full-text search, and Event auditing      |
-| [docs/improvement-log.md](docs/improvement-log.md)               | Improvement Log: entry lifecycle, exception deduplication, and Task promotion                   |
-| [docs/prd.md](docs/prd.md)                                       | Product Requirements Document (PRD): vision, core entities, requirements matrix, and roadmap    |
-| [docs/design-language.md](docs/design-language.md)               | Visual language specification: ink surfaces, monochrome accents, Coder tokens, and Phosphor     |
-| [docs/research/memory-review.md](docs/research/memory-review.md) | Memory system research comparing OpenClaw, Hermes, and Tian Agent designs                       |
-| [docs/research/rakazo-review.md](docs/research/rakazo-review.md) | Rakazo research: GUI and computer capability gaps, and staged recommendations                   |
+| Document                                                         | Description                                                                                                          |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [docs/development.md](docs/development.md)                       | Toolchain (mise), common commands, local env vars, test suites, and React Doctor standards                           |
+| [docs/decisions.md](docs/decisions.md)                           | Architectural design decisions D1–D23: rationales and trade-offs                                                     |
+| [docs/architecture.md](docs/architecture.md)                     | Process model, desktop client, module map, permissions, and scope isolation                                          |
+| [docs/service.md](docs/service.md)                               | Resident service: installation, operations, exclusive locks, and transactional upgrade/rollback                      |
+| [docs/agent-work.md](docs/agent-work.md)                         | Goals, task lifecycle, scheduling, Run state machines, Manager delegation, and messaging                             |
+| [docs/memory.md](docs/memory.md)                                 | SQLite memory engine, explicit Core Memory, provenance tracking, and candidate extraction                            |
+| [docs/channels.md](docs/channels.md)                             | Channels and session bindings, Telegram / WeChat setup, and the Inbox file drop protocol                             |
+| [docs/data.md](docs/data.md)                                     | Schema design, crash recovery, notifications, History full-text search, and Event auditing                           |
+| [docs/improvement-log.md](docs/improvement-log.md)               | Improvement Log: entry lifecycle, exception deduplication, and Task promotion                                        |
+| [docs/prd.md](docs/prd.md)                                       | Product Requirements Document (PRD): vision, core entities, requirements matrix, and roadmap                         |
+| [docs/design-language.md](docs/design-language.md)               | Visual language "Tian Sky": identity, light and elevation, components, settings; NSH client mockup in `docs/design/` |
+| [docs/research/memory-review.md](docs/research/memory-review.md) | Memory system research comparing OpenClaw, Hermes, and Tian Agent designs                                            |
+| [docs/research/rakazo-review.md](docs/research/rakazo-review.md) | Rakazo research: GUI and computer capability gaps, and staged recommendations                                        |
 
 ## Roadmap
 

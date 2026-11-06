@@ -4,7 +4,7 @@
 
 This document records architectural decisions that are **difficult to reverse and critical to understand**: why this architecture was chosen and what trade-offs were made. Implementation details and operational guides appear in [architecture.md](architecture.md), [memory.md](memory.md), [data.md](data.md), [agent-work.md](agent-work.md), [channels.md](channels.md), [service.md](service.md), and [improvement-log.md](improvement-log.md).
 
-Each decision forms a section numbered D1 through D22, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`. Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty (see [service.md](service.md#service-upgrades)).
+Each decision forms a section numbered D1 through D23, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`. Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty (see [service.md](service.md#service-upgrades)).
 
 The earlier `docs/adr/` directory has been consolidated into this document:
 
@@ -32,6 +32,7 @@ The earlier `docs/adr/` directory has been consolidated into this document:
 | —          | D20 Notification delivery and Manager handoffs leave the Service class |
 | —          | D21 Pluggable model providers                                          |
 | —          | D22 Unified Seatbelt sandbox for Worker commands                       |
+| —          | D23 Tian Sky visual language for the Native Shell clients              |
 
 ---
 
@@ -423,3 +424,23 @@ Every Worker command — for Pi Workers and external runtimes alike — runs ins
 - The worker instructions tell the model that writes outside the working directory fail by design; `run.dispatched` records the sandbox mode and network flag.
 
 **Consequences**: `sandbox-exec` is deprecated but still present on macOS; the self-test fails closed if Apple removes it. Nested sandbox conflicts with SwiftPM, Xcode builds, Chromium/Playwright, or the CLI's own sandboxing may still need per-project `off` or extra writable roots — those escape hatches are project settings, not new decisions.
+
+## D23 — Tian Sky visual language for the Native Shell clients
+
+Status: Accepted.
+
+The Native Shell clients (macOS and iOS first) use the "Tian Sky" visual language in [design-language.md](design-language.md). The interactive mockup [`docs/design/client-mockup.html`](design/client-mockup.html) is its visual reference. The Electron client keeps the earlier ink-monochrome language until it is removed.
+
+**Context**: The ink-monochrome language reserved colour for warnings and diffs, so the Chief, the Managers, and the Workers looked the same; the user had to open Context → Runs to see who was working ([persistent-agent-ui.md](research/persistent-agent-ui.md)). The NSH client is chat-first and must work on a phone, where a raw Worker CLI stream is unreadable and a screen holds little more than one conversation.
+
+**Decision**:
+
+- Surfaces stay achromatic. Colour carries only identity (the Chief's dawn-gradient orb, one hue per Manager), state (working, waiting, failed), and diff lines.
+- One light source: the Chief, at the top left. Five elevation levels (L0–L4). Cards get a top rim highlight and no drop shadow; only floating layers cast shadows. Glass uses NSH `glassEffect`, with an opaque fallback and a glass-intensity setting.
+- Every animation reports a state. Under reduced motion, state is shown by colour only.
+- Workers appear as four phases (Understand, Edit, Verify, Report) that the server derives from tool calls with fixed rules. The raw CLI output is not shown.
+- Chat body text is 15 px / 1.7 (14 px on the phone), at most 720 px wide. This replaces the 16 px / 1.5 in the draft `docs/spec/ui.md` §11.
+- Selected rows use a fill only, never a left accent bar.
+- Settings are grouped by owner: Agent (the account), Personal (this device), Operations (the server).
+
+**Consequences**: The research recommendation not to copy coloured avatars is narrowed: identity now uses colour, limited to one hue per Manager and the single gradient of the Chief. The draft UI spec must take the 15 px / 1.7 size when it lands. D1's three-pane layout carries over to the macOS client; its `@pierre/diffs` detail is replaced by NSH `DiffView`. Phosphor remains the only icon set. Manager hue assignment and iOS app-extension support stay open ([design-language.md §14](design-language.md#14-open-questions)).
