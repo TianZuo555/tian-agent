@@ -1436,7 +1436,7 @@ test('system notifications are indexed and shown as system, never as the user', 
 });
 
 test('the resident service records inbox and delivery events, and backfills transcripts', async (t) => {
-  const root = temporary(t, 'tian-history-service-');
+  const root = mkdtempSync(join(tmpdir(), 'tian-history-service-'));
   const paths = {
     ...servicePaths(join(root, 'data')),
     socketPath: join(root, 'agent.sock'),
@@ -1447,6 +1447,7 @@ test('the resident service records inbox and delivery events, and backfills tran
   t.after(async () => {
     for (const client of clients) client.close();
     await server.close();
+    rmSync(root, { recursive: true, force: true });
   });
   const client = new ServiceClient(paths.socketPath, undefined, {
     reconnectDelayMs: 10,
@@ -1549,7 +1550,7 @@ test('the resident service records inbox and delivery events, and backfills tran
 });
 
 test('a notification queued mid-delivery is delivered in the same pass', async (t) => {
-  const root = temporary(t, 'tian-history-delivery-');
+  const root = mkdtempSync(join(tmpdir(), 'tian-history-delivery-'));
   const paths = {
     ...servicePaths(join(root, 'data')),
     socketPath: join(root, 'agent.sock'),
@@ -1558,6 +1559,7 @@ test('a notification queued mid-delivery is delivered in the same pass', async (
   await server.start();
   t.after(async () => {
     await server.close();
+    rmSync(root, { recursive: true, force: true });
   });
   const service = server.service;
   const conversation = await service.createConversation('global');
@@ -1591,7 +1593,7 @@ test('a notification queued mid-delivery is delivered in the same pass', async (
 });
 
 test('an inbox rescan without new files stays silent; a new file notifies once', async (t) => {
-  const root = temporary(t, 'tian-history-inbox-');
+  const root = mkdtempSync(join(tmpdir(), 'tian-history-inbox-'));
   const paths = {
     ...servicePaths(join(root, 'data')),
     socketPath: join(root, 'agent.sock'),
@@ -1600,6 +1602,7 @@ test('an inbox rescan without new files stays silent; a new file notifies once',
   await server.start();
   t.after(async () => {
     await server.close();
+    rmSync(root, { recursive: true, force: true });
   });
   const service = server.service;
   await service.createConversation('global');

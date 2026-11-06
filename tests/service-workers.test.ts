@@ -202,6 +202,22 @@ test('dispatch resolves intent, explicit pins, and the project default', async (
     resolve({ ...baseInput, runtime: 'pi', model: 'cheap' }, noDefault),
     { runtime: 'pi', model: 'cheap', thinkingLevel: null },
   );
+  // Explicit pins also override a project's configured default intent.
+  assert.deepEqual(
+    resolve(
+      { ...baseInput, runtime: 'pi', model: 'cheap', thinkingLevel: 'low' },
+      { defaultIntent: 'review' },
+    ),
+    { runtime: 'pi', model: 'cheap', thinkingLevel: 'low' },
+  );
+  // Even a removed default must not prevent an explicit dispatch.
+  assert.deepEqual(
+    resolve(
+      { ...baseInput, runtime: 'pi', model: 'cheap' },
+      { defaultIntent: 'gone' },
+    ),
+    { runtime: 'pi', model: 'cheap', thinkingLevel: null },
+  );
   // 3. Neither falls to the project default intent.
   assert.deepEqual(resolve(baseInput, { defaultIntent: 'review' }), {
     runtime: 'pi',

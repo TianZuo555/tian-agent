@@ -141,6 +141,8 @@ export class Service {
   private maintenanceMode = false;
   private openingSessions = new Map<string, Promise<ConversationInfo>>();
   private historyBackfill: Promise<void> | null = null;
+  private modelWarmup: Promise<unknown> | null = null;
+  private modelWarmupAbort = new AbortController();
 
   constructor(
     private userDataDir: string,
@@ -376,9 +378,9 @@ export class Service {
     // their hermetic no-model behavior; best-effort, a failed refresh
     // keeps the previous catalog.
     if (this.options.warmModels)
-      void this.refreshModels().catch((error) =>
-        this.reportIssue('models.warm', error),
-      );
+      this.modelWarmup ??= this.refreshModels(
+        this.modelWarmupAbort.signal,
+      ).catch((error) => this.reportIssue('models.warm', error));
     await this.startTelegram();
     await this.startWechat();
   }
@@ -499,6 +501,7 @@ export class Service {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.modelWarmupAbort.abort();
     this.outbox.pause();
     this.runs.pause();
     this.scheduler.stop();
@@ -515,6 +518,7 @@ export class Service {
     await this.history.idle();
     await this.memoryWorker.idle();
     await this.historyBackfill;
+    await this.modelWarmup;
     await this.outbox.idle();
     await Promise.all([...this.watches.values()].map((watch) => watch.stop()));
     this.watches.clear();
@@ -1041,8 +1045,8 @@ export class Service {
   getModelCatalog() {
     return this.settings.catalogState();
   }
-  async refreshModels() {
-    const catalog = await this.settings.refreshCatalog();
+  async refreshModels(signal?: AbortSignal) {
+    const catalog = await this.settings.refreshCatalog(signal);
     this.agents.refreshModels();
     this.emit('settings', this.settings.get());
     return catalog;
@@ -1172,17 +1176,22 @@ export class Service {
    */
   async setWorkers(workers: WorkerSettingsInfo): Promise<void> {
     const enabled = this.settings.enabledRuntimes();
-    for (const runtime of workers.runtimes) {
-      if (runtime.id === 'pi' || !runtime.enabled || enabled.has(runtime.id))
-        continue;
-      const status = await this.runtimeStatus(runtime.id);
-      if (!status.installed)
-        throw new Error(
-          `Runtime '${runtime.id}' is not installed: ${status.detail}`,
-        );
-      if (!status.signedIn)
-        throw new Error(`Runtime '${runtime.id}': sign-in required`);
-    }
+    await Promise.all(
+      workers.runtimes
+        .filter(
+          (runtime) =>
+            runtime.id !== 'pi' && runtime.enabled && !enabled.has(runtime.id),
+        )
+        .map(async (runtime) => {
+          const status = await this.runtimeStatus(runtime.id);
+          if (!status.installed)
+            throw new Error(
+              `Runtime '${runtime.id}' is not installed: ${status.detail}`,
+            );
+          if (!status.signedIn)
+            throw new Error(`Runtime '${runtime.id}': sign-in required`);
+        }),
+    );
     this.settings.setWorkers(workers);
     this.emit('settings', this.settings.get());
   }
@@ -1845,7 +1854,8 @@ export class Service {
       throw new Error(
         'intent is mutually exclusive with runtime/model/thinking_level — pass one or the other',
       );
-    const intentName = input.intent?.trim() || project.defaultIntent;
+    const intentName =
+      input.intent?.trim() || (explicit ? null : project.defaultIntent);
     if (intentName) {
       const intent = this.settings.assertIntent(intentName);
       if (!this.settings.enabledRuntimes().has(intent.runtime))

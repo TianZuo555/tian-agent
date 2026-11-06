@@ -10,6 +10,8 @@ import { ServiceClient } from '../src/service/client';
 import { servicePaths } from '../src/shared/service-paths';
 import type { ConversationInfo } from '../src/shared/types';
 import { launchAgentDefinition } from '../src/service/launchd';
+import { Service } from '../src/worker/service';
+import type { Settings } from '../src/worker/settings';
 
 async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 5_000;
@@ -42,6 +44,41 @@ async function fixture(t: TestContext) {
   };
   return { root, paths, server, client };
 }
+
+test('service shutdown cancels and settles the startup catalog refresh before closing storage', async (t) => {
+  const root = mkdtempSync('/tmp/tian-service-warmup-');
+  const service = new Service(root, () => {}, {}, null, { warmModels: true });
+  t.after(async () => {
+    await service.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const { settings } = service as unknown as { settings: Settings };
+  const refresh = settings.refreshCatalog.bind(settings);
+  let started = false;
+  let aborted = false;
+  settings.refreshCatalog = async (signal) => {
+    assert.ok(signal);
+    started = true;
+    await new Promise<void>((resolve) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          aborted = true;
+          resolve();
+        },
+        { once: true },
+      );
+    });
+    // The refresh still needs storage after its network request is cancelled.
+    assert.deepEqual(service.db.listProjects(), []);
+    return refresh(signal);
+  };
+  await service.init();
+  assert.equal(started, true);
+  await service.close();
+  assert.equal(aborted, true);
+  assert.ok(statSync(join(root, 'settings.json')).isFile());
+});
 
 test('closing every desktop client leaves the service and persistent data running', async (t) => {
   const f = await fixture(t);

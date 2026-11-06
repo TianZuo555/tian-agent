@@ -81,6 +81,58 @@ test('modify serializes per-provider read-modify-write', async () => {
   assert.deepEqual(seen, [undefined, 'k1']);
 });
 
+test('concurrent updates to different providers preserve both credentials', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tian-credentials-'));
+  const store = new FileCredentialStore(dir);
+  await Promise.all([
+    store.modify('first', async () => ({ type: 'api_key', key: 'first-key' })),
+    store.modify('second', async () => ({
+      type: 'api_key',
+      key: 'second-key',
+    })),
+  ]);
+  const reopened = new FileCredentialStore(dir);
+  assert.deepEqual(await reopened.read('first'), {
+    type: 'api_key',
+    key: 'first-key',
+  });
+  assert.deepEqual(await reopened.read('second'), {
+    type: 'api_key',
+    key: 'second-key',
+  });
+});
+
+test('an async credential update does not restore another deleted provider', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tian-credentials-'));
+  const store = new FileCredentialStore(dir);
+  await store.modify('removed', async () => ({
+    type: 'api_key',
+    key: 'old-key',
+  }));
+  let started!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const update = store.modify('refreshing', async () => {
+    started();
+    await pending;
+    return { type: 'api_key', key: 'new-key' };
+  });
+  await entered;
+  await store.delete('removed');
+  release();
+  await update;
+  assert.equal(await store.read('removed'), undefined);
+  assert.deepEqual(await store.read('refreshing'), {
+    type: 'api_key',
+    key: 'new-key',
+  });
+});
+
 test('delete removes a credential; deleting a missing one is a no-op', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tian-credentials-'));
   const store = new FileCredentialStore(dir);

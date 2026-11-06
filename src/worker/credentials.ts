@@ -93,11 +93,12 @@ export class FileCredentialStore implements CredentialStore {
   ): Promise<Credential | undefined> {
     return this.enqueue(providerId, async () => {
       options?.signal?.throwIfAborted();
-      const credentials = this.loadAll();
-      const current = credentials[providerId];
+      const current = this.loadAll()[providerId];
       const next = await fn(current);
       options?.signal?.throwIfAborted();
       if (next !== undefined) {
+        // Other providers can commit while fn awaits an OAuth refresh.
+        const credentials = this.loadAll();
         credentials[providerId] = next;
         this.writeAll(credentials);
       }

@@ -47,7 +47,22 @@ export function providerForConfig(
       (entry) => entry.id === (config.builtinId ?? config.id),
     );
     if (!provider) throw new Error(`unknown built-in provider '${config.id}'`);
-    return provider;
+    if (provider.id === config.id) return provider;
+    // Auth resolves against this id; catalog models must use the same id.
+    return {
+      ...provider,
+      id: config.id,
+      name: config.name ?? provider.name,
+      getModels: () =>
+        provider
+          .getModels()
+          .map((model) => ({ ...model, provider: config.id })),
+      getAllModels: () =>
+        (provider.getAllModels?.() ?? provider.getModels()).map((model) => ({
+          ...model,
+          provider: config.id,
+        })),
+    };
   }
   return gatewayProvider(
     {

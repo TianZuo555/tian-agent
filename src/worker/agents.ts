@@ -66,15 +66,14 @@ export class AgentRuntime implements WorkerRuntime {
     private sandbox?: (run: RunRow, inner: ExecutionEnv) => ExecutionEnv,
   ) {}
 
-  /**
-   * Swap in a fresh provider after the model catalog was refreshed. The Models
-   * instance is shared with the open Harness, so replacing the provider is
-   * enough — no need to reopen storage.
-   */
+  /** Sync the live provider registry; the open Harness shares this instance. */
   refreshModels(): void {
     if (!this.models) return;
-    for (const provider of this.settings.models().getProviders())
-      this.models.setProvider(provider);
+    const providers = this.settings.models().getProviders();
+    const enabled = new Set(providers.map((provider) => provider.id));
+    for (const provider of this.models.getProviders())
+      if (!enabled.has(provider.id)) this.models.deleteProvider(provider.id);
+    for (const provider of providers) this.models.setProvider(provider);
   }
 
   async open(

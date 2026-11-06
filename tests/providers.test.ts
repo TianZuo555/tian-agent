@@ -114,6 +114,25 @@ test('setModel rejects unknown or disabled providers', () => {
   assert.equal(settings.get().model.modelId, 'workbuddy-ai/x');
 });
 
+test('the default manager model survives reopening and clearing settings', () => {
+  const root = dir();
+  const settings = new Settings(root);
+  const manager = { provider: 'magpie', modelId: 'manager-model' };
+  const chief = { provider: 'magpie', modelId: 'chief-model' };
+  settings.setManagerModel(manager);
+  settings.setModel(chief);
+
+  const reopened = new Settings(root);
+  assert.deepEqual(reopened.get().managerModel, manager);
+  assert.deepEqual(reopened.managerModel(), manager);
+  assert.deepEqual(reopened.get().model, chief);
+
+  reopened.setManagerModel(null);
+  const cleared = new Settings(root);
+  assert.equal(cleared.get().managerModel, undefined);
+  assert.deepEqual(cleared.managerModel(), chief);
+});
+
 test('models() registers a provider per enabled config', () => {
   const root = dir();
   writeFileSync(
@@ -128,9 +147,8 @@ test('models() registers a provider per enabled config', () => {
   );
   const models = new Settings(root).models();
   assert.ok(models.getProviders().some((provider) => provider.id === 'magpie'));
-  assert.ok(
-    models.getProviders().some((provider) => provider.id === 'anthropic'),
-  );
+  assert.ok(models.getProviders().some((provider) => provider.id === 'bigco'));
+  assert.ok(!models.getProvider('anthropic'));
   assert.ok(!models.getProviders().some((provider) => provider.id === 'off'));
 });
 
@@ -143,6 +161,39 @@ test('the credential store feeds provider registration', async () => {
   }));
   const settings = new Settings(root, credentials);
   assert.ok(settings.models()); // construction does not throw
+});
+
+test('builtin aliases use their own model ids and credentials', async () => {
+  const credentials = new InMemoryCredentialStore();
+  const settings = new Settings(dir(), credentials);
+  for (const id of ['personal', 'work']) {
+    settings.addProvider({
+      id,
+      kind: 'builtin',
+      builtinId: 'anthropic',
+      enabled: true,
+    });
+    await credentials.modify(id, async () => ({
+      type: 'api_key',
+      key: `${id}-key`,
+    }));
+  }
+  const models = settings.models();
+  for (const id of ['personal', 'work']) {
+    const provider = models.getProvider(id);
+    assert.ok(provider);
+    assert.ok(provider.getModels().length > 0);
+    assert.ok(provider.getModels().every((model) => model.provider === id));
+    assert.ok(
+      provider.getAllModels?.().every((model) => model.provider === id),
+    );
+    const first = provider.getModels()[0];
+    const model = models.getModel(id, first.id);
+    assert.ok(model);
+    assert.equal((await models.getAuth(model))?.auth.apiKey, `${id}-key`);
+    assert.ok((await models.getAvailable(id)).length > 0);
+  }
+  assert.equal(models.getProvider('anthropic'), undefined);
 });
 
 // ---- catalogs ---------------------------------------------------------------

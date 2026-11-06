@@ -165,6 +165,8 @@ class CodexConversation implements WorkerConversation {
     run: RunRow,
     prompt: string,
   ): () => Promise<WorkerOutcome> {
+    // Even an unrecoverable attempt must stop its surviving process group.
+    killStale(run.externalPid);
     if (run.autoResumed === run.attempt)
       return async () => ({
         status: 'interrupted',
@@ -176,7 +178,6 @@ class CodexConversation implements WorkerConversation {
         reason: `codex process killed before it reported a session id (attempt ${run.attempt})`,
       });
     this.db.patchRun(run.id, { autoResumed: run.attempt });
-    killStale(run.externalPid);
     this.opts.onAutoResume?.(run);
     return async () => {
       // Guard: snapshot the worktree before resuming — earlier work stays visible.
@@ -224,6 +225,13 @@ class CodexConversation implements WorkerConversation {
       // The outer Seatbelt profile is the single boundary when present.
       profile ? 'danger-full-access' : 'workspace-write',
       '--skip-git-repo-check',
+      ...(run.model ? ['--model', run.model] : []),
+      ...(run.thinkingLevel
+        ? [
+            '--config',
+            `model_reasoning_effort=${JSON.stringify(run.thinkingLevel)}`,
+          ]
+        : []),
       ...(resume ? ['resume', run.externalSession!] : []),
       prompt,
     ];

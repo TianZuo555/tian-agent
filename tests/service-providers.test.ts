@@ -68,6 +68,10 @@ test('provider CRUD and key redaction over IPC', async (t) => {
   assert.equal(providers.length, 2);
   assert.equal(providers[1].id, 'bigco');
   assert.equal(providers[1].enabled, true);
+  const { models } = internals(f.server.service).agents as unknown as {
+    models: ReturnType<Settings['models']>;
+  };
+  assert.ok(models.getProvider('bigco'));
 
   await app.invoke('setProviderKey', ['bigco', 'sk-live-123456']);
   providers = await app.invoke('listProviders', []);
@@ -86,6 +90,7 @@ test('provider CRUD and key redaction over IPC', async (t) => {
     providers.find((provider) => provider.id === 'bigco')?.enabled,
     false,
   );
+  assert.equal(models.getProvider('bigco'), undefined);
 
   await app.invoke('deleteProviderKey', ['bigco']);
   providers = await app.invoke('listProviders', []);
@@ -94,9 +99,15 @@ test('provider CRUD and key redaction over IPC', async (t) => {
     false,
   );
 
+  await app.invoke('updateProvider', [
+    'bigco',
+    { id: 'bigco', kind: 'gateway', enabled: true },
+  ]);
+  assert.ok(models.getProvider('bigco'));
   await app.invoke('removeProvider', ['bigco']);
   providers = await app.invoke('listProviders', []);
   assert.equal(providers.length, 1);
+  assert.equal(models.getProvider('bigco'), undefined);
 
   // Validation: bad id, duplicate id, and removing the magpie preset.
   await assert.rejects(

@@ -23,13 +23,13 @@ Not verified: desktop clients, real latency, pricing, VoiceOver behavior beyond 
 
 ## The Three Products
 
-| | Muse (Meta) | Grok Bot (xAI) | DS Bot (community) |
-| --- | --- | --- | --- |
-| Primary object | One main chat, plus side chats | Roster of Bots | Roster of Bots, plus group chats |
-| Agent runtime | Cloud VM per user, with a sentinel process | Cloud computer per Bot | The user's own DeepSeek Harness host |
-| Coordination | One agent with sub-work | A coordinating Bot routes to specialist Bots; group threads | A Chief Bot manages the other Bots; group admin and @-mentions |
-| Cost control | Approval cards before send or spend | Approval only when a decision needs the user | Per-Bot model choice; usage page by Bot and model |
-| Release | Consumer, September 2026 | Beta, September 2026 | Open source, Apache-2.0, October 2026 |
+|                | Muse (Meta)                                | Grok Bot (xAI)                                              | DS Bot (community)                                             |
+| -------------- | ------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------------- |
+| Primary object | One main chat, plus side chats             | Roster of Bots                                              | Roster of Bots, plus group chats                               |
+| Agent runtime  | Cloud VM per user, with a sentinel process | Cloud computer per Bot                                      | The user's own DeepSeek Harness host                           |
+| Coordination   | One agent with sub-work                    | A coordinating Bot routes to specialist Bots; group threads | A Chief Bot manages the other Bots; group admin and @-mentions |
+| Cost control   | Approval cards before send or spend        | Approval only when a decision needs the user                | Per-Bot model choice; usage page by Bot and model              |
+| Release        | Consumer, September 2026                   | Beta, September 2026                                        | Open source, Apache-2.0, October 2026                          |
 
 ## Screen by Screen
 
@@ -129,16 +129,16 @@ Not verified: desktop clients, real latency, pricing, VoiceOver behavior beyond 
 
 ## Gap Map
 
-| Screen | Tian today | Pattern worth taking | Cost |
-| --- | --- | --- | --- |
-| Sidebar | Scope tree, Manager pinned | Manager as person row with presence | Small |
-| Conversation header | Title, model picker | Centered agent identity, status control | Small |
-| Transcript | Document plus notice rows | Speaker attribution, structured cards | Medium |
-| Context → Runs | Run list, no runtime or model | Runtime, model, thinking, step feed | Small, then medium |
-| Approvals | None | Inline card with digest and Deny / Allow | Large |
-| Run output | Report file and diff view | One-click reach from the Run row | Small |
-| Settings | Eight flat sections | Three bands, rule for capabilities vs context | Small |
-| Proactivity | Goal schedules, deduped notices | Next fire time, unread marker, dial | Small |
+| Screen              | Tian today                      | Pattern worth taking                          | Cost               |
+| ------------------- | ------------------------------- | --------------------------------------------- | ------------------ |
+| Sidebar             | Scope tree, Manager pinned      | Manager as person row with presence           | Small              |
+| Conversation header | Title, model picker             | Centered agent identity, status control       | Small              |
+| Transcript          | Document plus notice rows       | Speaker attribution, structured cards         | Medium             |
+| Context → Runs      | Run list, no runtime or model   | Runtime, model, thinking, step feed           | Small, then medium |
+| Approvals           | None                            | Inline card with digest and Deny / Allow      | Large              |
+| Run output          | Report file and diff view       | One-click reach from the Run row              | Small              |
+| Settings            | Eight flat sections             | Three bands, rule for capabilities vs context | Small              |
+| Proactivity         | Goal schedules, deduped notices | Next fire time, unread marker, dial           | Small              |
 
 ## Recommended Order
 
@@ -149,9 +149,9 @@ Not verified: desktop clients, real latency, pricing, VoiceOver behavior beyond 
 
 ## Rejected Patterns
 
-| Pattern | Why not |
-| --- | --- |
-| User-created agent roster | Tian's roles are fixed by the architecture (Chief, Manager, Worker). A free-form roster would duplicate projects and Goals with a weaker model. |
-| Agent group chats | Tian already routes work through Manager ↔ Worker messages and Chief ↔ Manager reports. A shared thread would add a second, competing channel. |
-| Remote agent desktop | Tian's unit of work is a Git worktree and a diff. Add a live computer view only if computer use becomes a product decision ([todo-computer-use.md](../todo-computer-use.md)). |
-| Flat chat without bubbles | Tian's transcript carries long reports. Bubble-first would compress them; speaker attribution is the part worth taking. |
+| Pattern                   | Why not                                                                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User-created agent roster | Tian's roles are fixed by the architecture (Chief, Manager, Worker). A free-form roster would duplicate projects and Goals with a weaker model.                               |
+| Agent group chats         | Tian already routes work through Manager ↔ Worker messages and Chief ↔ Manager reports. A shared thread would add a second, competing channel.                                |
+| Remote agent desktop      | Tian's unit of work is a Git worktree and a diff. Add a live computer view only if computer use becomes a product decision ([todo-computer-use.md](../todo-computer-use.md)). |
+| Flat chat without bubbles | Tian's transcript carries long reports. Bubble-first would compress them; speaker attribution is the part worth taking.                                                       |

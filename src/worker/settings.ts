@@ -96,6 +96,16 @@ export class Settings {
               modelId: saved.model.modelId,
             },
           };
+        if (
+          typeof saved.managerModel?.provider === 'string' &&
+          saved.managerModel.provider.trim() &&
+          typeof saved.managerModel.modelId === 'string' &&
+          saved.managerModel.modelId.trim()
+        )
+          this.value.managerModel = {
+            provider: saved.managerModel.provider,
+            modelId: saved.managerModel.modelId,
+          };
         if (Array.isArray(saved.providers))
           this.providerConfigs = saved.providers.filter(
             (entry) =>
@@ -335,7 +345,7 @@ export class Settings {
    * previous catalog intact. Returns the default provider's catalog state —
    * the renderer-facing shape stays one catalog for now.
    */
-  async refreshCatalog(): Promise<ModelCatalog> {
+  async refreshCatalog(signal?: AbortSignal): Promise<ModelCatalog> {
     await Promise.all(
       this.providers().map(async (config) => {
         if (config.kind !== 'gateway' || !config.enabled) return;
@@ -356,7 +366,13 @@ export class Settings {
             config.id === MAGPIE_PROVIDER
               ? ((await this.credential(config.id)) ?? magpieApiKey())
               : await this.credential(config.id);
-          const models = await fetchGatewayCatalog({ baseUrl, apiKey });
+          const models = await fetchGatewayCatalog({
+            baseUrl,
+            apiKey,
+            signal: signal
+              ? AbortSignal.any([signal, AbortSignal.timeout(5_000)])
+              : undefined,
+          });
           if (models.length === 0)
             throw new Error('gateway returned no chat models');
           this.catalogs[config.id] = models;

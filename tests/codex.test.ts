@@ -25,6 +25,15 @@ async function until(predicate: () => boolean): Promise<void> {
   }
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** pi is registered but never dispatched in these tests. */
 const unusedPi: WorkerRuntime = {
   create: () => Promise.reject(new Error('pi unused')),
@@ -91,6 +100,7 @@ function fixture(t: TestContext) {
   });
   const scopes = new Scopes(join(userData, 'global'), db);
   const resumed: string[] = [];
+  const lifetimes: { codex: CodexRuntime; runs: RunOrchestrator }[] = [];
   /** One service lifetime: a fresh adapter and orchestrator on the same db. */
   const boot = () => {
     const codex = new CodexRuntime(db, {
@@ -106,7 +116,9 @@ function fixture(t: TestContext) {
       () => {},
       async () => {},
     );
-    return { codex, runs };
+    const lifetime = { codex, runs };
+    lifetimes.push(lifetime);
+    return lifetime;
   };
   let live = boot();
   /** Service close: pause, kill external workers, settle the collectors. */
@@ -134,7 +146,9 @@ function fixture(t: TestContext) {
     return old;
   };
   t.after(async () => {
-    await shutdown();
+    for (const lifetime of lifetimes) lifetime.runs.pause();
+    await Promise.all(lifetimes.map((lifetime) => lifetime.codex.close()));
+    await Promise.all(lifetimes.map((lifetime) => lifetime.runs.join()));
     db.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -321,18 +335,85 @@ test('a resume after a hard crash kills the orphaned codex process first', async
   await until(() => Boolean(f.db.getRun(run.id)?.externalSession));
   const orphan = f.db.getRun(run.id)!.externalPid!;
   assert.ok(orphan);
-  const alive = (pid: number) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
   assert.ok(alive(orphan));
   const old = await f.crash();
   await until(() => readFileSync(f.log, 'utf8').includes('killed mid-attempt'));
   await until(() => !alive(orphan));
   assert.notEqual(f.db.getRun(run.id)!.externalPid, orphan);
+  await old.runs.join();
+});
+
+test('a second hard crash kills the resumed process before interrupting', async (t) => {
+  const f = fixture(t);
+  const run = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'HANG through two hard crashes',
+    chiefConversationId: null,
+    runtime: 'codex',
+  });
+  await until(() => Boolean(f.db.getRun(run.id)?.externalSession));
+  const firstPid = f.db.getRun(run.id)!.externalPid!;
+  const firstLifetime = await f.crash();
+  await until(() => f.db.getRun(run.id)?.externalPid !== firstPid);
+  const secondPid = f.db.getRun(run.id)!.externalPid!;
+  assert.ok(alive(secondPid));
+  const secondLifetime = await f.crash();
+  await until(() => f.db.getRun(run.id)?.status === 'interrupted');
+  await until(() => !alive(secondPid));
+  assert.equal(f.db.getRun(run.id)?.autoResumed, 1);
+  assert.deepEqual(f.resumed, [run.id]);
+  await Promise.all([firstLifetime.runs.join(), secondLifetime.runs.join()]);
+});
+
+test('a hard crash without a stored session kills the surviving process', async (t) => {
+  const f = fixture(t);
+  const run = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'HANG before session persistence',
+    chiefConversationId: null,
+    runtime: 'codex',
+  });
+  await until(() => Boolean(f.db.getRun(run.id)?.externalLastCall));
+  const orphan = f.db.getRun(run.id)!.externalPid!;
+  // Simulate losing the session event when the service crashed.
+  f.db.patchRun(run.id, { externalSession: null });
+  const old = await f.crash();
+  await until(() => f.db.getRun(run.id)?.status === 'interrupted');
+  await until(() => !alive(orphan));
+  assert.match(f.db.getRun(run.id)?.error ?? '', /session id/);
+  assert.deepEqual(f.resumed, []);
+  await old.runs.join();
+});
+
+test('codex model and thinking pins apply to initial, follow-up and recovered attempts', async (t) => {
+  const f = fixture(t);
+  const run = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: 'finish with the configured model',
+    chiefConversationId: null,
+    runtime: 'codex',
+    model: 'configured-model',
+    thinkingLevel: 'high',
+  });
+  await until(() => f.db.getRun(run.id)?.status === 'done');
+  const session = f.db.getRun(run.id)!.externalSession!;
+  await f.runs.followUp(run.id, 'HANG with the same model');
+  await until(() => Boolean(f.db.getRun(run.id)?.externalLastCall));
+  await until(() =>
+    readFileSync(f.log, 'utf8').includes('HANG with the same model'),
+  );
+  const old = await f.crash();
+  await until(() => readFileSync(f.log, 'utf8').includes('killed mid-attempt'));
+  const argv = readFileSync(f.log, 'utf8');
+  const pins =
+    '--model configured-model --config model_reasoning_effort="high"';
+  assert.equal(argv.split(pins).length - 1, 3);
+  assert.ok(argv.includes(`${pins} finish with the configured model`));
+  assert.ok(
+    argv.includes(`${pins} resume ${session} HANG with the same model`),
+  );
+  assert.ok(
+    argv.includes(`${pins} resume ${session} The previous codex process`),
+  );
   await old.runs.join();
 });
