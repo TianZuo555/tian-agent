@@ -1,5 +1,6 @@
 import { Text, View } from 'nsh';
 import { DAWN_CONIC, palette } from './theme';
+import { Avatar } from './Avatar';
 import { look, pointerLight, reduceMotion } from './state';
 import { ICON_FONT, MONO, SANS, SERIF } from './fonts';
 import { GLYPHS, type IconName } from './icons';
@@ -72,68 +73,14 @@ export function Orb(props: {
   thinking?: boolean;
   glow?: boolean;
 }) {
-  const size = props.size;
-  const halo = props.thinking ? 1.6 : 4.2;
   return (
-    <View
-      style={{ width: size, height: size, flexShrink: 0, overflow: 'visible' }}
-    >
-      <View
-        style={{
-          position: 'absolute',
-          top: -size * 0.16,
-          left: -size * 0.16,
-          width: size * 1.32,
-          height: size * 1.32,
-          borderRadius: 999,
-          borderWidth: 1,
-          borderColor: 'rgba(255, 150, 175, 0.35)',
-          borderStyle: props.thinking ? 'dashed' : 'solid',
-          opacity: 0.55,
-          animationName: reduceMotion() ? 'none' : 'pulse',
-          animationDuration: `${halo}s`,
-          animationIterationCount: 'infinite',
-        }}
-      />
-      <View
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: size,
-          height: size,
-          borderRadius: 999,
-          backgroundImage: DAWN_CONIC,
-          boxShadow:
-            props.glow === false
-              ? undefined
-              : `0 0 ${size * 0.55}px rgba(255, 111, 145, 0.32)`,
-        }}
-      >
-        <View
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            borderRadius: 999,
-            backgroundImage:
-              'radial-gradient(circle at 32% 26%, rgba(255,255,255,0.90) 0%, rgba(255,255,255,0.20) 20%, transparent 44%), radial-gradient(circle at 72% 82%, rgba(12,10,40,0.55), transparent 62%)',
-          }}
-        />
-      </View>
-      <View style={{ width: size, height: size }} />
-    </View>
+    <Avatar
+      id="chief"
+      size={props.size}
+      state={props.thinking ? 'thinking' : 'idle'}
+      glow={props.glow}
+    />
   );
-}
-
-function withAlpha(hex: string, alpha: number) {
-  const value = hex.replace('#', '');
-  const r = parseInt(value.slice(0, 2), 16);
-  const g = parseInt(value.slice(2, 4), 16);
-  const b = parseInt(value.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export function Planet(props: {
@@ -142,67 +89,61 @@ export function Planet(props: {
   state?: RunState;
   moons?: number;
 }) {
-  const size = props.size ?? 34;
-  const state = props.state ?? 'work';
-  const idle = state === 'idle';
-  const moons = props.moons ?? 1;
-  const dot = (top: number, left: number) => (
+  const id =
+    props.hue === '#ffc25c'
+      ? 'juno'
+      : props.hue === '#a99bff'
+        ? 'vega'
+        : 'atlas';
+  const state =
+    props.state === 'idle'
+      ? 'sleeping'
+      : props.state === 'wait'
+        ? 'waiting'
+        : props.state === 'fail'
+          ? 'blocked'
+          : props.state === 'done'
+            ? 'success'
+            : 'working';
+  return (
     <View
       style={{
-        position: 'absolute',
-        top,
-        left,
-        width: 5,
-        height: 5,
-        borderRadius: 999,
-        backgroundColor: props.hue,
-        boxShadow: `0 0 8px ${props.hue}`,
+        width: props.size ?? 34,
+        height: props.size ?? 34,
+        flexShrink: 0,
       }}
-    />
-  );
-  return (
-    <View style={{ width: size, height: size, flexShrink: 0 }}>
-      <View
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          borderRadius: 999,
-          borderWidth: 1,
-          borderStyle: idle ? 'solid' : 'dashed',
-          borderColor: withAlpha(props.hue, idle ? 0.22 : 0.4),
-          opacity: idle ? 0.45 : 1,
-          animationName: idle || reduceMotion() ? 'none' : 'spin',
-          animationDuration: '7s',
-          animationTimingFunction: 'linear',
-          animationIterationCount: 'infinite',
-        }}
-      >
-        {moons >= 1 ? dot(-2.5, size / 2 - 2.5) : null}
-        {moons >= 2 ? dot(size - 2.5, size / 2 - 2.5) : null}
-        {moons >= 3 ? dot(size / 2 - 2.5, -2.5) : null}
-      </View>
-      <View
-        style={{
-          position: 'absolute',
-          top: size * 0.24,
-          left: size * 0.24,
-          width: size * 0.52,
-          height: size * 0.52,
-          borderRadius: 999,
-          backgroundImage: `radial-gradient(circle at 34% 28%, #fff 0%, ${props.hue} 38%, ${withAlpha(props.hue, 0.35)} 100%)`,
-          filter: idle ? 'saturate(0.4)' : undefined,
-          boxShadow: idle
-            ? undefined
-            : state === 'wait'
-              ? `0 0 0 4px ${withAlpha(props.hue, 0.22)}`
-              : `0 0 14px ${withAlpha(props.hue, 0.55)}`,
-        }}
-      />
+    >
+      <Avatar id={id} size={props.size ?? 34} state={state} />
+      <If when={(props.moons ?? 0) > 0}>
+        <View
+          accessibilityElementsHidden
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 0,
+            flexDirection: 'row',
+            gap: 2,
+          }}
+        >
+          {Array.from({ length: props.moons ?? 0 }, () => (
+            <View
+              style={{
+                width: 4,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: props.hue,
+              }}
+            />
+          ))}
+        </View>
+      </If>
     </View>
   );
+}
+
+function withAlpha(hex: string, alpha: number) {
+  const value = hex.replace('#', '');
+  return `rgba(${parseInt(value.slice(0, 2), 16)}, ${parseInt(value.slice(2, 4), 16)}, ${parseInt(value.slice(4, 6), 16)}, ${alpha})`;
 }
 
 export function Dot(props: { state?: RunState; size?: number }) {

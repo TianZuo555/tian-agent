@@ -10,8 +10,9 @@ import { defineConfig } from 'react-doctor/api';
  */
 export default defineConfig({
   ignore: {
-    // Build output, not source: the renderer bundle and the service payload.
-    files: ['.vite/**', 'dist/**', 'out/**'],
+    // NSH uses signals and compiler-provided If/Each, not the React runtime.
+    // Its components are checked by nsh check and the native interaction tests.
+    files: ['.vite/**', 'dist/**', 'out/**', 'crates/tian-nsh/**'],
   },
   rules: {
     'react-doctor/use-lazy-motion': 'off',

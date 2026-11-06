@@ -2,7 +2,7 @@
 
 The first Native Shell build of the Tian Sky visual language (the design draft
 `docs/design-language.md` and the interactive mockup
-`docs/design/client-mockup.html` in the design change set on `main`). It runs on macOS with sample data:
+`docs/design/client-mockup.html` in the design change set on `main`). It runs on macOS and iOS with sample data:
 the screen, copy, and interactions come from the mockup; it opens no socket and
 calls no model.
 
@@ -11,6 +11,8 @@ gate in [`docs/nsh-migration.md`](../../docs/nsh-migration.md) is unchanged:
 the protocol and UI specifications must land in `main` before the real client
 is wired to Pi Server. This fixture exists so the visual language can be judged
 natively, with the real fonts, motion, and AppKit text.
+
+The iOS frontend uses `IOS.tsx`. See [IOS.md](IOS.md) for its screens, data boundary, commands, and asset generation. Both clients now use the latest SVG identities.
 
 ## Run
 
@@ -50,7 +52,7 @@ outside the app.
 - Pi Server connection, authentication, or a transport. There is no socket,
   no protocol client, and no local resident service.
 - Screenshot capture, file attachments, diff landing, memory, notifications,
-  login, the menu bar extra, iOS, packaging, signing, and updates.
+  login, the menu bar extra, distribution signing, and updates. The iOS frontend and simulator packaging are implemented; server integration remains separate.
 - Manager hue assignment and iOS app-extension support remain open questions
   in the design document.
 

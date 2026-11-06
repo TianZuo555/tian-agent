@@ -41,6 +41,8 @@ service. It is not Phase 1, and it satisfies no acceptance criterion above. It
 exists so the visual language can be judged natively: AppKit text and fonts,
 motion, glass, and the three-pane window.
 
+The user subsequently requested the full iOS frontend from the light-and-shadow mockup, with the latest SVG identities. `crates/tian-nsh/IOS.tsx` is that native frontend preview; [its guide](../crates/tian-nsh/IOS.md) records the screens, local interactions, and verification commands. It uses the same sample data boundary as the desktop fixture.
+
 The gate and the phase order below are unchanged. Connecting a client to Pi
 Server still waits for `docs/spec/` to land in `main`.
 

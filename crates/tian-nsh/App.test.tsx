@@ -1,4 +1,6 @@
-import { expect, open, test } from 'nsh/test';
+import { expect, open as openApp, test } from 'nsh/test';
+
+const open = (entry: string) => openApp(entry, { width: 1336, height: 812 });
 
 test('conversations switch with their own header and thread', async () => {
   const app = await open('./App.tsx');
