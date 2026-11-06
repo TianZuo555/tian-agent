@@ -5,6 +5,7 @@
 import { createProvider, type Provider } from '@earendil-works/pi-ai/models';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import type {
+  ApiKeyCredential,
   Model,
   ModelThinkingLevel,
   OpenAICompletionsCompat,
@@ -123,19 +124,27 @@ function toModelInfo(model: MagpieModelPayload): MagpieModelInfo | null {
   };
 }
 
-/** Fetch the gateway catalog. Throws when Magpie is not reachable. */
-export async function fetchMagpieCatalog(
-  signal?: AbortSignal,
-): Promise<MagpieModelInfo[]> {
-  const response = await fetch(`${magpieBaseUrl()}/models`, {
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${magpieApiKey()}`,
+/**
+ * Fetch an OpenAI-compatible gateway's model catalog. Throws when the
+ * endpoint is not reachable. `apiKey` is optional — keyless local gateways
+ * still list models.
+ */
+export async function fetchGatewayCatalog(options: {
+  baseUrl: string;
+  apiKey?: string;
+  signal?: AbortSignal;
+}): Promise<MagpieModelInfo[]> {
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
+  const response = await fetch(
+    `${options.baseUrl.replace(/\/+$/, '')}/models`,
+    {
+      headers,
+      signal: options.signal ?? AbortSignal.timeout(5_000),
     },
-    signal: signal ?? AbortSignal.timeout(5_000),
-  });
+  );
   if (!response.ok) {
-    throw new Error(`Magpie /models returned ${response.status}`);
+    throw new Error(`GET /models returned ${response.status}`);
   }
   const body = (await response.json()) as { data?: MagpieModelPayload[] };
   const seen = new Set<string>();
@@ -150,14 +159,27 @@ export async function fetchMagpieCatalog(
   return models;
 }
 
-function toPiModel(info: MagpieModelInfo): Model<'openai-completions'> {
-  const baseUrl = magpieBaseUrl();
+/** Fetch the Magpie gateway catalog. Throws when Magpie is not reachable. */
+export function fetchMagpieCatalog(
+  signal?: AbortSignal,
+): Promise<MagpieModelInfo[]> {
+  return fetchGatewayCatalog({
+    baseUrl: magpieBaseUrl(),
+    apiKey: magpieApiKey(),
+    signal,
+  });
+}
+
+function toPiModel(
+  info: MagpieModelInfo,
+  options: { id: string; baseUrl?: string },
+): Model<'openai-completions'> {
   return {
     id: info.id,
     name: info.name,
     api: 'openai-completions',
-    provider: MAGPIE_PROVIDER,
-    baseUrl,
+    provider: options.id,
+    baseUrl: options.baseUrl ?? '',
     reasoning: info.reasoning,
     thinkingLevelMap: thinkingLevelMap(info.levels),
     input: info.input,
@@ -173,21 +195,37 @@ function toPiModel(info: MagpieModelInfo): Model<'openai-completions'> {
   };
 }
 
-/** Build a pi provider that talks to the local Magpie gateway. */
-export function magpieProvider(
+/**
+ * Build a pi provider for an OpenAI-compatible gateway. `resolveKey` reads the
+ * credential pi-ai hands to `resolve` and returns the request key (undefined
+ * for keyless gateways).
+ */
+export function gatewayProvider(
+  options: {
+    id: string;
+    name: string;
+    baseUrl?: string;
+    resolveKey: (
+      credential: ApiKeyCredential | undefined,
+    ) => string | undefined;
+  },
   catalog: MagpieModelInfo[],
 ): Provider<'openai-completions'> {
   return createProvider<'openai-completions'>({
-    id: MAGPIE_PROVIDER,
-    name: 'Magpie',
-    baseUrl: magpieBaseUrl(),
+    id: options.id,
+    name: options.name,
+    baseUrl: options.baseUrl,
     auth: {
       apiKey: {
-        name: 'Magpie gateway',
-        resolve: async () => ({ auth: { apiKey: magpieApiKey() } }),
+        name: options.name,
+        resolve: async ({ credential }) => ({
+          auth: { apiKey: options.resolveKey(credential) },
+        }),
       },
     },
-    models: catalog.map(toPiModel),
+    models: catalog.map((info) =>
+      toPiModel(info, { id: options.id, baseUrl: options.baseUrl }),
+    ),
     api: openAICompletionsApi(),
   });
 }

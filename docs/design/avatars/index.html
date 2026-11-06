@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tian · 太阳与行星头像</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f4f3ef;
+        color: #202022;
+        font:
+          15px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          'PingFang SC',
+          sans-serif;
+      }
+      header {
+        max-width: 1240px;
+        margin: auto;
+        padding: 48px 32px 24px;
+      }
+      h1 {
+        font-size: clamp(28px, 4vw, 42px);
+        letter-spacing: -0.04em;
+        margin: 8px 0;
+      }
+      header p {
+        color: #626267;
+        margin: 0;
+      }
+      .eyebrow {
+        font:
+          12px/1.5 ui-monospace,
+          monospace;
+        letter-spacing: 0.12em;
+      }
+      section {
+        padding: 32px;
+      }
+      .night {
+        background: #18181b;
+        color: #eeece6;
+      }
+      .wrap {
+        max-width: 1176px;
+        margin: auto;
+      }
+      h2 {
+        margin: 0 0 24px;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 24px;
+      }
+      article {
+        min-width: 0;
+      }
+      .portrait {
+        display: block;
+        width: 100%;
+        max-width: 260px;
+        aspect-ratio: 1;
+        margin: auto;
+      }
+      h3 {
+        margin: 12px 0 0;
+        font-size: 16px;
+      }
+      article p {
+        margin: 4px 0 18px;
+        font-size: 13px;
+        opacity: 0.7;
+      }
+      .sizes {
+        display: flex;
+        align-items: end;
+        gap: 18px;
+        padding-top: 20px;
+        border-top: 1px solid #20202220;
+      }
+      .night .sizes {
+        border-color: #ffffff20;
+      }
+      figure {
+        margin: 0;
+        text-align: center;
+      }
+      figure img {
+        display: block;
+      }
+      figcaption {
+        margin-top: 8px;
+        font:
+          10px/1.5 ui-monospace,
+          monospace;
+        opacity: 0.6;
+      }
+      a {
+        color: inherit;
+        text-underline-offset: 4px;
+      }
+      a:focus-visible {
+        outline: 2px solid #9170c4;
+        outline-offset: 4px;
+      }
+      footer {
+        max-width: 1240px;
+        margin: auto;
+        padding: 28px 32px 48px;
+        color: #626267;
+        font-size: 13px;
+      }
+      @media (max-width: 760px) {
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 32px 20px;
+        }
+        section {
+          padding: 24px;
+        }
+      }
+      @media (max-width: 420px) {
+        .sizes {
+          gap: 10px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="eyebrow">TIAN / CHARACTER STUDY 01</div>
+      <h1>一颗太阳，几位行星朋友。</h1>
+      <p>
+        柔和的 3D
+        质感，简单的眼睛与笑脸。没有外发光，用轮廓、颜色和配饰区分角色。
+      </p>
+    </header>
+    <main>
+      <section aria-labelledby="day-title">
+        <div class="wrap">
+          <h2 id="day-title">暖纸色 · 浅色背景</h2>
+          <div class="grid" id="day-grid"></div>
+        </div>
+      </section>
+      <section class="night" aria-labelledby="night-title">
+        <div class="wrap">
+          <h2 id="night-title">炭灰色 · 深色背景</h2>
+          <div class="grid" id="night-grid"></div>
+        </div>
+      </section>
+    </main>
+    <footer>
+      独立头像提案 · 512 × 512 透明 PNG · 图片为 3D 风格渲染，不包含可编辑的 3D
+      模型。<br /><a href="../client-mockup-no-glow.html">无光晕设计稿</a> ·
+      <a href="../client-mockup.html">原始设计稿</a> ·
+      <a href="source-sheet.jpg">生成原图</a>
+    </footer>
+    <script>
+      const characters = [
+        {
+          file: 'chief-sun',
+          name: 'Chief · 太阳',
+          detail: '暖黄色 / 圆润光芒 / 开朗的笑脸',
+        },
+        {
+          file: 'manager-atlas',
+          name: 'Atlas · 地球',
+          detail: '薄荷色 / 圆框眼镜 / 温和的表情',
+        },
+        {
+          file: 'manager-juno',
+          name: 'Juno · 土星',
+          detail: '蜜桃色 / 奶油色星环 / 轻松的笑脸',
+        },
+        {
+          file: 'manager-vega',
+          name: 'Vega · 行星',
+          detail: '淡紫色 / 贝雷帽 / 俏皮的表情',
+        },
+      ];
+      for (const grid of document.querySelectorAll('.grid')) {
+        for (const character of characters) {
+          const card = document.createElement('article');
+          card.innerHTML = `<a href="${character.file}.png" aria-label="打开 ${character.name} 透明 PNG"><img class="portrait" src="${character.file}.png" alt="${character.name}，${character.detail}" width="512" height="512" /></a><h3>${character.name}</h3><p>${character.detail}</p><div class="sizes">${[24, 32, 48, 64].map((size) => `<figure><img src="${character.file}.png" alt="" width="${size}" height="${size}" /><figcaption>${size}px</figcaption></figure>`).join('')}</div>`;
+          grid.append(card);
+        }
+      }
+    </script>
+  </body>
+</html>

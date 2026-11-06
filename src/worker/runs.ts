@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { Db, RunRow } from './db.js';
+import type { Db, ProjectRow, RunRow } from './db.js';
 import type { Scopes } from './scopes.js';
 import type { EventLog } from './events.js';
 import type { IssueReporter } from './improvements.js';
@@ -11,7 +11,14 @@ import * as Git from './dispatch.js';
 import type { RunProgress, RunToolCall } from './run-progress.js';
 
 export interface WorkerSubmission {
-  wait(): Promise<{ status: 'done' | 'unanswered'; reason?: string }>;
+  /**
+   * `interrupted` = the attempt can never answer: an external process was
+   * killed a second time in the same attempt (see codex.ts).
+   */
+  wait(): Promise<{
+    status: 'done' | 'unanswered' | 'interrupted';
+    reason?: string;
+  }>;
 }
 export interface WorkerConversation {
   id: string;
@@ -25,6 +32,19 @@ export interface WorkerRuntime {
   create(run: RunRow): Promise<WorkerConversation>;
   get(id: string): Promise<WorkerConversation>;
 }
+/** The runtime, model and thinking level a run stores; fixed for its life. */
+export interface WorkerChoice {
+  runtime: string;
+  model: string | null;
+  thinkingLevel: string | null;
+}
+/** Live concurrency limits, read at every acquire so settings edits apply. */
+export interface WorkerLimits {
+  /** Global cap on concurrent worker attempts of every runtime. */
+  global: number;
+  /** Optional per-runtime caps; absent = only the global cap. */
+  runtimes: Record<string, number>;
+}
 export interface DispatchInput {
   projectRef: string;
   prompt: string;
@@ -32,7 +52,11 @@ export interface DispatchInput {
   /** Code tasks record the task this run executes. */
   taskId?: number;
   operationId?: string;
-  /** Magpie model id pinned for this run's worker; unset = the app default. */
+  /** Named worker configuration; mutually exclusive with runtime/model pins. */
+  intent?: string | null;
+  /** Explicit runtime id; unset = the project default intent, else 'pi'. */
+  runtime?: string | null;
+  /** Model pinned for this run's worker; unset = the app default. */
   model?: string | null;
   /** pi thinking level pinned for this run's worker; unset = the model's own. */
   thinkingLevel?: string | null;
@@ -72,25 +96,26 @@ export interface SkillProvider {
   review(run: RunRow, report: string, stopped?: string): void;
 }
 
-/** Global cap on worker attempts whose model work runs at the same time. */
+/** Default global cap on worker attempts whose model work runs at the same time. */
 export const MAX_ACTIVE_ATTEMPTS = 3;
 
 /**
  * FIFO gate on concurrent worker attempts. A run waits for a slot outside its
  * per-run lock, so stop/discard still work while it waits. `close()` grants
  * every waiter a slot so they wake, observe `closing`, and exit — releases
- * stay idempotent so a late `finally` cannot corrupt the count.
+ * stay idempotent so a late `finally` cannot corrupt the count. The cap is a
+ * live getter: a settings raise applies on the next acquire or release.
  */
 class AttemptSlots {
   private active = 0;
   private waiters: (() => void)[] = [];
   private closed = false;
 
-  constructor(private readonly max: number) {}
+  constructor(private readonly max: () => number) {}
 
   /** A slot now, or null when the cap is reached or the gate is closed. */
   tryAcquire(): (() => void) | null {
-    if (this.closed || this.active >= this.max) return null;
+    if (this.closed || this.active >= this.max()) return null;
     return this.take();
   }
 
@@ -126,7 +151,7 @@ class AttemptSlots {
       if (released) return;
       released = true;
       this.active--;
-      if (this.active < this.max) this.waiters.shift()?.();
+      if (this.active < this.max()) this.waiters.shift()?.();
     };
   }
 }
@@ -136,13 +161,21 @@ export class RunOrchestrator {
   private locks = new Map<string, Promise<unknown>>();
   private collectors = new Map<string, Promise<void>>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private attempts: AttemptSlots;
+  private runtimes: Record<string, WorkerRuntime>;
+  private global: AttemptSlots;
+  /** Per-runtime gates, created lazily; uncapped runtimes get no gate. */
+  private gates = new Map<string, AttemptSlots>();
+  private limits: () => WorkerLimits;
+  private resolveChoice: (
+    input: DispatchInput,
+    project: ProjectRow,
+  ) => WorkerChoice;
   private closing = false;
 
   constructor(
     private db: Db,
     private scopes: Scopes,
-    private runtime: WorkerRuntime,
+    runtime: WorkerRuntime | Record<string, WorkerRuntime>,
     private userDataDir: string,
     private emit: Emit,
     private notify: () => Promise<void>,
@@ -151,11 +184,55 @@ export class RunOrchestrator {
     private onIssue?: IssueReporter,
     /** Skill registry; absent = no skill matching, injection, or review. */
     private skills?: SkillProvider,
-    options: { maxActiveAttempts?: number } = {},
+    options: {
+      limits?: () => WorkerLimits;
+      /** Turns dispatch input (intent, explicit pins, project default) into the stored choice. */
+      resolveChoice?: (
+        input: DispatchInput,
+        project: ProjectRow,
+      ) => WorkerChoice;
+    } = {},
   ) {
-    this.attempts = new AttemptSlots(
-      options.maxActiveAttempts ?? MAX_ACTIVE_ATTEMPTS,
-    );
+    const isRuntime = (
+      value: WorkerRuntime | Record<string, WorkerRuntime>,
+    ): value is WorkerRuntime =>
+      typeof (value as WorkerRuntime).create === 'function';
+    this.runtimes = isRuntime(runtime) ? { pi: runtime } : runtime;
+    this.limits =
+      options.limits ?? (() => ({ global: MAX_ACTIVE_ATTEMPTS, runtimes: {} }));
+    this.global = new AttemptSlots(() => this.limits().global);
+    this.resolveChoice =
+      options.resolveChoice ??
+      ((input) => ({
+        runtime: input.runtime ?? 'pi',
+        model: input.model ?? null,
+        thinkingLevel: input.thinkingLevel ?? null,
+      }));
+  }
+
+  private runtimeFor(run: RunRow): WorkerRuntime {
+    const runtime = this.runtimes[run.runtime];
+    if (!runtime)
+      throw new Error(
+        `run ${run.id} uses runtime '${run.runtime}', which is not available`,
+      );
+    return runtime;
+  }
+
+  /**
+   * The concurrency gate for one runtime, created lazily. An uncapped runtime
+   * gets a gate whose live cap is effectively infinite, so every attempt walks
+   * the same runtime-then-global acquire order.
+   */
+  private gateFor(runtime: string): AttemptSlots {
+    let gate = this.gates.get(runtime);
+    if (!gate) {
+      gate = new AttemptSlots(
+        () => this.limits().runtimes[runtime] ?? Number.MAX_SAFE_INTEGER,
+      );
+      this.gates.set(runtime, gate);
+    }
+    return gate;
   }
 
   private async locked<T>(key: string, action: () => Promise<T>): Promise<T> {
@@ -197,8 +274,11 @@ export class RunOrchestrator {
             `task #${input.taskId} belongs to ${task.scopeId}, not ${project.id}`,
           );
       }
-      if (project.agentKind !== 'durable-worker')
-        throw new Error(`Unsupported agent kind: ${project.agentKind}`);
+      // Resolve the worker choice before the run exists: an Intent name, an
+      // explicit runtime+model pin, or the project default Intent (M6).
+      const choice = this.resolveChoice(input, project);
+      if (!this.runtimes[choice.runtime])
+        throw new Error(`Worker runtime '${choice.runtime}' is not available`);
       const isGit = await Git.isGitRepo(project.rootPath);
       if (!isGit && !project.allowInPlace)
         throw new Error(
@@ -214,7 +294,7 @@ export class RunOrchestrator {
         projectId: project.id,
         conversationId: null,
         chiefConversationId: input.chiefConversationId,
-        agentKind: 'durable-worker',
+        runtime: choice.runtime,
         prompt: input.prompt,
         currentPrompt: input.prompt,
         rootPath: project.rootPath,
@@ -235,8 +315,8 @@ export class RunOrchestrator {
           name: skill.name,
           version: skill.version,
         })),
-        model: input.model ?? null,
-        thinkingLevel: input.thinkingLevel ?? null,
+        model: choice.model,
+        thinkingLevel: choice.thinkingLevel,
         startedAt,
         finishedAt: null,
         deadlineAt: deadlineFor(project.runTimeoutMin),
@@ -292,6 +372,9 @@ export class RunOrchestrator {
           prompt: input.prompt.slice(0, 2000),
           model: run.model,
           thinkingLevel: run.thinkingLevel,
+          runtime: run.runtime,
+          sandbox: project.sandboxMode,
+          sandboxNetwork: project.sandboxNetwork === 1,
         },
       });
       this.changed();
@@ -309,7 +392,7 @@ export class RunOrchestrator {
       );
     }
     if (!run.conversationId) {
-      const conversation = await this.runtime.create(run);
+      const conversation = await this.runtimeFor(run).create(run);
       this.db.patchRun(run.id, { conversationId: conversation.id });
     }
   }
@@ -371,20 +454,37 @@ export class RunOrchestrator {
     // Runs that resume mid-collection or are already under review never
     // submit a worker, so they never need an attempt slot.
     const row = this.db.getRun(id);
+    // Two gates, always in this order: the run's runtime cap, then the global
+    // cap. A queued attempt that waits only for a full runtime never holds a
+    // global slot, so later attempts of free runtimes still start.
+    let releaseRuntime: (() => void) | null = null;
     let release: (() => void) | null = null;
     let waited = false;
+    const releaseBoth = () => {
+      release?.();
+      release = null;
+      releaseRuntime?.();
+      releaseRuntime = null;
+    };
     if (row && row.status !== 'collecting' && row.reviewStatus === 'pending') {
+      const gate = this.gateFor(row.runtime);
       if (row.status === 'running') {
         // Already running before a restart: the harness resumes its model
-        // work on its own, so the attempt claims its slot immediately.
-        release = this.attempts.claim();
+        // work on its own, so the attempt claims its slots immediately.
+        releaseRuntime = gate.claim();
+        release = this.global.claim();
       } else {
-        release = this.attempts.tryAcquire();
-        if (!release) {
+        releaseRuntime = gate.tryAcquire();
+        if (!releaseRuntime) {
           waited = true;
           // Wait outside the per-run lock: stop() and discard() must still
           // reach a queued run while its attempt waits for a slot.
-          release = await this.attempts.acquire();
+          releaseRuntime = await gate.acquire();
+        }
+        release = this.global.tryAcquire();
+        if (!release) {
+          waited = true;
+          release = await this.global.acquire();
         }
       }
     }
@@ -397,7 +497,7 @@ export class RunOrchestrator {
         if (run.status === 'collecting')
           return {
             run,
-            conversation: await this.runtime.get(run.conversationId!),
+            conversation: await this.runtimeFor(run).get(run.conversationId!),
             submission: null,
           };
         // A run that waited for a slot keeps its original timeout, but the
@@ -413,7 +513,9 @@ export class RunOrchestrator {
         if (hasPassed(run.deadlineAt)) {
           const error = new Error('Run exceeded its deadline');
           if (run.conversationId) {
-            const conversation = await this.runtime.get(run.conversationId);
+            const conversation = await this.runtimeFor(run).get(
+              run.conversationId,
+            );
             await conversation.abort();
             await this.collect(
               this.db.patchRun(id, {
@@ -429,7 +531,9 @@ export class RunOrchestrator {
           unlinkSync(run.reportPath);
         await this.prepare(run);
         run = this.require(id);
-        const conversation = await this.runtime.get(run.conversationId!);
+        const conversation = await this.runtimeFor(run).get(
+          run.conversationId!,
+        );
         const submission = await conversation.submit(
           run.currentPrompt,
           `run:${id}:attempt:${run.attempt}`,
@@ -442,6 +546,7 @@ export class RunOrchestrator {
       if (!prepared) return;
       const { conversation, submission } = prepared;
       let failure: string | null = null;
+      let interrupted: string | null = null;
       if (submission) {
         // Fewer than `remaining` ms are left, or there is no deadline at all.
         const remaining = remainingMs(prepared.run.deadlineAt);
@@ -461,7 +566,9 @@ export class RunOrchestrator {
         }
         try {
           const result = await submission.wait();
-          if (result.status !== 'done')
+          if (result.status === 'interrupted')
+            interrupted = result.reason || 'Worker process ended unrecoverably';
+          else if (result.status !== 'done')
             failure = result.reason || 'Worker did not complete successfully';
         } finally {
           clearTimeout(this.timers.get(id));
@@ -469,10 +576,9 @@ export class RunOrchestrator {
         }
         if (timedOut) failure = 'Run exceeded its deadline';
       }
-      // The attempt's model work is over: free the slot for a queued sibling
-      // before collection or auto-land, which are not model work.
-      release?.();
-      release = null;
+      // The attempt's model work is over: free both slots for a queued
+      // sibling before collection or auto-land, which are not model work.
+      releaseBoth();
       if (this.closing) return;
       await this.locked(id, async () => {
         let run = this.require(id);
@@ -480,6 +586,49 @@ export class RunOrchestrator {
         // A stop already finished the attempt; its abort settles the wait but
         // the outcome is already recorded, so never collect over it.
         if (run.status === 'interrupted') return;
+        if (interrupted) {
+          // The runtime says this attempt can never answer (a second process
+          // kill in one attempt). Same end state as a stop: snapshot what is
+          // there, finish interrupted, leave the worktree for review.
+          if (run.worktreePath) {
+            try {
+              await Git.commitAll(
+                run.worktreePath,
+                `tian run ${id} attempt ${run.attempt} (interrupted)`,
+              );
+            } catch (error) {
+              this.onIssue?.('run.interrupt.commit', error, {
+                scopeId: run.projectId,
+                runId: id,
+                taskId: run.taskId ?? undefined,
+              });
+            }
+          }
+          this.db.finishRun(id, 'interrupted', interrupted, {
+            id: `run:${id}:attempt:${run.attempt}:interrupted`,
+            scopeId: run.projectId,
+            conversationId: run.chiefConversationId,
+            content: `[run ${id} interrupted]\n${interrupted}. Partial work is committed on the run's branch; follow up to continue or discard to remove it.`,
+          });
+          this.events?.record({
+            id: `run:${id}:attempt:${run.attempt}:interrupted`,
+            type: 'run.stopped',
+            actor: 'system',
+            scopeId: run.projectId,
+            runId: id,
+            conversationId: run.chiefConversationId,
+            summary: `${interrupted} (${run.id} attempt ${run.attempt})`,
+            payload: { attempt: run.attempt },
+          });
+          this.changed();
+          await this.notify();
+          this.reviewExperience(
+            this.require(id),
+            this.currentReport(run),
+            interrupted,
+          );
+          return;
+        }
         // Persist the outcome before collecting so a restart cannot turn failure into success.
         run = this.db.patchRun(id, {
           status: 'collecting',
@@ -498,7 +647,7 @@ export class RunOrchestrator {
         await this.land(id);
       }
     } finally {
-      release?.();
+      releaseBoth();
     }
   }
 
@@ -745,7 +894,7 @@ export class RunOrchestrator {
       clearTimeout(this.timers.get(id));
       this.timers.delete(id);
       if (run.conversationId)
-        await (await this.runtime.get(run.conversationId)).abort();
+        await (await this.runtimeFor(run).get(run.conversationId)).abort();
       // Snapshot whatever the worker left behind: runDiff/land/ship read
       // branch commits, so uncommitted edits would land nothing and the
       // later cleanup would delete them unseen. Best-effort — a failed
@@ -801,7 +950,7 @@ export class RunOrchestrator {
       this.timers.delete(id);
       try {
         if (run.conversationId)
-          await (await this.runtime.get(run.conversationId)).abort();
+          await (await this.runtimeFor(run).get(run.conversationId)).abort();
         await Git.discardWorktree(run.rootPath, run.worktreePath, run.branch);
         const updated = this.db.patchRun(id, {
           reviewStatus: 'discarded',
@@ -922,7 +1071,9 @@ export class RunOrchestrator {
     const run = this.require(id);
     const live = run.conversationId && run.reviewStatus !== 'discarded';
     const conversation = live
-      ? await this.runtime.get(run.conversationId!).catch(() => undefined)
+      ? await this.runtimeFor(run)
+          .get(run.conversationId!)
+          .catch(() => undefined)
       : undefined;
     return {
       id: run.id,
@@ -948,7 +1099,8 @@ export class RunOrchestrator {
   }
   pause(): void {
     this.closing = true;
-    this.attempts.close();
+    this.global.close();
+    for (const gate of this.gates.values()) gate.close();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }

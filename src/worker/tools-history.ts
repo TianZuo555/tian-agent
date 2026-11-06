@@ -3,6 +3,7 @@ import { Type } from '@earendil-works/pi-ai';
 import type { Db } from './db.js';
 import type { EventLog } from './events.js';
 import type { HistoryIndex } from './history.js';
+import { GLOBAL_SCOPE } from './scopes.js';
 
 export interface HistoryDeps {
   db: Db;
@@ -17,31 +18,36 @@ const err = (t: string) => ({
 });
 
 /**
- * The chief's history tools: search every past turn, tool call and event
- * (optionally filtered by scope and time), and expand a ref into context.
+ * The chief's history tools: search every past Global turn, tool call and
+ * event (optionally filtered by time), and expand a ref into context.
+ * Project transcripts belong to their managers (M6) — the chief reads only
+ * Global history; project detail comes from the project memory and notes or
+ * the manager itself.
  */
 export function historyTools(deps: HistoryDeps) {
-  const resolveScope = (param: string): string => {
-    const project = deps.db.getProject(param) ?? deps.db.projectByName(param);
-    if (project) return project.id;
-    return param; // unknown scopes simply yield no matches
+  /** Scope a history ref points to, or null when it cannot be determined. */
+  const refScope = (ref: string): string | null => {
+    const trimmed = ref.trim();
+    if (trimmed.startsWith('event:'))
+      return deps.events.get(trimmed.slice('event:'.length))?.scopeId ?? null;
+    const match = /^conv:([^#\s]+)#/.exec(trimmed);
+    if (!match) return null;
+    try {
+      return deps.db.conversationScope(match[1]);
+    } catch {
+      return deps.db.runByConversation(match[1])?.projectId ?? null;
+    }
   };
 
   const searchHistory = defineTool({
     name: 'search_history',
     description:
-      'Search the full history of past conversations — user and assistant messages, tool calls and results, and recorded events — with keyword or phrase matching (Chinese works; several words must all appear). Returns dated lines like "[2026-10-11 14:02] conv:12#345 user: …snippet…" with «» around matched text and a ref for read_history. An empty result means nothing was recorded; never invent history.',
+      'Search the recorded General history — past conversations, tool calls and events — with keyword or phrase matching (Chinese works; several words must all appear). Returns dated lines like "[2026-10-11 14:02] conv:12#345 user: …snippet…" with «» around matched text and a ref for read_history. Project transcripts are not included — ask the project manager. An empty result means nothing was recorded; never invent history.',
     parameters: Type.Object({
       query: Type.String({
         description:
           'Keywords or a phrase that appears in the history. A single word or phrase matches verbatim; several words must all appear. Words shorter than 3 characters fall back to substring matching.',
       }),
-      scope: Type.Optional(
-        Type.String({
-          description:
-            'A scope (project name or id, "global"), or "all" to search everything. Default: this conversation\'s scope.',
-        }),
-      ),
       since: Type.Optional(
         Type.String({ description: 'ISO timestamp lower bound.' }),
       ),
@@ -52,16 +58,10 @@ export function historyTools(deps: HistoryDeps) {
         Type.Integer({ minimum: 1, maximum: 50, description: 'Default 20.' }),
       ),
     }),
-    execute: async (args, api) => {
+    execute: async (args) => {
       try {
-        const own = deps.db.conversationScope(String(api.conversationId));
-        const scopeId = !args.scope
-          ? own
-          : args.scope === 'all'
-            ? null
-            : resolveScope(args.scope);
         const lines = await deps.history.search(args.query, {
-          scopeId,
+          scopeId: GLOBAL_SCOPE,
           since: args.since ?? null,
           until: args.until ?? null,
           limit: args.limit,
@@ -76,7 +76,7 @@ export function historyTools(deps: HistoryDeps) {
   const readHistory = defineTool({
     name: 'read_history',
     description:
-      'Read the full content behind a search_history ref, from the original transcript. "conv:<id>#<entry>" returns a page of that entry (long tool results and arguments included) with a continuation ref when more remains; "event:<id>" shows the recorded event. Pass offset from a previous continuation to keep reading.',
+      'Read the full content behind a search_history ref, from the original transcript. "conv:<id>#<entry>" returns a page of that entry (long tool results and arguments included) with a continuation ref when more remains; "event:<id>" shows the recorded event. Only General refs are readable — project transcripts belong to their managers. Pass offset from a previous continuation to keep reading.',
     parameters: Type.Object({
       ref: Type.String({
         description: 'A ref returned by search_history.',
@@ -106,6 +106,9 @@ export function historyTools(deps: HistoryDeps) {
     }),
     execute: async (args) => {
       try {
+        const target = refScope(args.ref);
+        if (target && target !== GLOBAL_SCOPE)
+          return err('that ref belongs to a project — ask its manager');
         return text(
           await deps.history.read(args.ref, {
             offset: args.offset ?? 0,

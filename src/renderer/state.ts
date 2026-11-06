@@ -15,11 +15,15 @@ import type {
   ModelCatalog,
   NoticeItem,
   ProjectPatch,
+  ProviderConfig,
+  ProviderInfo,
+  ProviderLoginEvent,
   RunInfo,
   ScopeInfo,
   SettingsInfo,
   SkillItem,
   TaskItem,
+  WorkerSettingsInfo,
 } from '../shared/types';
 
 /** Primary destination chosen in the left rail. */
@@ -56,6 +60,13 @@ export interface State {
   skills: SkillItem[];
   settings: SettingsInfo | null;
   catalog: ModelCatalog | null;
+  providers: ProviderInfo[];
+  builtinProviders: { id: string; name: string; oauth: boolean }[];
+  /** The in-flight OAuth login and its streamed events (D21). */
+  providerLogin: {
+    providerId: string;
+    events: ProviderLoginEvent['event'][];
+  } | null;
   nav: Nav;
   /** The view Settings overlays, so its close control knows where to land. */
   navReturn: Nav;
@@ -89,6 +100,9 @@ export function createAppStore(api: TianApi) {
     skills: [],
     settings: null,
     catalog: null,
+    providers: [],
+    builtinProviders: [],
+    providerLogin: null,
     nav: 'chat',
     navReturn: 'chat',
     contextOpen: true,
@@ -125,6 +139,7 @@ export function createAppStore(api: TianApi) {
       | 'conversations'
       | 'settings'
       | 'catalog'
+      | 'providers'
       | 'tasks'
       | 'goals'
       | 'notices'
@@ -196,6 +211,7 @@ export function createAppStore(api: TianApi) {
         load('conversations', () => api.listConversations()),
         load('settings', () => api.getSettings()),
         load('catalog', () => api.modelCatalog()),
+        load('providers', () => api.listProviders()),
       ]);
       if (generation !== lifetime) return;
       set({ loading: false, error: null, runtimeStatus: 'ready' });
@@ -265,6 +281,19 @@ export function createAppStore(api: TianApi) {
         api.on('settings', (settings) => {
           next('settings');
           set({ settings });
+        }),
+        api.on('providers', (providers) => {
+          next('providers');
+          set({ providers });
+        }),
+        api.on('providerLogin', ({ providerId, event }) => {
+          if (state.providerLogin?.providerId !== providerId) return;
+          set({
+            providerLogin: {
+              providerId,
+              events: [...state.providerLogin.events, event],
+            },
+          });
         }),
         api.on('tasks', (tasks) => {
           next('tasks');
@@ -592,6 +621,46 @@ export function createAppStore(api: TianApi) {
     },
     setModel: (provider: string, modelId: string) =>
       safe(() => api.setModel({ provider, modelId })),
+    setManagerModel: (model: { provider: string; modelId: string } | null) =>
+      safe(() => api.setManagerModel(model)),
+    setWorkers: (workers: WorkerSettingsInfo) =>
+      safe(() => api.setWorkers(workers)),
+    addProvider: (config: ProviderConfig) =>
+      safe(() => api.addProvider(config)),
+    updateProvider: (id: string, config: ProviderConfig) =>
+      safe(() => api.updateProvider(id, config)),
+    removeProvider: (id: string) => safe(() => api.removeProvider(id)),
+    setProviderKey: (id: string, key: string) =>
+      safe(() => api.setProviderKey(id, key)),
+    deleteProviderKey: (id: string) => safe(() => api.deleteProviderKey(id)),
+    async loadBuiltinProviders() {
+      const builtinProviders = await api.builtinProviders();
+      set({ builtinProviders });
+    },
+    /** Opens the login panel, then streams events until done/error/cancel. */
+    providerLogin(providerId: string) {
+      set({ providerLogin: { providerId, events: [] } });
+      void safe(async () => {
+        try {
+          await api.providerLogin(providerId);
+        } finally {
+          // Keep the panel open on prompts/errors; done closes it.
+          if (
+            state.providerLogin?.events.some((event) => event.type === 'done')
+          )
+            set({ providerLogin: null });
+        }
+      });
+    },
+    providerLoginAnswer: (
+      providerId: string,
+      promptId: string,
+      answer: string,
+    ) => safe(() => api.providerLoginAnswer(providerId, promptId, answer)),
+    providerLoginCancel(providerId: string) {
+      set({ providerLogin: null });
+      void safe(() => api.providerLoginCancel(providerId));
+    },
     clearError() {
       set({ operationError: null });
     },

@@ -21,6 +21,8 @@ const channels = new Set<keyof AppEvents>([
   'memory',
   'scopes',
   'settings',
+  'providers',
+  'providerLogin',
   'runtime',
 ]);
 

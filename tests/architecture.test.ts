@@ -143,7 +143,6 @@ async function fixture(
     rootPath: projectPath,
     autoLand: 0,
     allowInPlace: Number(options.allowInPlace ?? false),
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: options.base ?? 'main',
     promptPreamble: '',
@@ -318,15 +317,9 @@ test('chief and worker capabilities remain separate, including previously contam
     emitUpdates: () => {},
     emitImprovements: () => {},
     emitNotices: () => {},
-    dispatch: (input) => f.runs.dispatch(input),
-    workerModels: () => [],
     runReport: (id) => f.runs.report(id),
     runDiff: (id) => f.runs.diff(id),
     runProgress: (id) => f.runs.progress(id),
-    stopRun: (id, reason) =>
-      f.runs.stop(id, { reason, actor: 'manager', strict: true }),
-    sendRunMessage: (runId, body, operationId) =>
-      data.sendRunMessage(runId, body, operationId),
     runMessages: (runId) => data.runMessages(runId),
     delegateToManager: () => Promise.reject(new Error('not used here')),
     sendManagerMessage: () => Promise.reject(new Error('not used here')),
@@ -341,7 +334,8 @@ test('chief and worker capabilities remain separate, including previously contam
   );
   assert.ok(names.includes('read_run_report'));
   assert.ok(names.includes('run_progress'));
-  assert.ok(names.includes('stop_run'));
+  assert.ok(!names.includes('dispatch'));
+  assert.ok(!names.includes('stop_run'));
   assert.ok(names.includes('remember'));
   assert.ok(names.includes('revise'));
   assert.ok(names.includes('forget'));
@@ -370,7 +364,7 @@ test('chief and worker capabilities remain separate, including previously contam
       baseBranch: 'main',
       prompt: 'test',
       currentPrompt: 'test',
-      agentKind: 'durable-worker',
+      runtime: 'pi',
       conversationId: null,
       chiefConversationId: null,
       executionMode: 'in-place',
@@ -392,22 +386,22 @@ test('chief and worker capabilities remain separate, including previously contam
       await (await agents.conversation(worker.id)).agent(BACKGROUND_CONTEXT)
     ).tools.map((tool) => tool.name);
     assert.deepEqual(workerNames.sort(), [
-      'ask_chief',
+      'ask_manager',
       'bash',
       'check_msgs',
       'edit',
       'read',
-      'read_history',
-      'recall',
-      'tell_chief',
+      'tell_manager',
       'write',
     ]);
-    // The chief keeps its narrow envelope: no coding, no worker messaging.
+    // The chief keeps its narrow envelope: no coding, no run control, and no
+    // worker messaging — every run belongs to a project manager.
     const chiefNames = (await restored.agent(BACKGROUND_CONTEXT)).tools.map(
       (tool) => tool.name,
     );
-    assert.ok(chiefNames.includes('send_run_msg'));
-    assert.ok(!chiefNames.includes('ask_chief'));
+    assert.ok(!chiefNames.includes('send_run_msg'));
+    assert.ok(!chiefNames.includes('ask_manager'));
+    assert.ok(!chiefNames.includes('dispatch'));
     assert.ok(!chiefNames.includes('bash'));
   } finally {
     await agents.close();
@@ -931,7 +925,7 @@ test('a second attempt waits for a slot instead of running concurrently', async 
     undefined,
     undefined,
     undefined,
-    { maxActiveAttempts: 1 },
+    { limits: () => ({ global: 1, runtimes: {} }) },
   );
   try {
     const first = await runs.dispatch({
@@ -964,6 +958,59 @@ test('a second attempt waits for a slot instead of running concurrently', async 
   }
 });
 
+test('an attempt waiting on a full runtime does not block other runtimes', async (t) => {
+  const f = await fixture(t);
+  const slow = new FakeRuntime();
+  const fast = new FakeRuntime();
+  const runs = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    { slow, pi: fast },
+    f.userData,
+    () => {},
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { limits: () => ({ global: 5, runtimes: { slow: 1 } }) },
+  );
+  try {
+    const first = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'first on slow',
+      chiefConversationId: null,
+      runtime: 'slow',
+    });
+    await until(() => f.db.getRun(first.id)?.status === 'running');
+    const second = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'second on slow',
+      chiefConversationId: null,
+      runtime: 'slow',
+    });
+    // A pi run dispatches behind the slow-blocked one — it must still start,
+    // because only 'slow' is full and the global cap has room.
+    const third = await runs.dispatch({
+      projectRef: 'p1',
+      prompt: 'on pi',
+      chiefConversationId: null,
+      runtime: 'pi',
+    });
+    await until(() => f.db.getRun(third.id)?.status === 'running');
+    assert.equal(f.db.getRun(second.id)?.status, 'queued');
+    slow.complete(first.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'running');
+    fast.complete(third.conversationId!);
+    slow.complete(second.conversationId!);
+    await until(() => f.db.getRun(second.id)?.status === 'done');
+  } finally {
+    runs.pause();
+    slow.stopWaits();
+    fast.stopWaits();
+    await runs.join();
+  }
+});
+
 test('stopping a run that waits for a slot never submits it and frees the queue', async (t) => {
   const f = await fixture(t);
   const runtime = new FakeRuntime();
@@ -977,7 +1024,7 @@ test('stopping a run that waits for a slot never submits it and frees the queue'
     undefined,
     undefined,
     undefined,
-    { maxActiveAttempts: 1 },
+    { limits: () => ({ global: 1, runtimes: {} }) },
   );
   try {
     const first = await runs.dispatch({
@@ -1028,7 +1075,7 @@ test('a run that waited for a slot keeps its original timeout from the real star
     undefined,
     undefined,
     undefined,
-    { maxActiveAttempts: 1 },
+    { limits: () => ({ global: 1, runtimes: {} }) },
   );
   try {
     const first = await runs.dispatch({
@@ -1094,7 +1141,7 @@ test('a resumed running attempt claims its slot instead of waiting behind anothe
     undefined,
     undefined,
     undefined,
-    { maxActiveAttempts: 1 },
+    { limits: () => ({ global: 1, runtimes: {} }) },
   );
   try {
     await resumed.recover();

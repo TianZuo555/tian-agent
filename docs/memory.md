@@ -25,16 +25,43 @@ The legacy `memory_nodes` summary tree was renamed to `memory_nodes_retired` dur
 
 ## Ownership ([D18](decisions.md#d18--memory-ownership-by-role-chief-owns-global-managers-own-projects))
 
-| Role    | Writes           | Injected Core                              | On-Demand Queries                                 |
-| ------- | ---------------- | ------------------------------------------ | ------------------------------------------------- |
-| Chief   | Global only      | Global only                                | Any project's memory and notes (via `scope`)      |
-| Manager | Own project only | Global + Own project                       | Global memory (`recall scope=global`)             |
-| Worker  | None             | None (reads budgeted task-related context) | Own project `recall` / `read_history` (read-only) |
+| Role    | Writes           | Injected Core        | On-Demand Queries                                                                      |
+| ------- | ---------------- | -------------------- | -------------------------------------------------------------------------------------- |
+| Chief   | Global only      | Global only          | Global memory, notes, and History; any project's memory and notes (via `scope`)        |
+| Manager | Own project only | Global + Own project | Own project's memory, notes, and History only; no Global query beyond the Core         |
+| Worker  | None             | None                 | None (no memory, notes, or History tools; only the dispatch briefing and the worktree) |
 
 - Writing tools (`remember`, `revise`, `promote`, `forget`, `select`, `deselect`) omit `scope` and `target` parameters. Roles fix the write destination. The `#seq` identifier always addresses the agent's owned memory.
 - Project facts learned by the Chief route to the Project Manager (`send_manager_msg` or `delegate` briefings). Manager sessions ignore unrelated personal user facts, leaving Tian to tell the Chief directly.
 - Cross-scope read-only results include a header indicating the owner. This prevents agents from confusing external sequence numbers with their own.
 - Candidate extraction (Memory Worker) and the UI Memory panel operate by scope without role restrictions. Candidates attach to the origin scope, and UI actions register as user operations.
+
+### Conversation Boundary
+
+Scope and role align: the Global Scope holds only Chief conversations (including every Goal conversation), and a Project Scope holds only its Manager conversation and its Worker conversations. So every boundary below is enforced by Scope alone.
+
+Daily conversation stays with the Chief. Daily conversation is the content of Global-scope conversations, Global History, and Global Notes. The boundary is set by channel, not by content: the system cannot reliably tell a "daily" sentence from a "project" sentence, but it can enforce which channels a Manager reads.
+
+Information from daily conversation reaches a Manager through two channels only:
+
+1. **Global Core**: the explicitly selected, budgeted subset of active Global Memory, injected read-only. The Manager has no on-demand Global query (`recall` reads its own project only). A Global fact outside Core reaches the Manager only through `ask_chief`; a fact the Manager needs often belongs in Global Core.
+2. **Chief messages**: delegation briefings, `send_manager_msg`, and answers to `ask_chief`. The Chief writes these for the Manager; they persist in `manager_messages` and the Manager transcript.
+
+A Manager does not read:
+
+- Global-scope transcripts or Global History. `search_history` / `read_history` stay inside its project. A Global Memory source ref (`conv:<id>#<entry>`) may appear in results, but the Manager cannot expand it.
+- Global Notes.
+- Global Memory outside Core, including Global candidates, superseded memories, and deleted memories.
+
+Test: if a fact is not in Global Core and not in a message addressed to the Manager, the Manager does not know it. To pass something from daily conversation, the Chief selects it into Global Core (about Tian, valid for all projects) or sends it as a Chief message (about this project). The Manager `recall` takes no scope parameter: it searches this project's Memory only, so a Global fact outside Core is never readable.
+
+#### Chief
+
+The rule is symmetric: curated artifacts cross the boundary, raw conversation does not. The Chief reads a project's active Memory and Notes read-only. The Chief does not read project History (Manager and Worker transcripts, project events, and Tian's direct conversation with the Manager): `search_history` queries the Global scope only, and `read_history` refuses a ref that belongs to a project. Project progress reaches the Chief only through Manager reports (`report_chief`, delegated Task outcomes) and Manager answers.
+
+#### Worker
+
+A Worker has no memory. It has no memory of its own across Runs, receives no injected context, and has no memory queries — its prompt carries only the dispatch briefing, and its tools expose no Memory, Notes, or History access. Its only inputs are the dispatch briefing and the worktree (code and repository docs such as `AGENTS.md`). When the briefing is not sufficient, the Worker asks its supervising Manager. Project conventions that a Worker needs while it codes belong in the repository, not only in project memory.
 
 ## Core Memory
 
@@ -92,9 +119,9 @@ The background worker in `worker/memory-worker.ts` runs inside the resident serv
 
 ## Relevant Context
 
-- Core Memory is an explicit snapshot that stays stable per turn. A separate `<relevant_context>` with its own budget (default 1,200 tokens) lexically retrieves the scope's Memory, Notes, and History for the current input and the running Task. It never loads all memory and never crosses project isolation.
+- Core Memory is an explicit snapshot that stays stable per turn. A separate `<relevant_context>` with its own budget (default 1,200 tokens) lexically retrieves Memory, Notes, and History for the current input and the running Task. It never loads all memory and never crosses the [Conversation Boundary](#conversation-boundary): the Chief's relevant context searches Global only, and a Manager's searches its own project only.
 - Retrieval uses the shared `planSearch` and a few explicit aliases (such as `中文` ↔ `Chinese`, `postgres` ↔ `PostgreSQL`). This is explainable lexical retrieval, not semantic understanding.
-- Workers receive their project's relevant context and can continue with read-only `recall` and expand original evidence with `read_history` (`conv:<id>#<entry>` and the project's `event:<id>`). Workers never write memory.
+- Workers receive no relevant context ([Worker](#worker)).
 - Old transcript evidence of superseded or deleted memories does not return through task-related History: only the sentences that carry the old assertion are removed from the History entry, and unrelated sentences in the same entry stay retrievable. If the old assertion cannot be located in the entry (for example, a rewritten claim that cites the whole entry), the whole entry is omitted.
 - Extraction runs log to `memory_worker_runs` (trigger, source, candidate, and duplicate counts) and record `memory.extracted` audit events.
 

@@ -39,7 +39,7 @@ function addRun(db: Db, overrides: Partial<RunRow> = {}): RunRow {
     projectId: 'p-1',
     conversationId: `conv-${randomUUID().slice(0, 8)}`,
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'do the thing',
     currentPrompt: 'do the thing',
     rootPath: '/tmp',
@@ -121,7 +121,6 @@ function fixture(t: TestContext): Fixture {
     rootPath: projectDir,
     autoLand: 0,
     allowInPlace: 1,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -133,7 +132,6 @@ function fixture(t: TestContext): Fixture {
     rootPath: join(root, 'project-b'),
     autoLand: 0,
     allowInPlace: 1,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -166,6 +164,7 @@ function fixture(t: TestContext): Fixture {
       });
     },
     workerModels: () => [],
+    workerIntents: () => [],
     runReport: () => 'the report',
     runDiff: async () => 'the diff',
     runProgress: async () => ({
@@ -233,18 +232,10 @@ function fixture(t: TestContext): Fixture {
         emitUpdates: () => {},
         emitImprovements: () => {},
         emitNotices: () => {},
-        dispatch: () => Promise.reject(new Error('not used')),
-        workerModels: () => [],
         runReport: () => '',
         runDiff: async () => '',
         runProgress: async () => {
           throw new Error('unused');
-        },
-        stopRun: async () => {
-          throw new Error('unused');
-        },
-        sendRunMessage: () => {
-          throw new Error('not used');
         },
         runMessages: () => [],
         delegateToManager: () => Promise.reject(new Error('not used')),
@@ -597,15 +588,11 @@ test('a run cannot cross projects: foreign task dispatch and chief steering are 
     toolText(refused),
     new RegExp(`task #${foreignTask.id} belongs to p-2`),
   );
-  // The chief may read a manager-owned run but not steer it.
-  const mgrRun = addRun(f.db, {
-    projectId: 'p-1',
-    chiefConversationId: 'mgr-conv',
-  });
-  const steered = await f
-    .chiefTool('send_run_msg')
-    .execute({ run: mgrRun.id, body: 'stop' }, api('chief-conv'));
-  assert.match(toolText(steered), /send_manager_msg/);
+  // The chief has no run-steering tools at all: only the manager dispatches,
+  // stops and messages workers; the chief reads runs and steers through
+  // send_manager_msg.
+  for (const name of ['dispatch', 'send_run_msg', 'stop_run'])
+    assert.throws(() => f.chiefTool(name), /Missing tool/);
 });
 
 test('manager memory writes are locked to its own project', async (t) => {
@@ -630,22 +617,32 @@ test('manager memory writes are locked to its own project', async (t) => {
   );
   assert.equal(f.scopes.memory('global').dump().items.length, 0);
   assert.equal(f.scopes.memory('p-2').dump().items.length, 0);
-  // General is read-only context: readable, marked, and never a write target.
+  // General memory is not searchable: the manager sees only the injected
+  // General Core, never raw General memory.
   f.scopes.memory('global').remember({ text: 'Tian likes dark mode' });
   const general = await f
     .tool('recall')
-    .execute({ query: 'dark mode', scope: 'global' }, api(f.managerConv));
-  assert.match(toolText(general), /read-only, kept by the chief/);
-  assert.match(toolText(general), /Tian likes dark mode/);
+    .execute({ query: 'dark mode' }, api(f.managerConv));
+  assert.equal(toolText(general), '(no matches)');
+  const generalHistory = await f
+    .tool('recall')
+    .execute({ query: 'dark mode', include_history: true }, api(f.managerConv));
+  assert.equal(toolText(generalHistory), '(no matches)');
   await f
     .tool('forget')
     .execute({ seq: 0, reason: 'test' }, api(f.managerConv, 'c3'));
   assert.equal(f.scopes.memory('global').dump().items[0].status, 'active');
   assert.equal(f.scopes.memory('p-1').dump().items[0].status, 'deleted');
+  // recall has no scope parameter — extra arguments change nothing; it still
+  // searches only this project's memory (the write sits as a review
+  // candidate, so include_history surfaces it).
   const other = await f
     .tool('recall')
-    .execute({ query: 'pnpm', scope: 'beta' }, api(f.managerConv));
-  assert.match(toolText(other), /only this project's and global memory/);
+    .execute(
+      { query: 'pnpm', scope: 'beta', include_history: true },
+      api(f.managerConv),
+    );
+  assert.match(toolText(other), /beta uses pnpm/);
 });
 
 test("the manager's Core holds General and its project; the chief's holds General only", async (t) => {
@@ -735,23 +732,15 @@ function chiefSurface(f: Fixture) {
     emitUpdates: () => {},
     emitImprovements: () => {},
     emitNotices: () => {},
-    dispatch: () => Promise.reject(new Error('not used')),
     runReport: () => '',
     runDiff: async () => '',
     runProgress: async () => {
-      throw new Error('not used');
-    },
-    stopRun: async () => {
-      throw new Error('not used');
-    },
-    sendRunMessage: () => {
       throw new Error('not used');
     },
     runMessages: () => [],
     delegateToManager: () => Promise.reject(new Error('not used')),
     sendManagerMessage: () => Promise.reject(new Error('not used')),
     managerMessages: (projectId) => f.data.managerMessages(projectId),
-    workerModels: () => [],
     history: {
       db: f.db,
       events: new EventLog(f.db),
@@ -805,7 +794,7 @@ test('list_manager_msgs names the manager instead of a bare (no messages)', asyn
 });
 // ---- manager_name storage (D14) -------------------------------------------
 
-test('a v6 database gains a manager_name, backfilled from the project name', (t) => {
+test('a v6 database is snapshotted then recreated empty', (t) => {
   const root = temporary(t);
   const dataDir = join(root, 'data');
   mkdirSync(dataDir, { recursive: true });
@@ -831,18 +820,25 @@ test('a v6 database gains a manager_name, backfilled from the project name', (t)
       .user_version,
     DATABASE_VERSION,
   );
-  const migrated = db.getProject('p-old')!;
-  assert.equal(migrated.name, 'legacy');
-  assert.equal(migrated.rootPath, '/tmp/legacy');
-  // D18: every project has a named manager; old rows take the project name.
-  assert.equal(migrated.managerName, 'legacy');
-  db.updateProject('p-old', { managerName: '阿七' });
+  // Reset semantics: old rows are gone from the live database...
+  assert.equal(db.getProject('p-old'), undefined);
   db.close();
 
-  // Reopening at the current version is a no-op and keeps the name.
+  // ...but the consistent snapshot keeps them for recovery.
+  const backup = new DatabaseSync(join(dataDir, 'tian.db_v6.backup'), {
+    readOnly: true,
+  });
+  t.after(() => backup.close());
+  assert.equal(backup.prepare('PRAGMA user_version').get()?.user_version, 6);
+  assert.equal(
+    backup.prepare("SELECT name FROM projects WHERE id = 'p-old'").get()?.name,
+    'legacy',
+  );
+
+  // Reopening at the current version takes no second backup.
   const reopened = new Db(dataDir);
   t.after(() => reopened.close());
-  assert.equal(reopened.getProject('p-old')?.managerName, '阿七');
+  assert.equal(reopened.getProject('p-old'), undefined);
   assert.ok(
     (
       reopened.sqlite.prepare('PRAGMA table_info(projects)').all() as {
@@ -850,21 +846,6 @@ test('a v6 database gains a manager_name, backfilled from the project name', (t)
       }[]
     ).some((column) => column.name === 'manager_name'),
   );
-  const backup = new DatabaseSync(join(dataDir, 'tian.db_v6.backup'), {
-    readOnly: true,
-  });
-  try {
-    assert.equal(
-      (
-        backup.prepare('PRAGMA table_info(projects)').all() as {
-          name: string;
-        }[]
-      ).length,
-      10,
-    );
-  } finally {
-    backup.close();
-  }
 });
 
 test('adding a project requires a manager name and opens its manager', async (t) => {
@@ -1099,7 +1080,6 @@ async function serviceFixture(t: TestContext): Promise<ServiceFixture> {
     rootPath: projectDir,
     autoLand: 0,
     allowInPlace: 1,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',

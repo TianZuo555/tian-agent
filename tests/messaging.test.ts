@@ -26,7 +26,7 @@ function addRun(db: Db, overrides: Partial<RunRow> = {}): RunRow {
     projectId: 'p-test',
     conversationId: `conv-${randomUUID().slice(0, 8)}`,
     chiefConversationId: null,
-    agentKind: 'durable-worker',
+    runtime: 'pi',
     prompt: 'do the thing',
     currentPrompt: 'do the thing',
     rootPath: '/tmp',
@@ -85,12 +85,12 @@ const api = (run: RunRow, callId = 'c1') => ({
   callId,
 });
 
-test('ask_chief wakes the chief, waits, and returns its reply', async (t) => {
+test('ask_manager wakes the manager, waits, and returns its reply', async (t) => {
   const f = messaging(t);
   const run = addRun(f.db);
   const reply = 'Use SQLite — no new infrastructure allowed.';
   const asking = f
-    .tool('ask_chief')
+    .tool('ask_manager')
     .execute({ question: 'SQLite or Postgres for the cache?' }, api(run));
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(f.wakeCalls.length, 1);
@@ -99,7 +99,7 @@ test('ask_chief wakes the chief, waits, and returns its reply', async (t) => {
   f.db.addAgentMessage({
     id: `msg:${run.id}:reply-1`,
     runId: run.id,
-    sender: 'chief',
+    sender: 'manager',
     body: reply,
   });
   const result = await asking;
@@ -111,21 +111,21 @@ test('ask_chief wakes the chief, waits, and returns its reply', async (t) => {
   assert.equal(thread[1].deliveredAt !== null, true);
 });
 
-test('ask_chief falls back to best judgment when nobody replies', async (t) => {
+test('ask_manager falls back to best judgment when nobody replies', async (t) => {
   const f = messaging(t);
   const run = addRun(f.db);
   const result = await f
-    .tool('ask_chief')
+    .tool('ask_manager')
     .execute({ question: 'Anyone?', wait_seconds: 1 }, api(run));
   assert.match(toolText(result), /best judgment/);
   assert.equal(f.wakeCalls.length, 1);
 });
 
-test('ask_chief stops as soon as the run is discarded', async (t) => {
+test('ask_manager stops as soon as the run is discarded', async (t) => {
   const f = messaging(t);
   const run = addRun(f.db);
   const asking = f
-    .tool('ask_chief')
+    .tool('ask_manager')
     .execute({ question: 'Should I continue?', wait_seconds: 300 }, api(run));
   await new Promise((resolve) => setTimeout(resolve, 30));
   f.db.patchRun(run.id, { reviewStatus: 'discarded' });
@@ -133,20 +133,20 @@ test('ask_chief stops as soon as the run is discarded', async (t) => {
   assert.match(toolText(result), /cancelled/);
 });
 
-test('check_msgs hands over pending chief messages exactly once', async (t) => {
+test('check_msgs hands over pending manager messages exactly once', async (t) => {
   const f = messaging(t);
   const run = addRun(f.db);
   const read: AgentMessageRow = f.db.addAgentMessage({
     id: 'm-read',
     runId: run.id,
-    sender: 'chief',
+    sender: 'manager',
     body: 'old guidance',
   });
   f.db.markAgentMessagesDelivered([read.id]);
   f.db.addAgentMessage({
     id: 'm-new',
     runId: run.id,
-    sender: 'chief',
+    sender: 'manager',
     body: 'switch to plan B',
   });
   f.db.addAgentMessage({
@@ -163,7 +163,7 @@ test('check_msgs hands over pending chief messages exactly once', async (t) => {
   assert.match(toolText(second), /no new messages/);
 });
 
-test('chief run messages are idempotent and thread-complete', async (t) => {
+test('manager run messages are idempotent and thread-complete', async (t) => {
   const f = messaging(t);
   const run = addRun(f.db);
   f.data.sendRunMessage(run.id, 'use option A', 'op-1');
@@ -176,11 +176,11 @@ test('chief run messages are idempotent and thread-complete', async (t) => {
   assert.throws(() => f.data.runMessages('r-missing'), /Unknown run/);
 });
 
-test('tell_chief posts a note without waiting', async (t) => {
+test('tell_manager posts a note without waiting', async (t) => {
   const f = messaging(t);
   const run = addRun(f.db);
   const result = await f
-    .tool('tell_chief')
+    .tool('tell_manager')
     .execute({ text: 'Found a flaky test, will retry once.' }, api(run));
   assert.match(toolText(result), /delivered/);
   assert.equal(f.wakeCalls.length, 1);

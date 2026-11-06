@@ -4,14 +4,14 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D19，按领域排序。当前 `DATABASE_VERSION = 8`、`SERVICE_PROTOCOL = 10`；每次 schema 或协议变化都由升级事务覆盖（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D23，按领域排序。当前 `DATABASE_VERSION = 13`、`SERVICE_PROTOCOL = 13`。每次 schema 变化都提升版本；旧数据库先做快照，再重建为空库（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
 | 原 ADR | 现章节                                                                          |
 | ------ | ------------------------------------------------------------------------------- |
 | 0001   | D1 三栏 shell                                                                   |
-| 0002   | D2 Magpie 网关                                                                  |
+| 0002   | D2 Magpie 网关（已由 D21 取代）                                                 |
 | 0003   | D3 TypeScript 服务 + Electron 客户端                                            |
 | 0004   | D4 Memory 以 SQLite 为唯一写入来源                                              |
 | 0005   | D5 Task 由待办演进，Run 执行                                                    |
@@ -29,8 +29,12 @@
 | —      | D17 微信走官方 iLink（ClawBot）通道，24 小时窗口用「最小保活」维持              |
 | —      | D18 记忆按角色归属：总管管 Global，管理者管项目                                 |
 | —      | D19 记忆证据、确认与相似度：证据表达依据，确认表达审核，相似度只提示相关        |
+| —      | D20 通知投递与管理者交接移出 Service 类                                         |
+| —      | D21 模型 Provider 可插拔                                                        |
+| —      | D22 统一 Seatbelt 工兵沙箱                                                      |
+| —      | D23 Native Shell 客户端采用「天色」视觉语言                                     |
 
-> 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时追加为下一个空闲编号。D12–D18 为后续架构演进决策。
+> 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时追加为下一个空闲编号。D12–D22 为后续架构演进决策。
 
 ---
 
@@ -53,6 +57,8 @@
 ---
 
 ## D2 · 模型统一走本地 Magpie 网关
+
+> 已被 [D21](#d21--模型-provider-可插拔magpie-只是其中一个) 取代。
 
 所有模型请求都打到本机 Magpie（默认 `http://127.0.0.1:3425/v1`），由它路由到各上游。App 不直连 Anthropic / OpenAI / DeepSeek 官方 API，也不从 `~/.pi/agent/auth.json` 导入 key。
 
@@ -259,8 +265,9 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - **问答有归属**：`manager_messages` 增加 `kind`（delegation / message / question / answer / report）、`task_id`、`reply_to`、`closed_at`。管理者 `ask_chief` 写 `question` 行并阻塞轮询匹配 `reply_to = question.id` 的 `answer`；超时在单个事务内「关闭 + 复查」，答覆竞态不丢失；重启后重放直接返回已存答案或超时文案，不再等待。无关消息不会被误当答案吞掉。
 - **恰好一次唤醒**：每条总管→管理者消息对应一次唤醒通知，唯一例外是「管理者仍在阻塞等待」的 `answer`——由 `ask_chief` 直接返回不唤醒；问题已关闭后的迟到答覆补一次唤醒。`check_msgs` 因此被移除。
 - **按 Task 路由上行**：`wakeChief` 的目标是会话级 `report_to`——优先本 Task 的 `reportTo`，其次项目内最新委派 Task 的 `reportTo`，最后回落 scope 最新非 Manager 会话。不再需要 `manager_links` 表（已建库里的表保留不删）。
-- **边界在工具层**：Manager 装配 `managerExtension`，工具构造时锁定本项目——`taskExecutionTools` 带 `taskScope` 守卫、记忆写入 `lockToOwnScope`（可读 Global）、`dispatch` 强制本项目、Run 与 history ref 限本项目；总管的 `taskExecutionTools` 传 `refuseAssignee='manager'` 拒绝对委派 Task 执行 start/complete/fail，`send_run_msg` 拒绝管理者名下的 Run（只读工具放行）；`RunOrchestrator.dispatch` 校验 task 的 scope 与项目一致。Manager 没有 shell / CodingTools。
+- **边界在工具层**：Manager 装配 `managerExtension`，工具构造时锁定本项目——`taskExecutionTools` 带 `taskScope` 守卫、记忆写入 `lockToOwnScope`（对 Global 无查询）、`dispatch` 强制本项目、Run 与 history ref 限本项目；总管的 `taskExecutionTools` 传 `refuseAssignee='manager'` 拒绝对委派 Task 执行 start/complete/fail，且 `taskScope` 锁定 Global；总管没有任何写 Run 的工具（只读检查放行）；`Service.dispatchRun` 拒绝监督会话非管理者的派发。Manager 没有 shell / CodingTools。
 - **会话即项目绑定、channel 保留**：Manager 是 `channel_sessions` 中 `channel = 'manager'`、`external_id = scope_id = project_id` 的持久会话，每项目至多一条，`ensureManagerConversation` 惰性创建且禁止 Global；公开 `openSession` 拒绝 `channel='manager'` 绑定，防止客户端伪造「Global 管理者」。`latestConversation`（scope 级无主通知的默认目标）排除 Manager 绑定；启动时按 `managerConversationIds` 给存量会话分别重配 chief / manager extension。
+- **只有管理者派发**：`agent_messages` 的 sender 为 `manager` / `worker`；总管只委派、经 `send_manager_msg` 传达。Project Scope 里只有本项目的管理者会话与工兵会话——渠道入口（`/scope <项目>`、项目下的 `createConversation`）都路由到管理者，总管的 History 读取限在 Global。
 - **Tian 直连管理者**：除总管委派外，Tian 可经 `openManager(projectId)` 命令（侧栏项目作用域的管理者按钮）直接打开管理者会话派活；`ConversationInfo.role`（`'chief' | 'manager'`）随 `openManager` / `openSession` / `listConversations` 等全链路透出（由 `channel_sessions` 的 manager 绑定派生，不落 `conversations` 列），`SERVICE_PROTOCOL` 升至 5。Tian 轮次（本轮 `currentInput` 为 `kind='user'`）里，`ask_chief` 与 `report_chief` 被工具层守卫挡下并返回提示语——不写 `manager_messages`、不唤醒总管；例外是 `report_chief` 带 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 直接派的 Task 由 `add_task` 创建（`assignee = NULL`），静默收口不通知总管；`remember(source:'user')` 在 Tian 轮次照常记 `user_confirmed`。
 
 **后果**：委派变成可枚举、可追踪、可归因的工作项——总管能列出未完成委派、汇报能对应到 Task；问答语义清晰，答覆不再被无关消息吞掉或重复投递；Manager 拥有项目内完整管理回路，越权写入被工具层拦截。Tian 直连让项目琐事绕过总管直达管理者且不打扰总管会话，同时不削弱上行通道——归属总管委派的 Task 在 Tian 轮次中收口、上报照常。局限：Tian 让管理者「把非委派事项转告总管」目前不实现——`report_chief` 仅放行委派 Task；`ask_chief` 阻塞轮询（2 秒间隔、默认上限 5 分钟）；用户界面操作（doneTask）不受 assignee 限制，作为最终逃生通道保留。
@@ -269,17 +276,18 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 
 总管与管理者派活时可给本次 Run 钉一个模型和思考强度（effort），不再一律使用全局默认模型。
 
+> M6 起只有项目管理者派发（见 [D12](#d12--项目管理者每项目一条持久会话委派即-task-的三级链路)）：总管的 `dispatch` 与 `<state>` 中的 `worker models:` 行已删除。下文中关于总管 dispatch 的内容是当时的决定，钉选规则现在只适用于管理者的 `dispatch`。
+
 **背景**：worker 历来用 `settings.model` 全局默认模型、按模型自带 effort 跑。有些任务值得用更强的模型或更高的思考强度，另一些只是跑腿、便宜快速即可。需要让总管和管理者在 `dispatch` 时按任务指定，而不是改全局配置。
 
 **决定**：
 
-- **dispatch 钉选**：总管 `dispatch(project, prompt, task?, model?, thinking_level?)` 与管理者 `dispatch(prompt, task?, model?, thinking_level?)` 各增加两个可选参数——`model` 是 Magpie catalog 的 model id，`thinking_level` 是 pi 的 level 名（off/minimal/low/medium/high/xhigh/max）。省略时沿用全局默认模型与该模型自己的默认 effort。
-- **校验收口一处**：总管与管理者的 dispatch dep 都指向 `Service.dispatchRun`，其中 `resolveWorkerSpec` 对照 `catalogState().models` 校验——model 必须存在、thinking_level 必须被目标模型支持；gateway 的 `none` 映射为 pi 的 `off`。校验失败抛错、不创建 run，两条路径同一套规则。
-- **持久化与消费**：`runs` 表在同一 v7 迁移里新增 `model`、`thinking_level` 两个可空列（NULL = 继承默认），`run.dispatched` 事件 payload 带上钉选值；`AgentRuntime.create` 把钉选的 `{provider: 'magpie', modelId}` 与 `thinkingLevel` 传给 pi，未钉时回落 `settings.model`。
-- **可发现性**：总管与管理者的 `<state>` 块各多一行 `worker models:`（catalog 为空时不出现），列出每个 model id、它支持的 thinking level 和默认标记；工具描述指引从该行取值。
-- **兼容**：`RunInfo.model` / `thinkingLevel` 为可选可空字段，旧库行与旧 fixture 不受影响。
+- **派发选择**：管理者 `dispatch` 用两种互斥方式之一选工兵：一个 `intent`（Settings → Workers 里的命名配置：执行器、模型、思考强度、用途说明），或明确的 `runtime` + `model`（+ `thinking_level`）。两者同时给出报错；都不给则用项目默认 Intent（`projects.default_intent`，schema v10 起取代 `projects.agent_kind`）。默认为空 = Pi 执行器 + 全局默认模型。
+- **校验收口一处**：服务在创建 Run 前把选择解析成落库的 `runtime`/`model`/`thinking_level` 三元组；Pi 模型对照 provider 目录校验——错值在 run 创建前被拦下。
+- **持久化与消费**：`runs` 表存 `runtime`、`model`、`thinking_level` 三个解析值，`run.dispatched` 事件带上它们。三元组对整条 Run 固定：follow-up Attempt 与重启续接沿用同一执行器。
+- **可发现性**：管理者的 `<state>` 列出 Intent 名与用途说明，以及 Pi 模型和支持的思考强度。
 
-**后果**：总管可以把重活钉到强模型 / 高强度、跑腿钉到便宜模型，同一个项目内不同 Run 并存不同配置；错值在 run 创建前被拦下，不会产生半初始化 run。局限：thinking_level 单独传入时按默认模型校验，默认模型不在 catalog 中会拒绝（需先钉 model）；UI 侧手动派活 / 复跑暂不接这两个参数。
+**后果**：管理者按任务分配算力而不改全局配置；命名 Intent 把常用组合收成一个词。
 
 ## D14 · 管理者命名：名字只是称呼，绑定会话才是管理者
 
@@ -355,7 +363,7 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 
 - **写入目标由角色决定**：`memoryTools` 的 `ownScope` 固定写入目标——总管恒为 Global，管理者恒为本项目；`remember` / `revise` / `forget` / `select` / `deselect` 不再接受 `scope` / `target` 参数，`#seq` 永远指向自己那份记忆。Notes 同理：总管 `write_note` / `append_note` 只写 Global。
 - **Core 按角色注入**：`coreMemorySection(deps, { withProject })`——总管只渲染 Global Core（即使在项目会话里），管理者渲染 Global + 本项目 Core。快照版本只追踪被渲染的 scope。
-- **跨界只读**：总管的 `recall` / `list_notes` / `read_note` / `search_notes` 默认 Global，带 `scope` 可只读查询某个项目，结果带 `read-only; owned by <管理者>` 头；管理者 `recall scope=global` 同样带只读头。总管在项目会话里学到的项目事实交给管理者（`send_manager_msg` / `delegate` 简报）去记。
+- **跨界只读、双向不对称**：总管的 `recall` / `list_notes` / `read_note` / `search_notes` 默认 Global，带 `scope` 可只读查询某个项目，结果带 `read-only; owned by <管理者>` 头；管理者对 Global 的唯一视图是注入的 Global Core——它的 `recall` 没有 scope 参数。总管在项目会话里学到的项目事实交给管理者（`send_manager_msg` / `delegate` 简报）去记。
 - **管理者内容边界**：Tian 在管理者会话里说的与本项目无关的个人信息，管理者不记、也不代写 Global——由 Tian 直接告诉总管；总管转来的项目事实由管理者记录。
 - **每个项目恰好一位、必须命名的管理者**：`addProject(name, rootPath, managerName)` 第三个参数必填（空白拒绝），同一调用里创建绑定的管理者会话；App 新建项目对话框的「Manager 名称」为必填项，创建后直接打开管理者。服务启动时为旧项目补建管理者会话；数据库迁移把空的 `manager_name` 回填为项目名。`updateProject` 的空白改名保留原名。D14 的「名字不创造管理者 / 未配置」三态随之取消，`hasManager` 守卫删除。
 - **删除项目**：管理者会话随项目创建，因此 `removeProject` 只在管理者会话没有任何 entry 且没有其他会话时连同绑定一并删除；有内容就拒绝，保护 transcript 与记忆。
@@ -401,3 +409,66 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 - 两者是实现部件，不新增 Service、Task、Run 或 Manager 概念。
 
 **后果**：投递与交接规则有直接测试与单一所有者；Service 类减少约 170 行。行为不变：队列仍然持久，失败投递在下次请求或定时轮次重试，管理者操作仍然幂等。代价：新流程必须通过 `service.outbox` 入队、通过 `ManagerLink` 唤醒管理者，不能再写临时的投递代码。
+
+---
+
+## D21 · 模型 Provider 可插拔；Magpie 只是其中一个
+
+状态：已通过。取代 [D2](#d2--模型统一走本地-magpie-网关)。
+
+Magpie 不再是模型流量的唯一通道。它成为多个 provider 之一，用户为 Tian 自己的 Agent（总管、管理者、Pi 工兵）选择 provider。外部工兵执行器（Codex、Cursor 等）自己管理模型、凭据与计费。
+
+**背景**：D2 让所有模型流量经过本地 Magpie 网关。两个变化打破了这条规则：外部编码 Agent 运行在自己的后端上（Cursor CLI 不能指向自定义端点）；用户希望选择 Magpie 以外的 provider。
+
+**决定**：
+
+- Tian 自己的 Agent 运行在 Pi 上，使用用户选择的 provider。Magpie 是其中之一。
+- 外部工兵执行器接收不透明的模型字符串，使用它自己的认证。Tian 不按 provider 目录校验它；D13 的校验只对 Pi 工兵生效。执行器事件流报告 token 用量时才记录。
+- provider 配置归 Tian 管理，由 Settings → Providers 页面维护。非敏感字段（provider 类型、base URL、启用的模型）存于 `settings.json`；密钥存于数据目录中的 0600 文件，只由服务写入，与 `service.env` 相同。服务启动时把每个已配置的 provider 注册到 Pi。Tian 不读取 Pi CLI 的状态（`~/.pi/agent/auth.json`），Pi CLI 中的变更不影响服务。UI 不回显密钥（只显示末尾几位）。
+- Magpie 成为预置的 provider 条目。`MAGPIE_*` 环境变量作为兼容入口保留一个版本。
+- 总管与每个管理者始终是 Pi Durable 会话；只有工兵的执行器可配置。它们依赖自定义工具、durable replay、Core Memory 注入与单一长期会话，外部 CLI 都不提供。
+- Settings 中设置总管模型与管理者默认模型；每个项目可覆盖自己管理者的模型。Intent 只用于工兵。切换模型从现有会话的下一轮开始生效（不新建会话），并使 prompt 前缀缓存失效一次。
+- Tian 在 0600 密钥文件之上实现 pi-ai 的 `CredentialStore`（`read` / `list` / `modify` / `delete`）。API key 与 OAuth token 共用这个存储；pi-ai 在 `modify` 内加锁刷新 OAuth token。
+- OAuth 类订阅（Anthropic Claude Pro/Max、OpenAI Sign in with ChatGPT、GitHub Copilot、OpenRouter）经 `models.login(provider, 'oauth', { prompt, notify })` 登录。Settings → Providers 页面展示 `auth_url` / `device_code` 事件并回答 prompt。
+- 内置 provider 的模型目录随 pi-ai 发布。只有动态目录（Magpie 等网关）需要启动时发现与离线缓存，与 D2 目前对 Magpie 的做法相同。
+- 外部 CLI 凭据：优先使用 CLI 自己的登录态（例如 `codex login`）；在 Settings 中启用执行器时先检测“已安装、已登录”，通过后才能启用。需要 API key 的执行器在 Settings 中单独填写；key 按执行器存于 0600 密钥文件，只经环境变量白名单传给该执行器的进程。不扩展 `service:env`：执行器凭据从不进入服务的全局环境。登录态过期时，适配器在 UI 中报告“需要重新登录”，而不是笼统的失败。
+
+**后果**：Tian 依赖 pi-ai 提供 provider 认证与模型目录，而不是依赖单一网关。服务在一个 0600 文件中持有更多密钥（provider key、OAuth token、执行器 key），因此该文件与环境变量白名单成为安全关键点。用量与成本按 provider 统计；不报告用量的外部执行器没有这项数据。
+
+## D22 — 统一的 Seatbelt 工兵沙箱
+
+状态：已通过。
+
+所有工兵命令——Pi 工兵与外部执行器都一样——在由 Tian 统一控制的 macOS Seatbelt profile 内运行，每个 Run 在 `<dataDir>/sandbox/<runId>.sb` 生成一份。项目可用 `sandboxMode = 'off'` 退出；新项目与既有项目默认 `workspace-write`。
+
+**背景**：worktree 边界原本只靠指令约束（`agent-work.md`）；PRD §13 第 8 问要求真实的操作系统级限制。各 CLI 又自带沙箱（Codex 即 Seatbelt），两层嵌套会冲突。
+
+**决策**：
+
+- `SandboxedExecutionEnv` 包装工兵 `ExecutionEnv`：字符串命令走 `sandbox-exec -f <profile> /bin/bash -c <cmd>`，argv 命令走 `sandbox-exec -f <profile> <argv…>`；进程内文件方法在服务代码里按规范化路径执行同一套允许/拒绝规则（Seatbelt 看不到这些方法）。env factory 只对映射到 Run 的会话加包装，且只在项目启用沙箱时；总管与管理者会话永不沙箱化。
+- 外部执行器：适配器把 spawn argv 改写到 `sandbox-exec` 之下，并放松 CLI 自带沙箱（`codex --sandbox danger-full-access`）——外层 profile 是唯一边界；CLI 的状态目录（`$CODEX_HOME`，默认 `~/.codex`）并入可写集合，其中的 `config.toml`、`AGENTS.md`、`AGENTS.override.md` 保持只读。
+- Profile 规则：服务数据目录与常见凭据路径拒绝读写；全局拒绝写，再对 work 根目录、Run 的 Git 元数据（`git rev-parse --path-format=absolute --git-dir`）、临时目录、工具链缓存与项目自定义可写根放行；主检出保持只读；服务 socket 一律拒绝；`sandboxNetwork = off` 断外网但保留 localhost。
+- 启动自检（`sandbox-exec -p '(version 1)(allow default)' /usr/bin/true`）判定可用性；沙箱被需要但不可用时 Run 失败关闭——不静默回落到无沙箱。
+- 工兵指令告知模型：工作目录外的写入按设计失败；`run.dispatched` 记录沙箱模式与网络开关。
+
+**后果**：`sandbox-exec` 已被 Apple 标为弃用但仍在 macOS 提供；自检在 Apple 移除它时失败关闭。与 SwiftPM、Xcode 构建、Chromium/Playwright 或 CLI 自带沙箱的嵌套冲突仍需按项目用 `off` 或额外可写根绕开——这些绕开手段是项目设置，不另立决策。
+
+## D23 — Native Shell 客户端采用「天色」视觉语言
+
+状态：已通过。
+
+Native Shell 客户端（先做 macOS 和 iOS）采用 [design-language.md](design-language.md) 中的「天色」视觉语言。可交互设计稿 [`docs/design/client-mockup.html`](../design/client-mockup.html) 是它的视觉参照。Electron 客户端在移除前沿用旧的墨色单色语言。
+
+**背景**：墨色单色语言只把颜色留给警告和 diff，总管、管理者、工兵看起来一样；用户要打开 Context → Runs 才知道谁在工作（[persistent-agent-ui.md](research/persistent-agent-ui.md)）。NSH 客户端以对话为中心，且必须在手机上可用：手机上原始的工兵 CLI 输出无法阅读，一屏也只放得下一个对话。
+
+**决策**：
+
+- 表面保持无彩。颜色只表示身份（总管的黎明渐变光球、每位管理者一种色相）、状态（工作中、等你、失败）和 diff 增删行。
+- 只有一个光源：总管，位于左上。五个层级（L0–L4）。卡片只有顶部边缘高光，没有投影；只有浮层有投影。玻璃用 NSH `glassEffect`，并提供不透明的退化方案和「玻璃强度」设置。
+- 每个动画都表示一个状态。开启减少动效时，状态只用颜色表示。
+- 工兵只显示四个阶段（理解、修改、验证、汇报），由服务端按固定规则从工具调用推出。不显示原始 CLI 输出。
+- 对话正文 15px / 1.7（手机 14px），最宽 720px。取代草案 `docs/spec/ui.md` §11 中的 16px / 1.5。
+- 选中的行只用底色，不用左侧高光条。
+- 设置按归属分组：智能体（账号）、个人（这台设备）、运行（服务器）。
+
+**后果**：调研中「不要照搬彩色头像」的建议收窄为：身份可以用颜色，但每位管理者只有一种色相，总管只有一条渐变。草案 UI 规范落地时必须改用 15px / 1.7。D1 的三栏布局沿用到 macOS 客户端；其中 `@pierre/diffs` 的细节由 NSH `DiffView` 取代。图标仍然只用 Phosphor。管理者色相的分配方式、iOS App Extension 支持仍待确认（[design-language.md §14](design-language.md#14-待确认)）。

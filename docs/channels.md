@@ -2,7 +2,7 @@
 
 **English** | [简体中文](zh/channels.md)
 
-All interaction channels share a single backend service and scope memory. Calling `openSession({ channel, externalId, scopeId })` creates or retrieves a stable internal conversation. Different channels, external sessions, or scopes map to distinct conversations. Channel bindings persist across service restarts.
+All interaction channels share a single backend service and scope memory. Calling `openSession({ channel, externalId, scopeId })` creates or retrieves a stable internal conversation. Different channels or external sessions map to distinct conversations. Channel bindings persist across service restarts. A project scope holds only its Manager conversation ([memory.md](memory.md#conversation-boundary)), so `openSession` accepts the `global` scope only; a project entry point opens the Manager through `openManager(projectId)`.
 
 For example, the desktop application and Telegram can both bind to `global`. They operate as two independent chat contexts, but each request loads identical Global Memory. Content that remains in conversation transcripts without consolidating into Memory does not transfer between sessions. External inputs can provide a stable `requestId` to `submit`, enabling Durable to deduplicate submissions.
 
@@ -20,9 +20,9 @@ TELEGRAM_ALLOWED_CHAT_IDS=111111111,222222222
 ```
 
 - Only allow-listed chat IDs can start conversations. The adapter logs unauthorized chat IDs and ignores them.
-- Each chat tracks a current scope (defaults to `global`). Use `/scope` to inspect and `/scope <project>` to switch. Switching routes subsequent messages into a distinct conversation for that scope. The selection persists. The `/status` command displays pending tasks and active Runs. The `/help` command lists available commands. Unknown commands return help text.
+- Each chat tracks a current scope (defaults to `global`). Use `/scope` to inspect and `/scope <project>` to switch. Switching persists the chat's scope (`telegram_chats` / `wechat_users`) and routes subsequent messages into that scope's conversation. `/scope <project>` routes to that project's Manager conversation, and the Manager's replies forward back to the chat; `global` stays the Chief ([memory.md](memory.md#conversation-boundary)). The same applies to WeChat. The `/status` command displays pending tasks and active Runs. The `/help` command lists available commands. Unknown commands return help text.
 - Incoming messages submit with stable `requestId` format `tg:<chatId>:<message_id>`. Repeated deliveries do not submit duplicate turns. The `getUpdates` offset persists across restarts.
-- Chief responses (direct replies and proactive reports) return to Telegram as plain text. Long messages split along line breaks into segments under 4,096 characters. Forwarding cursors persist in SQLite to prevent duplicate or omitted transmissions. Streaming fragments, tool calls, and thinking blocks do not forward.
+- Responses of the chat's current conversation (the Chief, or the Manager after `/scope <project>`; direct replies and proactive reports) return to Telegram as plain text. Long messages split along line breaks into segments under 4,096 characters. Forwarding cursors persist in SQLite to prevent duplicate or omitted transmissions. Streaming fragments, tool calls, and thinking blocks do not forward.
 - Controlled operations like approvals are not yet connected to Telegram. Command inputs and push pipelines remain reserved for future releases.
 
 ## WeChat (iLink / ClawBot)
@@ -37,7 +37,7 @@ Set this variable in `.env`, then run `mise run service:env && mise run service:
 
 - QR Login: When started without credentials, the service publishes the QR code URL to Settings → Channels (with pairing code support). Credentials persist after scan confirmation. Reopen the QR dialog if the code expires or accounts change.
 - Only allow-listed users can interact. Each user receives a stable conversation defaulting to scope `global`. Commands mirror Telegram (`/scope`, `/status`, `/help`). Inbound `requestId` uses `wx:<userId>:<messageId>`.
-- Chief replies return as plain text with persistent cursors. WeChat limits bots to approximately 10 proactive messages per user turn, and `context_token` expires after 24 hours. When sends fail, the forwarding cursor does not advance. Messages dispatch automatically when the user starts a new conversation window.
+- Replies (Chief, or Manager after `/scope <project>`) return as plain text with persistent cursors. WeChat limits bots to approximately 10 proactive messages per user turn, and `context_token` expires after 24 hours. When sends fail, the forwarding cursor does not advance. Messages dispatch automatically when the user starts a new conversation window.
 - **24-Hour Keepalive**: During extended user silence, the service sends at most two single-character keepalive probes (`.`) per window. Probes fire only when silence exceeds 11 hours and at least 30 minutes remain before expiry. If a probe fails, the window marks as closed and stops probing until the user speaks.
 - Known limits: iLink scan bots support private direct messages only. Group chats are not supported. Slash menus are not available.
 
@@ -57,4 +57,4 @@ thread: optional-thread
 Message body text
 ```
 
-Writers should stage changes in non-markdown temporary files and rename them into place. The service imports entries by `(scopeId, messageId)` into SQLite and tracks read status per message. File system watchers, startup scans, and periodic sweeps process missing files. Each scan imports only files this service instance has not seen, so rescans stay cheap; the `inbox` event and notification delivery fire only when a scan inserts a row or queues a new notification. External messages produce persistent notifications. Messages from the Chief and Run completions do not create duplicate wakeups.
+Writers should stage changes in non-markdown temporary files and rename them into place. The service imports entries by `(scopeId, messageId)` into SQLite and tracks read status per message. File system watchers, startup scans, and periodic sweeps process missing files. Each scan imports only files this service instance has not seen, so rescans stay cheap; the `inbox` event and notification delivery fire only when a scan inserts a row or queues a new notification. External messages produce persistent notifications. A Global Inbox message wakes the Chief, who reads it with `check_inbox`; a project Inbox message wakes that project's Manager, who reads it with its own `check_inbox`. Messages from the Chief and Run completions do not create duplicate wakeups.

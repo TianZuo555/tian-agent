@@ -27,60 +27,60 @@
 
 ## 模块地图
 
-| 模块                           | 职责                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------- |
-| `service/server.ts`            | 服务生命周期、独占锁、Unix socket RPC、客户端隔离                                  |
-| `service/client.ts`            | 请求、事件、自动重连；关闭客户端不停止服务                                         |
-| `service/launchd.ts`           | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理                                  |
-| `desktop/controller.ts`        | App 连接偏好、服务控制及本地升级入口                                               |
-| `desktop/app-update.ts`        | App 校验、独立替换、启动检查与失败恢复                                             |
-| `shared/contracts.ts`          | IPC / socket 参数 schema、返回类型和消息合约                                       |
-| `shared/messages.ts`           | Pi transcript 转换为聊天快照                                                       |
-| `worker/service.ts`            | 应用组装、项目、会话、渠道绑定、Inbox、目标与 Run                                  |
-| `worker/manager-link.ts`       | 项目管理者会话绑定、启动补建、唤醒、委派与总管 → 管理者消息                        |
-| `worker/outbox.ts`             | 持久通知投递：合并投递轮次、解析目标、隔离单条失败、暂停与恢复                     |
-| `worker/commands.ts`           | 各 transport 共用的业务命令                                                        |
-| `worker/agents.ts`             | Pi API 适配和总管／管理者／工兵能力配置                                            |
-| `worker/magpie.ts`             | Magpie 网关 provider：模型发现与描述映射                                           |
-| `worker/settings.ts`           | 模型选择与缓存的模型目录                                                           |
-| `worker/tools.ts`              | 总管 extension：task、memory、notes、Inbox、dispatch、delegate 等                  |
-| `worker/manager-tools.ts`      | 项目管理者 extension：项目锁定的 task、memory、notes、runs、report_chief 等        |
-| `worker/tools-memory.ts`       | 总管／项目管理者共用的记忆工具与 scope 解析                                        |
-| `worker/tools-goals.ts`        | 目标工具与总管／管理者共用的任务执行工具（taskExecutionTools）                     |
-| `worker/tools-improvements.ts` | 总管改进工具：log_improvement、list_improvements                                   |
-| `worker/tools-history.ts`      | 总管检索工具：search_history、read_history                                         |
-| `worker/worker-tools.ts`       | 工兵消息工具：ask_chief、tell_chief、check_msgs                                    |
-| `worker/goals.ts`              | Goal 存储、用户提醒（`user_notices`）与每日预算                                    |
-| `worker/skills.ts`             | Skill 多版本注册表、审批状态机、注入匹配与经验提取                                 |
-| `worker/files.ts`              | 原子文件发布（临时文件 + rename）                                                  |
-| `worker/scheduler.ts`          | cron 解析与触发事务                                                                |
-| `worker/runs.ts`               | Run 状态、attempt、收集、恢复及验收                                                |
-| `worker/run-progress.ts`       | Run 进度快照类型与工具输出格式化（`run_progress`）                                 |
-| `worker/manager-label.ts`      | 项目管理者命名与标签解析（D18）                                                    |
-| `worker/data.ts`               | task、memory、Inbox 操作和更新事件                                                 |
-| `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录                                          |
-| `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入                                                |
-| `worker/memory.ts`             | SQLite 记忆、来源与版本、显式 Core 选择（见 [memory.md](memory.md)）               |
-| `worker/provenance.ts`         | 用户来源证据校验（区分用户轮次与系统唤醒）                                         |
-| `worker/search.ts`             | Memory / History / Notes 共用的查询计划、Token 估算与 code point 分页              |
-| `worker/memory-worker.ts`      | 后台候选记忆提取：触发、游标、启发式提取器                                         |
-| `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索                                    |
-| `worker/events.ts`             | 业务事件与审计日志（`events` 表）                                                  |
-| `worker/improvements.ts`       | 改进日志、异常指纹去重、提升为 Task（见 [improvement-log.md](improvement-log.md)） |
-| `worker/usage.ts`              | 按本地日统计各 scope 的模型 token 用量                                             |
-| `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令                                           |
-| `worker/telegram.ts`           | Telegram Bot 长轮询、白名单、会话映射与回复转发                                    |
-| `worker/wechat.ts`             | 微信 iLink（ClawBot）扫码登录、白名单、会话映射、回复转发与 24 小时窗口保活        |
-| `worker/channel-host.ts`       | 渠道适配器共用的宿主接口与总管回复文本提取                                         |
+| 模块                           | 职责                                                                                           |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `service/server.ts`            | 服务生命周期、独占锁、Unix socket RPC、客户端隔离                                              |
+| `service/client.ts`            | 请求、事件、自动重连；关闭客户端不停止服务                                                     |
+| `service/launchd.ts`           | 服务升级事务、备份、回滚、恢复与 LaunchAgent 管理                                              |
+| `desktop/controller.ts`        | App 连接偏好、服务控制及本地升级入口                                                           |
+| `desktop/app-update.ts`        | App 校验、独立替换、启动检查与失败恢复                                                         |
+| `shared/contracts.ts`          | IPC / socket 参数 schema、返回类型和消息合约                                                   |
+| `shared/messages.ts`           | Pi transcript 转换为聊天快照                                                                   |
+| `worker/service.ts`            | 应用组装、项目、会话、渠道绑定、Inbox、目标与 Run                                              |
+| `worker/manager-link.ts`       | 项目管理者会话绑定、启动补建、唤醒、委派与总管 → 管理者消息                                    |
+| `worker/outbox.ts`             | 持久通知投递：合并投递轮次、解析目标、隔离单条失败、暂停与恢复                                 |
+| `worker/commands.ts`           | 各 transport 共用的业务命令                                                                    |
+| `worker/agents.ts`             | Pi API 适配和总管／管理者／工兵能力配置                                                        |
+| `worker/magpie.ts`             | Magpie 网关 provider：模型发现与描述映射                                                       |
+| `worker/settings.ts`           | 模型选择与缓存的模型目录                                                                       |
+| `worker/tools.ts`              | 总管 extension：Global 的 task、memory、notes、Inbox，delegate，只读 Run 检查                  |
+| `worker/manager-tools.ts`      | 项目管理者 extension：项目锁定的 task、memory、notes、Inbox、dispatch 与 runs、report_chief 等 |
+| `worker/tools-memory.ts`       | 总管／项目管理者共用的记忆工具与 scope 解析                                                    |
+| `worker/tools-goals.ts`        | 目标工具与总管／管理者共用的任务执行工具（taskExecutionTools）                                 |
+| `worker/tools-improvements.ts` | 总管改进工具：log_improvement、list_improvements                                               |
+| `worker/tools-history.ts`      | 总管检索工具（只限 Global）：search_history、read_history                                      |
+| `worker/worker-tools.ts`       | 工兵消息工具：ask_manager、tell_manager、check_msgs                                            |
+| `worker/goals.ts`              | Goal 存储、用户提醒（`user_notices`）与每日预算                                                |
+| `worker/skills.ts`             | Skill 多版本注册表、审批状态机、注入匹配与经验提取                                             |
+| `worker/files.ts`              | 原子文件发布（临时文件 + rename）                                                              |
+| `worker/scheduler.ts`          | cron 解析与触发事务                                                                            |
+| `worker/runs.ts`               | Run 状态、attempt、收集、恢复及验收                                                            |
+| `worker/run-progress.ts`       | Run 进度快照类型与工具输出格式化（`run_progress`）                                             |
+| `worker/manager-label.ts`      | 项目管理者命名与标签解析（D18）                                                                |
+| `worker/data.ts`               | task、memory、Inbox 操作和更新事件                                                             |
+| `worker/db.ts`                 | 业务数据、渠道绑定、通知 outbox、幂等记录                                                      |
+| `worker/scopes.ts`             | scope 目录、notes 和 Inbox 文件导入                                                            |
+| `worker/memory.ts`             | SQLite 记忆、来源与版本、显式 Core 选择（见 [memory.md](memory.md)）                           |
+| `worker/provenance.ts`         | 用户来源证据校验（区分用户轮次与系统唤醒）                                                     |
+| `worker/search.ts`             | Memory / History / Notes 共用的查询计划、Token 估算与 code point 分页                          |
+| `worker/memory-worker.ts`      | 后台候选记忆提取：触发、游标、启发式提取器                                                     |
+| `worker/history.ts`            | transcript 与事件的派生全文索引、增量同步与检索                                                |
+| `worker/events.ts`             | 业务事件与审计日志（`events` 表）                                                              |
+| `worker/improvements.ts`       | 改进日志、异常指纹去重、提升为 Task（见 [improvement-log.md](improvement-log.md)）             |
+| `worker/usage.ts`              | 按本地日统计各 scope 的模型 token 用量                                                         |
+| `worker/dispatch.ts`           | worktree、commit、diff、merge 和 PR 命令                                                       |
+| `worker/telegram.ts`           | Telegram Bot 长轮询、白名单、会话映射与回复转发                                                |
+| `worker/wechat.ts`             | 微信 iLink（ClawBot）扫码登录、白名单、会话映射、回复转发与 24 小时窗口保活                    |
+| `worker/channel-host.ts`       | 渠道适配器共用的宿主接口与总管回复文本提取                                                     |
 
 ## 权限与 scope
 
-总管只启用 chief extension：task、memory、notes、Inbox、改进日志、dispatch、delegate（`delegate` / `send_manager_msg` / `list_manager_msgs`）、Run 查询与 Run 消息（`send_run_msg` / `list_run_msgs` / `run_progress` / `stop_run`），没有 `bash/read/write/edit`；读取 Run 结果用 `read_run_report` / `read_run_diff`。启动时会重新限制已有总管会话的 extension。记忆与 notes 按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）：总管只写 Global、只注入 Global Core，项目的记忆与 notes 只能带 `scope` 只读查询。
+总管只启用 chief extension：Global 的 task 与 Inbox（项目的 task 与 Inbox 归该项目管理者）、memory、notes、改进日志、delegate（`delegate` / `send_manager_msg` / `list_manager_msgs`）与只读 Run 检查（`read_run_report` / `read_run_diff` / `run_progress` / `list_run_msgs`），没有 `bash/read/write/edit`，也不能派发、停止或给 Run 发消息——只有项目的管理者能做这些。启动时会重新限制已有总管会话的 extension。记忆与 notes 按角色归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）：总管只写 Global、只注入 Global Core，项目的记忆与 notes 只能带 `scope` 只读查询，History 读取限在 Global。
 
-项目管理者启用 manager extension，由 `channel_sessions` 中 `channel = 'manager'`、`external_id = project_id` 的绑定决定，每项目恰好一条持久会话，随 `addProject` 创建（名字必填），服务启动时为旧项目补建；`channel = 'manager'` 是保留 channel，公开 `openSession` 不能绑定它——面向用户的入口是 `openManager(projectId)` 命令（拒 Global 与未知项目，重复调用幂等），会话行用 `role: 'manager'` 在 `ConversationInfo` 中标识并在侧栏置顶于本项目。它的工具全部锁定本项目 scope：任务执行（`delegate` 产生的 `assignee='manager'` Task 归它收口，总管不再能 start/complete/fail）、Run 管理（`dispatch` 只许本项目的 Task，把 `chief_conversation_id` 指到自己，支持 `run_progress` 与 `stop_run`，工兵的提问与结果回到管理者）、记忆与 notes 由它独占写入（Global 记忆只读，注入 Global + 本项目 Core），history 同样只许本项目；没有 shell / 编码工具。上行用 `report_chief` / `ask_chief` 走 `manager_messages` 持久线程（kind/task_id/reply_to/closed_at），通知按委派 Task 的 `report_to` 路由到对应总管会话。
+项目管理者启用 manager extension，由 `channel_sessions` 中 `channel = 'manager'`、`external_id = project_id` 的绑定决定，每项目恰好一条持久会话，随 `addProject` 创建（名字必填），服务启动时为旧项目补建；`channel = 'manager'` 是保留 channel，公开 `openSession` 不能绑定它——面向用户的入口是 `openManager(projectId)` 命令（拒 Global 与未知项目，重复调用幂等），会话行用 `role: 'manager'` 在 `ConversationInfo` 中标识并在侧栏置顶于本项目。它的工具全部锁定本项目 scope：任务执行（`delegate` 产生的 `assignee='manager'` Task 归它收口，总管不再能 start/complete/fail）、Run 管理（`dispatch` 只许本项目的 Task，把 `chief_conversation_id` 指到自己，支持 `run_progress` 与 `stop_run`，工兵的提问与结果回到管理者）、本项目 Inbox（`check_inbox`）、记忆与 notes 由它独占写入（Global 记忆不可查，只见注入的 Global Core + 本项目 Core），history 同样只许本项目；没有 shell / 编码工具。上行用 `report_chief` / `ask_chief` 走 `manager_messages` 持久线程（kind/task_id/reply_to/closed_at），通知按委派 Task 的 `report_to` 路由到对应总管会话，没有时回落 Global 最新的总管会话。没有明确目标的 scope 级唤醒（例如 Inbox 扫描）：项目 scope 唤醒该项目的管理者，Global 唤醒最新的总管会话。
 
 Tian 可直接在管理者会话里对话派活：本轮输入的 `currentInput` 为 `kind='user'` 即为 Tian 轮次。此时 `ask_chief` 与 `report_chief` 被工具层守卫挡下（返回提示语、不写 `manager_messages`、不唤醒总管）——例外是 `report_chief` 带一个 `assignee='manager'` 的本项目 Task id 时仍按该 Task 的 `report_to` 上报。Tian 指派的 Task 经 `add_task` 创建、`assignee` 为 NULL，静默收口；Tian 轮次里 `remember(source:'user')` 照常记 `user_confirmed`。
 
-工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，没有总管的 memory 写入工具。工兵可执行中用 `ask_chief` 提问并阻塞等待答复，用 `tell_chief` 发进度通知，用 `check_msgs` 接收总管指令。工兵被要求仅编辑当前目录、只读共享 memory/notes；worktree 提供 Git 目录隔离，不提供操作系统文件访问沙箱。工兵 shell 命令不继承服务专用变量（`TELEGRAM_*`、`WECHAT_*`、`MAGPIE_*`、`TIAN_AGENT_*`）。
+工兵启用 CodingTools 加消息 extension，默认在 Git worktree 中工作，完全没有 Memory、Notes 与 History 访问——输入只有派发简报与 worktree。工兵可执行中用 `ask_manager` 向监督它的管理者提问并阻塞等待答复，用 `tell_manager` 发进度通知，用 `check_msgs` 接收管理者指令。项目的 `sandboxMode` 为 `workspace-write`（默认）时，工兵命令在 `src/worker/sandbox.ts` 按 Run 生成的 macOS Seatbelt profile 下运行：写操作限定在 work 根目录、其 Git 元数据、临时目录与工具链缓存；服务数据、凭据与服务 socket 一律拒绝；外部网络可按项目关闭，localhost 保持可达。工兵 shell 命令不继承服务专用变量（`TELEGRAM_*`、`WECHAT_*`、`MAGPIE_*`、`TIAN_AGENT_*`）。
 
-Scope 分为 `global` 和手动注册的项目。会话绑定 scope，总管可通过工具跨 scope 查询。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。`runTimeoutMin = 0`（默认）表示单次尝试不限时，`deadline_at` 留空；正整数则作为该 attempt 的硬超时，到点 abort 并进入 collecting。
+Scope 分为 `global` 和手动注册的项目。会话绑定 scope，scope 与角色一一对应：Global 里只有总管会话（包括 Goal 会话），项目里只有该项目的管理者会话与工兵会话。在项目下 `createConversation` 会打开管理者；数据库版本 9 把以前项目里的总管会话及其渠道绑定迁到 Global，transcript 保留。总管可通过工具只读查询项目的记忆、notes、task 与 Run。项目设置包含 `autoLand`、`allowInPlace`、`runTimeoutMin`、`baseBranch`、`promptPreamble`；当前工兵类型为 `durable-worker`。`runTimeoutMin = 0`（默认）表示单次尝试不限时，`deadline_at` 留空；正整数则作为该 attempt 的硬超时，到点 abort 并进入 collecting。

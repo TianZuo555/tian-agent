@@ -1,6 +1,7 @@
 # Agent notes
 
 - Product requirements: `docs/prd.md`; vocabulary: `CONTEXT.md`; decisions: `docs/decisions.md`.
+- Visual language for the NSH clients: `docs/design-language.md` (Chinese: `docs/zh/design-language.md`). Interactive mockup: `docs/design/client-mockup.html` (sample data; `oxfmt` formats it, so keep diff-line code inside `<pre>` to preserve whitespace). Keep the doc and the mockup in sync.
 - Package manager: pnpm. Toolchain is pinned in `mise.toml` (Node 26, pnpm 12.5.1); run commands through mise (`mise run verify`) or a mise shell.
 - Verify: `mise run verify` = `pnpm typecheck` (tsrs, the Rust port of the TypeScript 7 compiler; `pnpm typecheck:tsc` is the tsc fallback and the two must agree) + `pnpm lint` (oxlint + oxfmt; `pnpm lint:fix` to format) + `pnpm react:doctor` (react-doctor, config in `doctor.config.ts`) + `pnpm test` (builds the service payload, then runs `tests/*.test.ts` with `tsx --test`; no model calls). `mise tasks ls` lists the rest; every task wraps a `package.json` script.
 - React Doctor findings: fix the root cause. Suppress a single line with `// react-doctor-disable-next-line <rule>` and a comment explaining why; do not disable whole rules without updating `doctor.config.ts`.

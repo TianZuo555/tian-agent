@@ -2,11 +2,11 @@
 
 **English** | [简体中文](zh/prd.md)
 
-Version: v0.4 (v0.3 + Project Manager and direct user assignment)
+Version: v0.5 (v0.4 + M6 role and memory boundaries)
 Status: Draft
 Product Type: Always-on Personal Agent
 Target Platforms: macOS first; Linux and Windows planned
-Technical Direction: TypeScript resident service (launchd) + Pi Durable + Electron/React client + SQLite (see [D3](decisions.md#d3--retain-typescript-resident-service-and-electron-client))
+Technical Direction: TypeScript resident service (launchd) + Pi Durable + Electron/React client + SQLite (see [D3](decisions.md#d3--retain-typescript-resident-service-and-electron-client)); model providers are pluggable (see [D21](decisions.md#d21--model-providers-are-pluggable-magpie-is-one-provider))
 
 Terminology follows [CONTEXT.md](../CONTEXT.md). Status labels: **[Existing]** Implemented with test coverage; **[Partial]** Core architecture present but incomplete; **[Missing]** Not started. Notes marked "Recommendation" represent designs pending alignment; items marked "Pending Verification" represent assumptions not yet verified in code.
 
@@ -56,7 +56,7 @@ An always-on personal agent with persistent memory, proactive execution, and the
 | Goal                   | A long-term outcome the user wishes to achieve or maintain            | Days to years        | **[Existing]** `goals` table, dedicated Goal conversations, scheduler                                                                                                                                                                                         |
 | Task                   | A concrete unit of work in service of a Goal or created independently | Minutes to days      | **[Existing]** State machine, `owner`, `trigger`, `dedupe_key`, `assignee`/`report_to` ([D5](decisions.md#d5--tasks-evolve-from-todos-runs-execute-coding-tasks), [D12](decisions.md#d12--project-manager-dedicated-persistent-session-and-delegation-tasks)) |
 | Run                    | A single isolated execution performed by a Worker for a coding task   | Minutes to hours     | **[Existing]** `runs` + `run_attempts`                                                                                                                                                                                                                        |
-| Conversation (Session) | A persistent Pi session for Chief, Manager, or Worker roles           | Minutes to permanent | **[Existing]** Pi Durable in `pi-session.sqlite`; archive flags in `conversations.archived_at`; roles exposed via `ConversationInfo.role`                                                                                                                     |
+| Conversation (Session) | A persistent Pi session for Chief, Manager, or Worker roles           | Minutes to permanent | **[Existing]** Pi Durable in `pi-session.sqlite`; archive flags in `conversations.archived_at`; roles exposed via `ConversationInfo.role`; Global holds Chief conversations only, a project holds its Manager and Worker conversations only                   |
 | Memory                 | Facts and experience preserved across conversations                   | Permanent            | **[Existing]** SQLite storage, provenance, versioning, explicit Core selection ([D4](decisions.md#d4--memory-uses-sqlite-as-single-source-of-writes-core-memory-changes-to-explicit-selection))                                                               |
 | Skill                  | A reusable, verifiable workflow procedure                             | Permanent            | **[Partial]** `skills` table, versions, manual approvals; semantic matching and model extractors planned                                                                                                                                                      |
 
@@ -144,7 +144,7 @@ Acceptance:
 
 ### 4.3 F02 — History and Retrieval (P0) [Existing]
 
-Current State: Tables `history_entries`, `history_fts`, and `history_cursors` index Pi transcripts and `events` incrementally. The Chief searches and expands entries with citations (`conv:<id>#<entry>`, `event:<id>`) via `search_history` and `read_history`.
+Current State: Tables `history_entries`, `history_fts`, and `history_cursors` index Pi transcripts and `events` incrementally. The Chief and Project Managers search and expand entries with citations (`conv:<id>#<entry>`, `event:<id>`) via `search_history` and `read_history`. History follows the Scope ([memory.md](memory.md#conversation-boundary)): the Chief reads Global History only, a Manager reads its own project's History only, and a Worker reads none.
 
 Requirements: Search across timestamps, Scopes, Conversations, and keywords for:
 
@@ -201,9 +201,9 @@ Memory fields in `memories` (provenance, evidence, confirmation, versions, and s
 
 ### 4.7 F07 — Task-Related Context (P1) [Existing]
 
-Current State: Core Memory stays an explicit snapshot that is stable per turn. A separate `<relevant_context>` with its own token budget (default 1,200) lexically retrieves the scope's Memory, Notes, and History for the current input and the running Task. It uses the shared `planSearch` and a few explicit aliases (中文 / Chinese, postgres / PostgreSQL, production / prod, and so on), with no vector store, knowledge graph, or mandatory model call. Workers receive their project's relevant context and can continue with read-only `recall` and expand original evidence with `read_history`; they never load all memory and never cross projects.
+Current State: Core Memory stays an explicit snapshot that is stable per turn. A separate `<relevant_context>` with its own token budget (default 1,200) lexically retrieves Memory, Notes, and History for the current input and the running Task. It searches the participant's own Scope only: Global for the Chief, its own project for a Manager. It uses the shared `planSearch` and a few explicit aliases (中文 / Chinese, postgres / PostgreSQL, production / prod, and so on), with no vector store, knowledge graph, or mandatory model call. Workers receive no relevant context and have no memory or History tools; the dispatch briefing and the worktree are their only inputs.
 
-Acceptance: the budget covers the complete output; old transcript evidence of superseded facts does not return to default context; Workers have no write tools and read only their own project; project isolation tests pass.
+Acceptance: the budget covers the complete output; old transcript evidence of superseded facts does not return to default context; the Worker prompt has no `<relevant_context>` and the Worker tool list has no memory, notes, or History tool; project isolation tests pass.
 
 ---
 
@@ -217,7 +217,7 @@ States: `active / paused / blocked / completed / cancelled`. Users manage goals 
 
 Highlights:
 
-- Dedicated Chief conversation per Goal (`openSession({ channel: 'goal', externalId: goalId, scopeId })`). Long-term state stores in Goal records and Memory rather than endless chat threads.
+- Dedicated Chief conversation per Goal (`openSession({ channel: 'goal', externalId: goalId, scopeId: 'global' })`). The conversation and the Goal's own Tasks live in the Global Scope, also for a Goal that concerns a project; the Goal keeps the project reference, and project work goes to the Manager through `delegate`. Long-term state stores in Goal records and Memory rather than endless chat threads.
 - The Chief calls `update_goal` after execution to record Current State, Next Action, and Last Execution. Progress measures against Success Criteria.
 
 ### 5.2 F07 — Task Orchestration (P0) [Partial]
@@ -228,7 +228,7 @@ Requirements ([D5](decisions.md#d5--tasks-evolve-from-todos-runs-execute-coding-
 
 - States: `pending → running → waiting_approval → completed`, plus `paused / blocked / failed / cancelled`. Outcomes record separately (achieved, not_achieved, no_change).
 - Unique `dedupe_key` prevents duplicate task creation during restarts.
-- Coding tasks dispatch Runs (`runs.task_id`). Supervisors evaluate Task completion after Runs finish.
+- Coding tasks dispatch Runs (`runs.task_id`). Only the project's Manager dispatches; it evaluates Task completion after Runs finish and reports to the Chief.
 
 ### 5.3 F08 — Scheduler (P0) [Existing]
 
@@ -269,7 +269,7 @@ Roadmap: Semantic matching, automatic post-rollback verification, and dreaming i
 
 ### 7.1 F11 — Multi-Channel Gateway (P0) [Partial]
 
-Current State: Channels open stable conversations via `openSession`. All channels share scope memory. External inputs support `requestId` deduplication. The Telegram Bot adapter uses long polling and chat allow-lists ([D8](decisions.md#d8--telegram-adapter-long-polling-allow-listed-chats-and-cursor-tracked-forwarding)). The Inbox file drop acts as an external event entry point.
+Current State: Channels open stable conversations via `openSession`. All channels share scope memory. External inputs support `requestId` deduplication. The Telegram Bot adapter uses long polling and chat allow-lists ([D8](decisions.md#d8--telegram-adapter-long-polling-allow-listed-chats-and-cursor-tracked-forwarding)). Global entry points reach the Chief; project entry points (`/scope <project>` in Telegram and WeChat, a new conversation under a project in the desktop app, a project Inbox) reach that project's Manager ([channels.md](channels.md#telegram)). The Inbox file drop acts as an external event entry point.
 
 Requirements:
 
@@ -290,8 +290,8 @@ Current State: Embedded inside the Goals view as a unified cross-scope board.
 
 Current State:
 
-- The Chief has no shell or code-editing tools. Land, Ship, and Discard actions require explicit user execution in the UI, serving as manual approvals.
-- Workers possess full coding tools (including shell access). The Git worktree provides the only isolation boundary; "do not push" is merely an instruction, with no operating-system-level sandbox.
+- The Chief has no shell or code-editing tools and does not dispatch, stop, or message Workers; only the project's Manager does. Land, Ship, and Discard actions require explicit user execution in the UI, serving as manual approvals.
+- Workers possess full coding tools (including shell access). On macOS, Worker commands run under a per-Run Seatbelt profile (`sandboxMode = workspace-write`, the default): writes confined to the work root and caches, service data and the service socket denied, per-project network switch. The Git worktree remains the source-of-truth boundary.
 - Idempotency records via the `operations` table, stable operation IDs, and `requestId` tokens. [Existing]
 
 Permission Tiers:
@@ -308,7 +308,7 @@ Requirements (M3):
 - `approvals` table records operation types, target references, payload digests, requesters, statuses (pending / approved / rejected / expired), deciders, channels, and timestamps.
 - Chief tools `request_land` and `request_ship` create approval requests without executing directly. Approving in Desktop or Telegram triggers service actions via `runs.land` and `runs.ship`.
 - Verification checks payload digests before execution. Rejected approvals cannot be reused; reapplying for the same object requires a new approval record.
-- The enforced boundary in MVP is the worktree plus approved Land/Ship actions. Worker-level Controlled Write in MVP achieves only "instructions plus post-execution review". Recommendation for further evaluation: disable push remotes or strip push credentials in worker worktrees, or use macOS sandboxing.
+- The enforced boundary in MVP is the worktree plus approved Land/Ship actions. Worker-level Controlled Write in MVP achieves only "instructions plus post-execution review". Worker commands run under the per-Run Seatbelt profile (D22). Recommendation for further evaluation: disable push remotes or strip push credentials in worker worktrees.
 - Approval granularity (answering v0.1 question 5, proposal): Goal Constraints declare permitted operation categories; each specific controlled operation requires individual approval.
 - Auditing: All Controlled and higher operations write to Events (actor, trigger, approval ID, result).
 
@@ -351,7 +351,7 @@ Requirements:
 
 Files: Notes (`notes/`), Inbox (`.tian/inbox/`), Run reports (`.tian/runs/`), Memory exports (`MEMORY.md`).
 
-Schema updates advance `DATABASE_VERSION` and execute inside backup and rollback transactions.
+Schema updates advance `DATABASE_VERSION`. Data is not migrated: an older `tian.db` is snapshotted to `tian.db_v<N>.backup` and recreated empty ([service.md](service.md#service-upgrades)).
 
 ---
 
@@ -385,38 +385,49 @@ MVP verifies three outcomes: cross-session persistent memory; autonomous schedul
 - M4: Memory Worker model extractors, dreaming loops, vector hybrid search.
 - M5: Multi-agent coordination, automated skill refinement.
 
+### M6 — Role Boundaries, Providers, Worker Runtimes [Completed]
+
+Five phases; each phase ships and is verified on its own. Work list: [todo-agent-refactor.md](todo-agent-refactor.md).
+
+1. **Role and memory boundaries** [Completed] ([memory.md](memory.md#conversation-boundary), [agent-work.md](agent-work.md#dispatch-ownership)): Manager `recall` lost `scope=global`; Workers lost injected context and memory queries; Chief History stays in Global; the Chief lost `dispatch`; Worker tools became `ask_manager` / `tell_manager`; Chief conversations left Project Scopes (schema bumps do not migrate: an older database is snapshotted and recreated empty); `/scope <project>` routes to the Manager; Goal conversations moved to Global.
+2. **Providers** [Completed] ([D21](decisions.md#d21--model-providers-are-pluggable-magpie-is-one-provider)): `FileCredentialStore` on a 0600 `credentials.json`; configured providers register with pi-ai at startup (Magpie preset plus gateways and pi-ai built-ins); per-provider catalogs with offline cache; Settings → Providers manages providers and keys (tail-only display) and runs OAuth login with `auth_url` / `device_code` events; separate Chief and default Manager models with a per-project Manager override (`SERVICE_PROTOCOL = 11`).
+3. **Runtime abstraction and Intents** [Completed] ([agent-work.md](agent-work.md#worker-runtimes)): `WorkerRuntime` registry with resolved runtime/model/thinking level stored per Run; Intents in Settings → Workers plus a per-project `default_intent` (replaced `projects.agent_kind`, schema v10); `dispatch` accepts `intent` or an explicit choice (mutually exclusive); two-level live concurrency limits — a runtime-blocked attempt does not starve other runtimes. Pi is the only runtime in this phase (`SERVICE_PROTOCOL = 12`).
+4. **First external runtime: Codex** [Completed]: one-shot plus resume, event-stream progress, automatic restart resume with guards, sign-in check, environment allow-list (the per-runtime opt-in floor was removed in phase 5). Codex comes first because it is open source (adapter behavior can be checked in its code) and its macOS sandbox is Seatbelt.
+5. **Unified Seatbelt sandbox** [Completed] ([todo-worker-sandbox.md](todo-worker-sandbox.md), [D22](decisions.md#d22--unified-seatbelt-sandbox-for-worker-commands)): one per-Run profile for Pi and external Workers; Codex runs inside it with its own sandbox off, its state directory writable and its configuration read-only.
+
 ---
 
 ## 10. Acceptance Scenarios
 
 Automated test suites in `pnpm test` validate scenarios using ephemeral databases, real temporary Git repositories, and controlled Workers without live model calls.
 
-| Scenario | Description                                           | Expected Outcome                                                                  | Current Coverage                              |
-| -------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------- |
-| A        | User states long-term preference, quits, and restarts | New conversations load preference into Core Memory                                | Complete (`memory.test.ts`)                   |
-| B        | User queries a technical decision from prior week     | `search_history` finds records and returns citation                               | Complete (`history.test.ts`)                  |
-| C        | Daily automated GitHub project check                  | Executes on schedule, logs findings, skips duplicate notifications when unchanged | Complete (`goals.test.ts`)                    |
-| D        | Application crashes during run execution              | Restarts recover Task and Run states without duplicate external actions           | Complete (`service.test.ts`, `goals.test.ts`) |
-| E        | User corrects a prior preference                      | Previous memory supersedes with audit logs; Core Memory drops old fact            | Complete (`memory.test.ts`)                   |
-| F        | Agent requests code push                              | Operation halts until approved; rejected approvals block execution                | Partial (`m3-approvals` branch)               |
-| G        | User archives a finished conversation                 | Sidebar hides conversation; History search finds it; wakeups bypass it            | Complete (`service.test.ts`)                  |
-| H        | User collapses sidebar and restarts                   | Sidebar remains collapsed; title bar preserves traffic light area                 | Complete (`state.test.ts`)                    |
-| I        | Chief delegates to Manager; user delegates directly   | Delegated tasks report back to Chief; direct tasks conclude quietly               | Complete (`manager.test.ts`)                  |
+| Scenario | Description                                           | Expected Outcome                                                                                    | Current Coverage                                                    |
+| -------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| A        | User states long-term preference, quits, and restarts | New conversations load preference into Core Memory                                                  | Complete (`memory.test.ts`)                                         |
+| B        | User queries a technical decision from prior week     | `search_history` finds records and returns citation                                                 | Complete (`history.test.ts`)                                        |
+| C        | Daily automated GitHub project check                  | Executes on schedule, logs findings, skips duplicate notifications when unchanged                   | Complete (`goals.test.ts`)                                          |
+| D        | Application crashes during run execution              | Restarts recover Task and Run states without duplicate external actions                             | Complete (`service.test.ts`, `goals.test.ts`)                       |
+| E        | User corrects a prior preference                      | Previous memory supersedes with audit logs; Core Memory drops old fact                              | Complete (`memory.test.ts`)                                         |
+| F        | Agent requests code push                              | Operation halts until approved; rejected approvals block execution                                  | Partial (`m3-approvals` branch)                                     |
+| G        | User archives a finished conversation                 | Sidebar hides conversation; History search finds it; wakeups bypass it                              | Complete (`service.test.ts`)                                        |
+| H        | User collapses sidebar and restarts                   | Sidebar remains collapsed; title bar preserves traffic light area                                   | Complete (`state.test.ts`)                                          |
+| I        | Chief delegates to Manager; user delegates directly   | Delegated tasks report back to Chief; direct tasks conclude quietly                                 | Complete (`manager.test.ts`)                                        |
+| J        | Chat switches to a project scope after upgrade        | Messages land in the project Manager conversation; a v8 database is snapshotted and recreated empty | Complete (`wechat.test.ts`, `telegram.test.ts`, `upgrades.test.ts`) |
 
 ---
 
 ## 11. Non-Functional Requirements
 
-| Dimension     | Target                                                                                |
-| ------------- | ------------------------------------------------------------------------------------- |
-| Durability    | Confirmed writes survive restarts and upgrades (WAL + upgrade backups) **[Existing]** |
-| Recovery      | Recovers unfinished tasks and reconciles external states on boot                      |
-| Retrieval     | Local searches achieve p95 < 300ms (excluding model inference)                        |
-| Performance   | Background processing runs in resident service without blocking UI **[Existing]**     |
-| Cost Control  | Background tasks configure independent models and token budgets **[Existing]**        |
-| Privacy       | Local-first storage, scope isolation, explicit external network boundaries            |
-| Security      | Minimal privileges, provenance tracking, approvals, prompt injection defenses         |
-| Observability | Records triggers, search hits, task outcomes, and token usage heatmaps **[Existing]** |
+| Dimension     | Target                                                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Durability    | Confirmed writes survive restarts and same-schema upgrades (WAL); a schema bump keeps only the backup snapshot **[Existing]** |
+| Recovery      | Recovers unfinished tasks and reconciles external states on boot                                                              |
+| Retrieval     | Local searches achieve p95 < 300ms (excluding model inference)                                                                |
+| Performance   | Background processing runs in resident service without blocking UI **[Existing]**                                             |
+| Cost Control  | Background tasks configure independent models and token budgets **[Existing]**                                                |
+| Privacy       | Local-first storage, scope isolation, explicit external network boundaries                                                    |
+| Security      | Minimal privileges, provenance tracking, approvals, prompt injection defenses                                                 |
+| Observability | Records triggers, search hits, task outcomes, and token usage heatmaps **[Existing]**                                         |
 
 ---
 
@@ -440,9 +451,9 @@ Automated test suites in `pnpm test` validate scenarios using ephemeral database
 | 3   | Should History reuse Pi native storage?                            | **Proposal**: Pi transcripts remain authoritative; `tian.db` maintains rebuildable FTS indexes ([D6](decisions.md#d6--history-is-a-derived-index-of-pi-transcripts-business-facts-write-to-events)).                                      |
 | 4   | How do multiple gateways handle concurrent tasks?                  | **Proposal**: The resident service alone executes tasks; channels submit inputs only; deduplication via `dedupe_key` and Durable ([D8](decisions.md#d8--telegram-adapter-long-polling-allow-listed-chats-and-cursor-tracked-forwarding)). |
 | 5   | How are permissions scoped across agents, goals, and tasks?        | **Proposal**: Goals declare allowed action categories; each controlled operation requires explicit approval.                                                                                                                              |
-| 6   | Should Memory Worker run on low-cost models?                       | **Pending** (M4): Configurable via Magpie; heuristic extraction active in F03.                                                                                                                                                            |
+| 6   | Should Memory Worker run on low-cost models?                       | **Pending** (M4): Provider and model configurable via Settings → Providers ([D21](decisions.md#d21--model-providers-are-pluggable-magpie-is-one-provider)); heuristic extraction active in F03.                                           |
 | 7   | How do goals determine next steps and measure progress?            | **Proposal**: Chief updates Current State and Next Action after execution, evaluating against Success Criteria.                                                                                                                           |
-| 8   | How are Worker write permissions restricted?                       | **Pending**: Git worktrees and approval gates enforce boundaries in MVP; OS sandboxes remain under evaluation.                                                                                                                            |
+| 8   | How are Worker write permissions restricted?                       | **Resolved**: per-Run macOS Seatbelt profiles (`sandboxMode = workspace-write`) confine writes to the work root; Git worktrees and approval gates remain the source-of-truth boundary.                                                    |
 
 ---
 
