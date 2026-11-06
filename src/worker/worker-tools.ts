@@ -1,19 +1,13 @@
-import {
-  defineExtension,
-  defineTool,
-  section,
-} from '@earendil-works/pi-durable';
+import { defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { Type } from '@earendil-works/pi-ai';
 import type { Db, Notification } from './db.js';
-import type { Scopes } from './scopes.js';
-import { relevantContext } from './relevant-context.js';
 
 export interface WorkerDeps {
   db: Db;
-  scopes?: Scopes;
   /**
-   * Queue a notification that wakes the chief conversation, then trigger
-   * delivery. Reuses the same pipeline that reports finished runs.
+   * Queue a notification that wakes the run's supervising manager
+   * conversation, then trigger delivery. Reuses the same pipeline that
+   * reports finished runs.
    */
   wake: (notification: Notification) => Promise<void>;
 }
@@ -28,9 +22,11 @@ const POLL_INTERVAL_MS = 2_000;
 const DEFAULT_WAIT_SECONDS = 300;
 
 /**
- * The worker's messaging extension: a direct line to the chief while the run
- * is in flight. Questions wake the chief through the notification pipeline;
- * replies and guidance land in the run's durable message thread.
+ * The worker's messaging extension: a direct line to its project manager
+ * while the run is in flight. Questions wake the manager through the
+ * notification pipeline; replies and guidance land in the run's durable
+ * message thread. A worker has no memory, notes or history access — its
+ * inputs are the manager's briefing and the worktree (M6).
  */
 export function workerExtension(deps: WorkerDeps) {
   const { db } = deps;
@@ -38,11 +34,11 @@ export function workerExtension(deps: WorkerDeps) {
   const runOf = (conversationId: string) =>
     db.runByConversation(conversationId) ?? null;
 
-  const askChief = defineTool({
-    name: 'ask_chief',
+  const askManager = defineTool({
+    name: 'ask_manager',
     replay: 'safe',
     description:
-      "Ask the chief one question and wait for its reply. The chief is woken immediately; use this only when a decision genuinely blocks the task (destructive or irreversible action, missing credentials, fundamental ambiguity) — never for anything you can decide yourself. The reply is returned as this tool's output.",
+      "Ask your project manager one question and wait for its reply. The manager is woken immediately; use this only when a decision genuinely blocks the task (destructive or irreversible action, missing credentials, fundamental ambiguity) — never for anything you can decide yourself. The reply is returned as this tool's output.",
     parameters: Type.Object({
       question: Type.String({
         description:
@@ -70,15 +66,15 @@ export function workerExtension(deps: WorkerDeps) {
         id: `ask:${message.id}`,
         scopeId: run.projectId,
         conversationId: run.chiefConversationId,
-        content: `[run ${run.id} worker asks]\n${args.question}\n\nThe worker is blocked waiting. Reply now with send_run_msg(run: "${run.id}", body: "<answer>"). If only Tian can decide, say so and give interim guidance.`,
+        content: `[run ${run.id} worker asks]\n${args.question}\n\nThe worker is blocked waiting. Reply now with send_run_msg(run: "${run.id}", body: "<answer>"). If the chief or Tian must decide, say so and give interim guidance.`,
       });
       const deadline =
         Date.now() + (args.wait_seconds ?? DEFAULT_WAIT_SECONDS) * 1000;
       for (;;) {
-        const reply = db.chiefReplyAfter(run.id, message.seq);
+        const reply = db.supervisorReplyAfter(run.id, message.seq);
         if (reply) {
           db.markAgentMessagesDelivered([reply.id]);
-          return text(`chief replied:\n${reply.body}`);
+          return text(`manager replied:\n${reply.body}`);
         }
         const current = db.getRun(run.id);
         if (
@@ -99,11 +95,11 @@ export function workerExtension(deps: WorkerDeps) {
     },
   });
 
-  const tellChief = defineTool({
-    name: 'tell_chief',
+  const tellManager = defineTool({
+    name: 'tell_manager',
     replay: 'safe',
     description:
-      'Send the chief a short progress note or FYI without waiting for a reply. For significant milestones or discovered risks; never chatter.',
+      'Send your project manager a short progress note or FYI without waiting for a reply. For significant milestones or discovered risks; never chatter.',
     parameters: Type.Object({
       text: Type.String({
         description: 'A few lines at most; self-contained.',
@@ -124,7 +120,7 @@ export function workerExtension(deps: WorkerDeps) {
         conversationId: run.chiefConversationId,
         content: `[run ${run.id} worker note]\n${args.text}`,
       });
-      return text('delivered to the chief.');
+      return text('delivered to the manager.');
     },
   });
 
@@ -132,7 +128,7 @@ export function workerExtension(deps: WorkerDeps) {
     name: 'check_msgs',
     replay: 'safe',
     description:
-      'Read new messages the chief sent to this run (guidance, answers, scope changes) and mark them read. Ask_chief replies arrive directly; check this at natural milestones if the chief said it would send more.',
+      'Read new messages the manager sent to this run (guidance, answers, scope changes) and mark them read. ask_manager replies arrive directly; check this at natural milestones if the manager said it would send more.',
     parameters: Type.Object({}),
     execute: async (_args, api) => {
       const run = runOf(String(api.conversationId));
@@ -142,93 +138,15 @@ export function workerExtension(deps: WorkerDeps) {
       db.markAgentMessagesDelivered(pending.map((message) => message.id));
       return text(
         pending
-          .map((message) => `[${message.createdAt}] chief:\n${message.body}`)
+          .map((message) => `[${message.createdAt}] manager:\n${message.body}`)
           .join('\n---\n'),
       );
     },
   });
 
-  const recall = defineTool({
-    name: 'recall',
-    replay: 'safe',
-    description:
-      'Read task-related memory, notes and history from this run project only. No memory writes. Use read_history for source excerpts.',
-    parameters: Type.Object({
-      query: Type.String(),
-      budget: Type.Optional(Type.Integer({ minimum: 50, maximum: 4000 })),
-    }),
-    execute: async (args, api) => {
-      const run = runOf(String(api.conversationId));
-      if (!run || !deps.scopes)
-        return err('No project memory is bound to this run');
-      return text(
-        relevantContext(
-          { db, scopes: deps.scopes },
-          [run.projectId],
-          args.query,
-          args.budget,
-        ),
-      );
-    },
-  });
-  const readEvidence = defineTool({
-    name: 'read_history',
-    replay: 'safe',
-    description:
-      'Read an indexed original evidence excerpt from this run project only.',
-    parameters: Type.Object({
-      ref: Type.String(),
-      offset: Type.Optional(Type.Integer({ minimum: 0 })),
-    }),
-    execute: async (args, api) => {
-      const run = runOf(String(api.conversationId));
-      const ref = args.ref.trim();
-      const match = /^conv:([^#]+)#(.+)$/.exec(ref);
-      const event = /^event:(.+)$/.exec(ref);
-      if (!run || (!match && !event)) return err('Unknown evidence reference');
-      // Events are project-scoped like transcript entries: the scope check is
-      // part of the lookup, so another project's event reads as unavailable.
-      let row: { text: string } | undefined;
-      try {
-        row = (
-          match
-            ? db.sqlite
-                .prepare(
-                  'SELECT text FROM history_entries WHERE scope_id = ? AND conversation_id = ? AND entry_id = ?',
-                )
-                .get(run.projectId, match[1], match[2])
-            : db.sqlite
-                .prepare(
-                  "SELECT summary || char(10) || 'payload: ' || payload AS text FROM events WHERE scope_id = ? AND id = ?",
-                )
-                .get(run.projectId, event![1])
-        ) as { text: string } | undefined;
-      } catch {
-        // The events table belongs to EventLog and may not exist yet.
-        row = undefined;
-      }
-      if (!row) return err('Evidence is unavailable in this project');
-      return text(
-        [...row.text]
-          .slice(args.offset ?? 0, (args.offset ?? 0) + 1800)
-          .join(''),
-      );
-    },
-  });
   return defineExtension({
     name: 'tian-worker-msg',
-    sections: [
-      section('relevant_context', (input) => {
-        const run = runOf(String(input.conversationId));
-        return run && deps.scopes
-          ? relevantContext(
-              { db, scopes: deps.scopes },
-              [run.projectId],
-              run.prompt,
-            )
-          : '';
-      }),
-    ],
-    tools: [askChief, tellChief, checkMsgs, recall, readEvidence],
+    sections: [],
+    tools: [askManager, tellManager, checkMsgs],
   });
 }

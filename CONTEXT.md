@@ -105,7 +105,7 @@ A recorded user action that accepts the stored statement, through review or a ve
 _Avoid_: mention
 
 **Relevant Context**:
-A bounded selection of Memory, Notes, and History retrieved for the current input or Task within the participant's readable Scopes. It is separate from the stable Core Memory selection.
+A bounded selection of Memory, Notes, and History retrieved for the current input or Task within the participant's own Scope: Global for the Chief, its project for a Manager. A Worker receives none. It is separate from the stable Core Memory selection.
 _Avoid_: origin, citation
 
 **History**:

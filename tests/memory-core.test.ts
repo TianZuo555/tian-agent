@@ -76,7 +76,6 @@ async function harness(t: TestContext): Promise<Harness> {
     rootPath: join(root, 'project'),
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -106,15 +105,9 @@ async function harness(t: TestContext): Promise<Harness> {
     emitUpdates: () => {},
     emitImprovements: () => {},
     emitNotices: () => {},
-    dispatch: () => Promise.reject(new Error('not used here')),
-    workerModels: () => [],
     runReport: () => '',
     runDiff: () => Promise.resolve(''),
     runProgress: () => Promise.reject(new Error('unused')),
-    stopRun: () => Promise.reject(new Error('unused')),
-    sendRunMessage: () => {
-      throw new Error('not used here');
-    },
     runMessages: () => [],
     delegateToManager: () => Promise.reject(new Error('not used here')),
     sendManagerMessage: () => Promise.reject(new Error('not used here')),
@@ -905,7 +898,7 @@ test('memory search: non-contiguous multi-word AND, short Chinese terms, relevan
 
 test('long history: middle and tail of a tool result are searchable and pageable', async (t) => {
   const f = await harness(t);
-  const conversation = await f.openConversation('p1');
+  const conversation = await f.openConversation('global');
   const id = String(conversation.id);
   const head = 'build log start';
   const middle = 'MIDDLE_MARKER: the migration timed out at step 42';
@@ -929,13 +922,11 @@ test('long history: middle and tail of a tool result are searchable and pageable
 
   const search = f.tool('search_history');
   for (const query of ['MIDDLE_MARKER', 'TAIL_MARKER', 'step 42']) {
-    const found = plain(
-      toolText(await call(search, id, { query, scope: 'p1' })),
-    );
+    const found = plain(toolText(await call(search, id, { query })));
     assert.match(found, new RegExp(query.split(' ')[0]), `${query} missing`);
   }
   const found = plain(
-    toolText(await call(search, id, { query: 'MIDDLE_MARKER', scope: 'p1' })),
+    toolText(await call(search, id, { query: 'MIDDLE_MARKER' })),
   );
   const ref = /conv:\d+#[\w:]+/.exec(found)?.[0];
   assert.ok(ref, `no ref in ${found}`);

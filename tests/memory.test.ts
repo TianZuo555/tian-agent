@@ -43,7 +43,6 @@ function fixture(t: TestContext) {
     rootPath: projectPath,
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -466,7 +465,6 @@ test('a failing first write cannot consume legacy import or cache an uncommitted
     rootPath: projectPath,
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -604,7 +602,7 @@ test('MEMORY.md export lists Core and searchable memory without summaries and ne
   assert.match(memory.wake(), /First fact/);
 });
 
-test('a v4 database migrates without losing memory, versions, provenance, or candidate state', (t) => {
+test('a v4 database is snapshotted then recreated empty', (t) => {
   const dir = temporary(t);
   const dataDir = join(dir, 'data');
   const projectPath = join(dir, 'project');
@@ -748,82 +746,52 @@ test('a v4 database migrates without losing memory, versions, provenance, or can
   legacy.close();
 
   const db = new Db(dataDir);
+  // Reset semantics: the live database is recreated empty at the current
+  // version while the snapshot keeps the old rows for recovery. The scope
+  // needs a project row again before the memory store can be queried.
+  db.addProject({
+    id: 'p1',
+    name: 'project',
+    rootPath: join(dataDir, 'project'),
+    autoLand: 0,
+    allowInPlace: 0,
+    runTimeoutMin: 30,
+    baseBranch: 'main',
+    promptPreamble: '',
+    managerName: 'Manager',
+  });
   const scopes = new Scopes(join(dataDir, 'global'), db);
   try {
     assert.equal(
       db.sqlite.prepare('PRAGMA user_version').get()?.user_version,
       DATABASE_VERSION,
     );
-    const d = dump(scopes, 'p1');
-    assert.deepEqual(
-      d.items.map((item) => [
-        item.seq,
-        item.content,
-        item.status,
-        item.sourceRef,
-        item.trustLevel,
-      ]),
-      [
-        [0, '用户偏好中文回复', 'active', 'conv:1#2', 'user_confirmed'],
-        [
-          1,
-          'The importer runs nightly',
-          'superseded',
-          'conv:1#5',
-          'agent_inferred',
-        ],
-        [2, 'The importer runs hourly', 'active', 'conv:1#6', 'agent_inferred'],
-        [
-          3,
-          'Pending candidate about deploys',
-          'candidate',
-          'conv:1#7',
-          'agent_inferred',
-        ],
-      ],
-    );
-    assert.equal(d.items[3].supersedes, 2);
-    // Uncalibrated confidence is removed; evidence and review carry provenance.
-    assert.equal(d.items[3].confidence, null);
-    assert.equal(d.items[0].confirmations?.[0].method, 'legacy');
-    assert.equal(d.items[3].evidence?.[0].sourceRef, 'conv:1#7');
-    // Version history survived the upgrade.
     assert.equal(
-      db.sqlite
-        .prepare(
-          "SELECT COUNT(*) AS n FROM memory_versions WHERE memory_id = 'mem-b' AND reason = 'corrected the cadence'",
-        )
-        .get()?.n,
-      1,
+      db.sqlite.prepare('SELECT COUNT(*) AS n FROM memories').get()?.n,
+      0,
     );
-    // The tree is retired, never read again, and no summary leaks into Core.
-    assert.equal(
-      db.sqlite
-        .prepare(
-          "SELECT COUNT(*) AS n FROM memory_nodes_retired WHERE scope_id = 'p1'",
-        )
-        .get()?.n,
-      1,
-    );
-    assert.doesNotMatch(scopes.memory('p1').wake(), /nightly importer/);
-    // A deterministic selection keeps the user-confirmed preference in Core
-    // within budget; the other active facts stay searchable.
-    const selected = d.items
-      .filter((item) => item.core)
-      .map((item) => item.seq);
-    assert.deepEqual(selected, [0, 2]);
-    assert.match(scopes.memory('p1').wake(), /用户偏好中文回复/);
-    // FTS rows are rebuilt from memory content during migration.
-    assert.match(scopes.memory('p1').recall('importer runs'), /runs hourly/);
-    assert.match(scopes.memory('p1').wake(), /runs hourly/);
-    // Candidates still do not enter Core after migration.
-    assert.equal(scopes.memory('p1').recall('deploys'), '(no matches)');
+    assert.equal(dump(scopes, 'p1').items.length, 0);
+    const backup = new DatabaseSync(join(dataDir, 'tian.db_v4.backup'), {
+      readOnly: true,
+    });
+    try {
+      assert.equal(
+        backup.prepare('PRAGMA user_version').get()?.user_version,
+        4,
+      );
+      assert.equal(
+        backup.prepare('SELECT COUNT(*) AS n FROM memories').get()?.n,
+        4,
+      );
+    } finally {
+      backup.close();
+    }
   } finally {
     db.close();
   }
 });
 
-test('a v5 archive database upgrades with a backup and retains archived conversations', (t) => {
+test('a v5 archive database is snapshotted then recreated empty', (t) => {
   const dataDir = temporary(t);
   const legacy = new DatabaseSync(join(dataDir, 'tian.db'));
   legacy.exec(`
@@ -845,13 +813,14 @@ test('a v5 archive database upgrades with a backup and retains archived conversa
     db.sqlite.prepare('PRAGMA user_version').get()?.user_version,
     DATABASE_VERSION,
   );
+  // Reset semantics: the old row is gone from the live database...
   assert.equal(
     db.sqlite
       .prepare(
-        "SELECT archived_at FROM conversations WHERE conversation_id = 'old-chat'",
+        "SELECT COUNT(*) AS n FROM conversations WHERE conversation_id = 'old-chat'",
       )
-      .get()?.archived_at,
-    '2026-02-01T00:00:00.000Z',
+      .get()?.n,
+    0,
   );
   assert.ok(
     (
@@ -860,6 +829,7 @@ test('a v5 archive database upgrades with a backup and retains archived conversa
       }[]
     ).some((column) => column.name === 'core'),
   );
+  // ...but the snapshot retains it for recovery.
   const backup = new DatabaseSync(join(dataDir, 'tian.db_v5.backup'), {
     readOnly: true,
   });
@@ -872,6 +842,14 @@ test('a v5 archive database upgrades with a backup and retains archived conversa
         )
         .get()?.title,
       'Keep this conversation',
+    );
+    assert.equal(
+      backup
+        .prepare(
+          "SELECT archived_at FROM conversations WHERE conversation_id = 'old-chat'",
+        )
+        .get()?.archived_at,
+      '2026-02-01T00:00:00.000Z',
     );
   } finally {
     backup.close();

@@ -314,23 +314,25 @@ function ScopeSection(props: {
               </Tooltip>
             </>
           )}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t('sidebar.newConversationIn', {
-                    name: scope.name,
-                  })}
-                  onClick={() => void actions.newConversation(scope.id)}
-                />
-              }
-            >
-              <ChatCircleDots size={14} />
-            </TooltipTrigger>
-            <TooltipPopup>{t('sidebar.newConversationTooltip')}</TooltipPopup>
-          </Tooltip>
+          {scope.kind !== 'project' && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t('sidebar.newConversationIn', {
+                      name: scope.name,
+                    })}
+                    onClick={() => void actions.newConversation(scope.id)}
+                  />
+                }
+              >
+                <ChatCircleDots size={14} />
+              </TooltipTrigger>
+              <TooltipPopup>{t('sidebar.newConversationTooltip')}</TooltipPopup>
+            </Tooltip>
+          )}
         </div>
       </div>
       <Reveal open={!collapsed}>

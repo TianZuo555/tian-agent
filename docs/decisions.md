@@ -4,14 +4,14 @@
 
 This document records architectural decisions that are **difficult to reverse and critical to understand**: why this architecture was chosen and what trade-offs were made. Implementation details and operational guides appear in [architecture.md](architecture.md), [memory.md](memory.md), [data.md](data.md), [agent-work.md](agent-work.md), [channels.md](channels.md), [service.md](service.md), and [improvement-log.md](improvement-log.md).
 
-Each decision forms a section numbered D1 through D19, organized by domain. Current metadata: `DATABASE_VERSION = 8`, `SERVICE_PROTOCOL = 10`. Every schema or protocol change is governed by upgrade transactions (see [service.md](service.md#service-upgrades)).
+Each decision forms a section numbered D1 through D22, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`. Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty (see [service.md](service.md#service-upgrades)).
 
 The earlier `docs/adr/` directory has been consolidated into this document:
 
 | Former ADR | Current Section                                                        |
 | ---------- | ---------------------------------------------------------------------- |
 | 0001       | D1 Three-pane shell                                                    |
-| 0002       | D2 Local Magpie gateway                                                |
+| 0002       | D2 Local Magpie gateway (superseded by D21)                            |
 | 0003       | D3 TypeScript service + Electron client                                |
 | 0004       | D4 Memory with SQLite single-source writes                             |
 | 0005       | D5 Tasks evolved from todos, executed via Runs                         |
@@ -29,6 +29,9 @@ The earlier `docs/adr/` directory has been consolidated into this document:
 | —          | D17 WeChat integration via official iLink protocol                     |
 | —          | D18 Memory ownership by role: Chief owns Global, Managers own projects |
 | —          | D19 Memory evidence, confirmation, and similarity                      |
+| —          | D20 Notification delivery and Manager handoffs leave the Service class |
+| —          | D21 Pluggable model providers                                          |
+| —          | D22 Unified Seatbelt sandbox for Worker commands                       |
 
 ---
 
@@ -52,7 +55,7 @@ The desktop UI adopts a three-pane layout: left pane for scopes and conversation
 
 ## D2 · Route Models Through Local Magpie Gateway
 
-> Proposal: to be superseded by [D21](#d21--model-providers-are-pluggable-magpie-is-one-provider-proposal).
+> Superseded by [D21](#d21--model-providers-are-pluggable-magpie-is-one-provider).
 
 All model traffic routes through the local Magpie gateway (default `http://127.0.0.1:3425/v1`), which forwards requests upstream. The desktop application does not connect directly to external provider APIs or parse keys from `~/.pi/agent/auth.json`.
 
@@ -240,6 +243,7 @@ Each project maintains a dedicated persistent conversation for a Project Manager
 - Delegations create a Task with `assignee = 'manager'` and `report_to = <chiefConversationId>`, log a delegation message, and wake the Manager. Concluding the Task notifies the Chief.
 - The `manager_messages` table stores threads with `kind` (delegation, message, question, answer, report), `task_id`, and `reply_to`. Managers query supervisors via `ask_chief`, which blocks until an answer arrives.
 - Tool constraints restrict Managers to their project scope: task execution, Run dispatches, and project memory. Managers have no shell or coding tools.
+- Only the Manager dispatches and supervises Workers (`agent_messages` senders `manager` / `worker`); the Chief delegates and steers through `send_manager_msg`. A project scope holds only its Manager and Worker conversations — channel entry points (`/scope <project>`, `createConversation` under a project) route to the Manager, and the Chief's History reads stay in Global.
 - Tian can converse with Project Managers directly via `openManager(projectId)`. During Tian turns, `ask_chief` is blocked, and tasks assigned by Tian conclude quietly without notifying the Chief.
 
 **Consequences**: Work delegation becomes an auditable task item. Routine project work bypasses the Chief while maintaining clean escalation pathways for delegated goals.
@@ -248,18 +252,18 @@ Each project maintains a dedicated persistent conversation for a Project Manager
 
 ## D13 · Run-Level Worker Models and Thinking Levels
 
-Supervisors can specify distinct models and thinking levels per Worker Run during dispatch rather than adhering to global settings.
+The dispatching Project Manager can specify distinct models and thinking levels per Worker Run during dispatch rather than adhering to global settings. (Before M6 the Chief could dispatch too; see [D12](#d12--project-manager-dedicated-persistent-session-and-delegation-tasks).)
 
 **Context**: Complex tasks warrant advanced models and higher reasoning efforts, whereas simple operations run faster and cheaper on lightweight models.
 
 **Decision**:
 
-- Dispatches accept optional `model` and `thinking_level` parameters. Omitting them inherits default settings.
-- The service resolves and validates worker configurations against the Magpie model catalog before creating Runs.
-- Columns `model` and `thinking_level` store configurations in `runs`, and values publish inside `run.dispatched` events.
-- Supervisor prompt headers list available models and supported thinking levels.
+- Dispatches choose the worker one of two mutually exclusive ways: an `intent` (a named configuration in Settings → Workers: runtime, model, thinking level, purpose) or an explicit `runtime` + `model` (+ `thinking_level`). Passing both is an error; passing neither applies the project's default Intent (`projects.default_intent`, which replaced `projects.agent_kind` in schema v10). An empty default means Pi with the app-wide model.
+- The service resolves the choice into a stored `runtime`/`model`/`thinking_level` triple before the Run exists, and validates Pi models against the provider catalogs — bad ids never create a run.
+- Columns `runtime`, `model` and `thinking_level` store the resolved values in `runs`, and they publish inside `run.dispatched` events. The triple is fixed for the run's whole life: follow-up Attempts and restart resumes reuse it.
+- The Manager's `<state>` lists the intents (with their purposes) and the Pi models with supported thinking levels.
 
-**Consequences**: Supervisors assign appropriate compute resources to specific tasks without modifying global configurations.
+**Consequences**: Managers assign appropriate compute resources to specific tasks without modifying global configurations, and named intents make repeated choices a single token instead of a parameter tuple.
 
 ---
 
@@ -331,7 +335,7 @@ The Chief writes Global memory only (facts about Tian and facts shared across pr
 
 - Memory writing tools (`remember`, `revise`, `forget`, `select`, `deselect`) lock to agent roles: the Chief writes Global memory; Managers write project memory.
 - Core Memory injection: Chief sessions inject Global Core Memory only; Manager sessions inject Global Core Memory plus their project's Core Memory.
-- Cross-scope queries are read-only and marked with ownership headers.
+- Cross-scope reads are asymmetric: the Chief reads a project's Memory and Notes read-only with ownership headers; the Manager's only view of Global is the injected Global Core — its `recall` has no scope switch.
 - Project creation requires a Manager name, instantly establishing the dedicated Manager conversation.
 - Project deletion guards: because Manager conversations create with the project, `removeProject` deletes the project and binding only if the Manager conversation has zero entries and no other conversations exist. If any transcript content exists, the deletion request is explicitly rejected to protect transcripts and memory.
 - Protocol: `SERVICE_PROTOCOL` increases to 10 (mandatory `addProject` `managerName` argument and `ScopeInfo.managerName`).
@@ -379,9 +383,9 @@ The resident service is a composition root. It does not own delivery loops or ma
 
 ---
 
-## D21 · Model Providers Are Pluggable; Magpie Is One Provider (Proposal)
+## D21 · Model Providers Are Pluggable; Magpie Is One Provider
 
-Status: Proposal. Supersedes [D2](#d2--route-models-through-local-magpie-gateway) when accepted.
+Status: Accepted. Supersedes [D2](#d2--route-models-through-local-magpie-gateway).
 
 Magpie stops being the only route for model traffic. It becomes one provider among several, and the user chooses the providers for Tian's own agents (Chief, Manager, Pi Worker). External Worker runtimes (Codex, Cursor, and others) manage their own models, credentials, and billing.
 
@@ -401,3 +405,21 @@ Magpie stops being the only route for model traffic. It becomes one provider amo
 - External CLI credentials: the CLI's own sign-in state comes first (for example `codex login`); enabling a runtime in Settings runs an installed-and-signed-in check, and only a passing runtime can be enabled. A runtime that needs an API key gets it in Settings; the key is stored per runtime in the 0600 secret file and passed only to that runtime's process through the environment allow-list. `service:env` is not extended: runtime credentials never enter the service's global environment. An adapter reports an expired sign-in as "sign-in required" in the UI, not as a generic failure.
 
 **Consequences**: Tian depends on pi-ai for provider auth and catalogs instead of one gateway. The service holds more secrets (provider keys, OAuth tokens, runtime keys) in one 0600 file, so the file and the environment allow-list become security-critical. Usage and cost tracking is per provider and is missing for external runtimes that do not report usage.
+
+## D22 — Unified Seatbelt sandbox for Worker commands
+
+Status: Accepted.
+
+Every Worker command — for Pi Workers and external runtimes alike — runs inside one Tian-owned macOS Seatbelt profile, generated per Run at `<dataDir>/sandbox/<runId>.sb`. Projects opt out with `sandboxMode = 'off'`; the default is `workspace-write` for new and existing projects.
+
+**Context**: the worktree boundary was instruction-only (`agent-work.md`); PRD §13 question 8 called for a real OS-level restriction. Each CLI also brings its own sandbox (Codex: Seatbelt), so two nested sandboxes would conflict.
+
+**Decision**:
+
+- `SandboxedExecutionEnv` wraps the worker `ExecutionEnv`: string commands run as `sandbox-exec -f <profile> /bin/bash -c <cmd>`, argv commands as `sandbox-exec -f <profile> <argv…>`; in-process file methods enforce the same rules in service code (deny/allow by canonical path), because Seatbelt cannot see them. The env factory applies the wrapper only to conversations that map to a Run and only when the project enables the sandbox; Chief and Manager conversations are never sandboxed.
+- External runtimes: the adapter rewrites its spawn argv under `sandbox-exec` and relaxes the CLI's own sandbox (`codex --sandbox danger-full-access`) — the outer profile is the single boundary; the CLI's state dir (`$CODEX_HOME`, default `~/.codex`) joins the writable set, while its `config.toml`, `AGENTS.md`, and `AGENTS.override.md` stay read-only.
+- Profile rules: deny reads/writes on the service data dir and common credential paths; deny writes everywhere then re-allow the work root, the Run's Git metadata (`git rev-parse --path-format=absolute --git-dir`), temp dirs, toolchain caches, and per-project extra roots; the main checkout stays read-only; the service socket is always denied; `sandboxNetwork = off` denies external network while localhost stays open.
+- A startup self-test (`sandbox-exec -p '(version 1)(allow default)' /usr/bin/true`) gates availability; when the sandbox is required but unavailable the Run fails closed — no silent unsandboxed fallback.
+- The worker instructions tell the model that writes outside the working directory fail by design; `run.dispatched` records the sandbox mode and network flag.
+
+**Consequences**: `sandbox-exec` is deprecated but still present on macOS; the self-test fails closed if Apple removes it. Nested sandbox conflicts with SwiftPM, Xcode builds, Chromium/Playwright, or the CLI's own sandboxing may still need per-project `off` or extra writable roots — those escape hatches are project settings, not new decisions.

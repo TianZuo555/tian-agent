@@ -13,10 +13,21 @@ export interface ScopeInfo {
 export interface ProjectSettings {
   autoLand: boolean;
   allowInPlace: boolean;
-  agentKind: 'durable-worker';
+  /** Default worker Intent for dispatches that name none; absent = pi default. */
+  defaultIntent?: string | null;
   runTimeoutMin: number;
   baseBranch: string;
   promptPreamble: string;
+  /** Per-project Manager model override ('provider:model'); absent = default. */
+  managerModel?: string | null;
+  /** macOS Seatbelt mode for Worker commands; 'workspace-write' is the default. */
+  sandboxMode?: 'off' | 'workspace-write';
+  /** External network inside the sandbox; localhost always stays open. */
+  sandboxNetwork?: boolean;
+  /** Extra writable paths the sandbox allows, one per line. */
+  sandboxExtraWrite?: string;
+  /** Denied-read paths this project re-allows, one per line. */
+  sandboxAllowRead?: string;
 }
 
 export type ProjectPatch = Partial<
@@ -219,7 +230,8 @@ export interface RunInfo {
   id: string;
   projectId: string;
   conversationId: string | null;
-  agentKind: string;
+  /** Worker runtime resolved at dispatch ('pi', 'codex'). Fixed for the run. */
+  runtime: string;
   prompt: string;
   rootPath: string;
   baseBranch: string;
@@ -339,7 +351,109 @@ export interface MemoryDump {
 }
 
 export interface SettingsInfo {
+  /** The Chief model; also the fallback for every other role. */
   model: { provider: string; modelId: string };
+  /** The default Manager model (D21); absent = `model`. */
+  managerModel?: { provider: string; modelId: string };
+  /** Worker runtimes, concurrency limits and intents (D13, M6). */
+  workers: WorkerSettingsInfo;
+}
+
+/** A named worker configuration the Manager may pick at dispatch. */
+export interface WorkerIntent {
+  /** Unique name the Manager passes as `intent`; e.g. 'review', 'simple'. */
+  name: string;
+  /** Runtime id — 'pi' is always available; external ids once enabled. */
+  runtime: string;
+  /** 'provider:model' for pi; a runtime-native model id for external runtimes. */
+  model?: string | null;
+  thinkingLevel?: string | null;
+  /** What the intent is for; the Manager's <state> lists it. */
+  purpose?: string;
+}
+
+/** One worker runtime's settings as the Settings page shows them. */
+export interface WorkerRuntimeInfo {
+  id: string;
+  /** Pi is always enabled; external runtimes opt in. */
+  enabled: boolean;
+  /** Cap on concurrent attempts of this runtime; absent = the global cap only. */
+  maxConcurrent?: number | null;
+}
+
+export interface WorkerSettingsInfo {
+  /** Global cap on concurrent worker attempts of every runtime (default 3). */
+  maxConcurrent: number;
+  /** 'pi' first and always enabled; external runtimes appear once supported. */
+  runtimes: WorkerRuntimeInfo[];
+  intents: WorkerIntent[];
+}
+
+/** Whether an external worker runtime is usable right now. */
+export interface RuntimeStatusInfo {
+  id: string;
+  /** The CLI binary resolves and answers `--version`. */
+  installed: boolean;
+  /** The CLI reports a live sign-in; null when not applicable or not installed. */
+  signedIn: boolean | null;
+  /** Human-readable detail: the version line, or 'sign-in required'. */
+  detail: string;
+}
+
+/** One configured model provider (D21). */
+export interface ProviderConfig {
+  /** Unique provider id; 'magpie' is the preset gateway. */
+  id: string;
+  /**
+   * 'gateway' = OpenAI-compatible endpoint with a discovered catalog;
+   * 'builtin' = a pi-ai built-in provider (anthropic, openai, ...).
+   */
+  kind: 'gateway' | 'builtin';
+  /** Display name; absent = the provider id. */
+  name?: string;
+  /** Gateway endpoint base URL ('…/v1'). */
+  baseUrl?: string;
+  /** pi-ai built-in provider id, e.g. 'anthropic'. */
+  builtinId?: string;
+  /** Disabled providers register nothing and hide their catalog. */
+  enabled?: boolean;
+}
+
+/** A provider's status as the Settings page shows it — never the secret. */
+export interface ProviderInfo extends ProviderConfig {
+  enabled: boolean;
+  /** A credential is stored; `keyTail` is its last characters. */
+  hasKey: boolean;
+  keyTail?: string;
+  /** The provider's cached catalog — feeds model pickers. */
+  models: ModelInfo[];
+  credentialType?: 'api_key' | 'oauth';
+  /** The provider supports an OAuth login flow. */
+  oauth: boolean;
+}
+
+/** A live provider login event forwarded to the Settings page. */
+export interface ProviderLoginEvent {
+  providerId: string;
+  event:
+    | { type: 'auth_url'; url: string; instructions?: string }
+    | {
+        type: 'device_code';
+        userCode: string;
+        verificationUri: string;
+        expiresInSeconds?: number;
+      }
+    | {
+        type: 'prompt';
+        promptId: string;
+        message: string;
+        secret: boolean;
+        placeholder?: string;
+        options?: { id: string; label: string }[];
+      }
+    | { type: 'info' | 'progress'; message: string }
+    | { type: 'done' }
+    | { type: 'error'; message: string };
 }
 
 /** WeChat (iLink / ClawBot) channel state; the QR code never leaves the service otherwise. */
@@ -409,6 +523,8 @@ export interface AppEvents {
   skills: SkillItem[];
   scopes: ScopeInfo[];
   settings: SettingsInfo;
+  providers: ProviderInfo[];
+  providerLogin: ProviderLoginEvent;
   runtime: {
     status: 'starting' | 'ready' | 'failed' | 'disconnected';
     error?: string;

@@ -16,7 +16,7 @@ Only the resident service writes to the database. The frontend is not an authori
 
 The service stops in an orderly sequence upon receiving SIGTERM. The next startup restores conversations, collectors, and original deadlines. Recovery follows tool replay policies. It does not guarantee exactly-once delivery for arbitrary external operations.
 
-Run results and completion notifications record in a single database transaction. The service delivers notifications to the dispatching conversation (Chief or Project Manager) with a stable `requestId`, then marks them delivered. After a crash, notifications redeliver and deduplicate through Durable. If the receiver is busy, notifications enter the follow-up queue. A notification queued while a delivery pass runs triggers another pass immediately; it does not wait for the next 60-second sweep.
+Run results and completion notifications record in a single database transaction. The service delivers notifications to the dispatching Project Manager conversation with a stable `requestId`, then marks them delivered. After a crash, notifications redeliver and deduplicate through Durable. If the receiver is busy, notifications enter the follow-up queue. A notification queued while a delivery pass runs triggers another pass immediately; it does not wait for the next 60-second sweep.
 
 ## History and Events
 
@@ -29,7 +29,7 @@ Pi transcripts are the sole source for conversation content. The file `tian.db` 
 
 Synchronization timing: Background catch-up runs after startup without blocking boot. Changes sync after delays on new inputs, watch notifications, or idle states. Queries lazily sync target scopes before searching. Synchronization pauses during maintenance mode.
 
-Search results order by FTS rank, then by descending time. Results truncate at approximately 1,500 tokens (`ceil(utf8Bytes / 3)`). Chief search tools include:
+Search results order by FTS rank, then by descending time. Results truncate at approximately 1,500 tokens (`ceil(utf8Bytes / 3)`). The Chief and Project Managers share these search tools; the scope is fixed by role, not by a parameter ([memory.md](memory.md#conversation-boundary)): the Chief searches Global, a Manager searches its own project, and Workers have no History tools.
 
-- `search_history(query, scope?, since?, until?, limit?)`: Defaults to current conversation scope. Use `scope: "all"` to search all scopes. Returns `[2026-10-11 14:02] conv:12#345 user: ...snippet...`. Returns `(no matches)` when empty.
-- `read_history(ref, offset?, limit?, around?)`: Paginates target entries from the raw transcript. Returns `chars a-b of n` and continuation offset. The parameter `around` shows neighboring turns. The reference `event:<id>` displays event details. Unicode paginates by code point.
+- `search_history(query, since?, until?, limit?)`: Searches the caller's scope. Returns `[2026-10-11 14:02] conv:12#345 user: ...snippet...`. Returns `(no matches)` when empty.
+- `read_history(ref, offset?, limit?, around?)`: Paginates target entries from the raw transcript. Returns `chars a-b of n` and continuation offset. The parameter `around` shows neighboring turns. The reference `event:<id>` displays event details. Unicode paginates by code point. A ref from another scope is refused.

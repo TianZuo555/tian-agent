@@ -1,3 +1,3 @@
 import metadata from '../../package.json' with { type: 'json' };
 export const APP_VERSION = metadata.version;
-export const DATABASE_VERSION = 8;
+export const DATABASE_VERSION = 13;

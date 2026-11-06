@@ -24,7 +24,7 @@ Seatbelt is the macOS kernel sandbox. `sandbox-exec` applies a profile to its ow
 | Containers (Docker, Apple container) | Linux VM on macOS            | Hundreds of MB or more  | Reject: memory, and macOS toolchains do not run in Linux |
 | macOS VM (Virtualization.framework)  | Full guest OS                | Several GB              | Reject: memory, and at most two macOS guests per host    |
 
-Measured on 2026-10-25: the resident service used about 30 MB RSS with 16 conversations. Magpie used about 318 MB plus about 348 MB for its plugin host, shared by all Workers. A Worker is a Pi conversation inside the service process, not a separate process. Memory pressure with 8–10 parallel Workers comes from the commands they run (`pnpm install`, `tsc`, builds, test runners, dev servers). Seatbelt does not change that cost. The global attempt cap (`MAX_ACTIVE_ATTEMPTS` in `src/worker/runs.ts`) is the control for memory, not the sandbox.
+Measured on 2026-10-25: the resident service used about 30 MB RSS with 16 conversations. Magpie used about 318 MB plus about 348 MB for its plugin host, shared by all Workers. A Worker is a Pi conversation inside the service process, not a separate process. Memory pressure with 8–10 parallel Workers comes from the commands they run (`pnpm install`, `tsc`, builds, test runners, dev servers). Seatbelt does not change that cost. The global attempt cap (Settings → Workers, default 3) is the control for memory, not the sandbox.
 
 Precedent: Bazel's macOS sandbox runs many concurrent build actions under `sandbox-exec` with the same profile pattern as section 4. Codex CLI and Claude Code also use Seatbelt on macOS.
 
@@ -70,7 +70,7 @@ The child environment starts from `process.env` minus `TELEGRAM_*`, `WECHAT_*`, 
 | `sandboxExtraWrite` | Absolute paths, one per line        | Empty                       |
 | `sandboxAllowRead`  | Paths removed from the deny list    | Empty                       |
 
-These need new `projects` columns (a `DATABASE_VERSION` bump through the existing upgrade transaction), the `updateProject` patch schema in `src/shared/contracts.ts`, `ProjectSettings` in `src/shared/types.ts`, `ProjectSettingsDialog.tsx`, and i18n keys in `en.ts` and `zh.ts`.
+These need new `projects` columns (a `DATABASE_VERSION` bump; the database is snapshotted and recreated), the `updateProject` patch schema in `src/shared/contracts.ts`, `ProjectSettings` in `src/shared/types.ts`, `ProjectSettingsDialog.tsx`, and i18n keys in `en.ts` and `zh.ts`.
 
 ### 3.7 Fail closed
 
@@ -109,7 +109,8 @@ The pattern follows Bazel: allow by default, then deny, then allow again. Later 
 (allow file-write*
   (subpath "<workRoot>")                ; worktree, or rootPath for an in-place Run
   (subpath "<worktreeGitDir>")          ; <repo>/.git/worktrees/<runId>: index and locks
-  (subpath "<tmpDir>")                  ; canonical $TMPDIR (/private/var/folders/...)
+  (subpath "<tmpDir>")                  ; canonical $TMPDIR (/private/var/folders/.../T)
+  (subpath "<userCacheDir>")            ; $TMPDIR's sibling C dir: clang/swift module cache
   (subpath "/private/tmp")
   (subpath "<home>/Library/Caches")
   (subpath "<home>/.cache")
@@ -120,6 +121,7 @@ The pattern follows Bazel: allow by default, then deny, then allow again. Later 
   (subpath "<home>/.cargo/registry")
   (subpath "<home>/go/pkg/mod")
   (subpath "<home>/Library/Developer/Xcode/DerivedData")
+  (subpath "<home>/Library/org.swift.swiftpm")
   ; plus each sandboxExtraWrite path
   (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty")
   (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))
@@ -137,14 +139,51 @@ Result for a worktree Run:
 
 ## 5. Known Incompatibilities to Verify
 
-- **Nested sandboxes**: a sandboxed process cannot apply another Seatbelt profile. SwiftPM evaluates `Package.swift` under `sandbox-exec`, so `swift build` may need `--disable-sandbox`. Check `xcodebuild` the same way.
+- **Nested sandboxes**: verified — `sandbox_apply` inside Seatbelt always fails, even under `(allow default)`. SwiftPM sandboxes its `Package.swift` manifest and plugin evaluation, so plain `swift build` fails; `swift build --disable-sandbox` builds fine inside the outer profile. The Worker instructions name this flag. `xcodebuild` needs the same check.
 - **Chromium-based tools** (Electron, Playwright, Puppeteer) start their own sandbox. Inside Seatbelt they may need `--no-sandbox`. This repo's `pnpm test:runtime` and `pnpm test:app-upgrade` start Electron.
 - **Tools that write outside the roots**: global installs (`npm i -g`, `brew`), `mise install` into a custom path, and language servers with custom cache paths. The fix is `sandboxExtraWrite`, not a wider default.
 - **Private registries**: `~/.npmrc` is denied by default because it can hold tokens. A project that needs it uses `sandboxAllowRead`.
 
+## 5a. Measured Overhead (2026-…)
+
+`mise` MacBook, 100 sequential spawns of `/usr/bin/true`:
+
+- unsandboxed: **225 ms** total (~2.3 ms/spawn)
+- `sandbox-exec -f <profile>`: **1 215 ms** total (~12.2 ms/spawn)
+
+≈ **10 ms** fixed cost per command spawn — negligible against real worker
+commands (compiles, tests, installs all take ≥ 100 ms).
+
+Memory: 10 parallel `tsrs --noEmit` type checks of this repo (about 560 MB
+peak RSS each), summed `maximum resident set size` from `/usr/bin/time -l`,
+two rounds each on a 16 GB MacBook: unsandboxed 3 108 / 3 902 MB,
+sandboxed 3 503 / 3 298 MB. The spread between rounds is larger than any
+difference between the modes: Seatbelt adds no measurable memory.
+
+Codex state mapping: `$CODEX_HOME` (default `~/.codex`) is writable, and
+`config.toml`, `AGENTS.md` and `AGENTS.override.md` inside it are denied
+for writes after the allow rule. Under that profile `codex login status`
+passes and `codex exec --sandbox danger-full-access resume <id>` starts its
+app-server and reaches the session lookup. A real `codex exec` turn and a
+`codex exec … resume <id>` turn then ran under the same profile in a temp
+repository: both wrote `hello.txt` through a shell command and exited 0.
+
+Real `codex exec` inside the outer profile (inner `--sandbox
+danger-full-access`, `~/.codex` writable) completed a turn successfully —
+the app-server socket lives at the `~/.codex` root, so the whole directory
+must be writable, not only `sessions/`.
+
+Real-model e2e (`mise run test:dispatch` / `tsx scripts/e2e-dispatch.mts`):
+a Pi worker dispatched on a temp project wrote `hello.txt`, reported,
+landed, and woke the chief — all under Seatbelt. The `--swift` variant on a
+real SwiftPM package also passed end to end; the worker ran `swift build
+--disable-sandbox` per its instructions. Two default roots had to be added
+for the toolchain: the per-user `C` cache dir (`$TMPDIR`'s sibling, clang
+module cache) and `~/Library/org.swift.swiftpm`.
+
 ## 6. Observability
 
-- A denied operation returns `Operation not permitted` (EPERM) in the tool output. Add one line to the Worker instructions in `AgentRuntime.create`: "Writes outside the working directory fail with 'Operation not permitted' by design. Do not retry with sudo or another path. Ask the chief if the task needs that path."
+- A denied operation returns `Operation not permitted` (EPERM) in the tool output. Add one line to the Worker instructions in `AgentRuntime.create`: "Writes outside the working directory fail with 'Operation not permitted' by design. Do not retry with sudo or another path. Ask the chief if the task needs that path. Toolchains that sandbox themselves (SwiftPM, xcodebuild) must run with their own sandbox off, e.g. `swift build --disable-sandbox`."
 - Record the sandbox mode, network mode, and profile path in the `run.dispatched` event payload, so a review shows whether a Run was sandboxed.
 - For debugging: `log stream --style compact --predicate 'sender == "Sandbox"'` shows each denial with its path.
 
@@ -153,34 +192,34 @@ Result for a worktree Run:
 ### Phase 0: Spike and environment scrub
 
 - [x] Scrub the Worker child environment (section 3.5). Test: a Worker `exec` of `env` shows no `TELEGRAM_*`, `WECHAT_*`, `MAGPIE_*`, or `TIAN_AGENT_*` names. Done: `agentShellEnv`.
-- [ ] Write the profile generator in `src/worker/sandbox.ts`, with path canonicalization and escaping. Unit-test the generated text.
-- [ ] Confirm rule precedence (a later `allow` overrides an earlier `deny`) with a macOS-only test.
-- [ ] Measure: spawn latency with and without `sandbox-exec` for 100 short commands, and total RSS for 10 parallel sandboxed builds compared with 10 unsandboxed builds. Record the numbers in this document.
+- [x] Write the profile generator in `src/worker/sandbox.ts`, with path canonicalization and escaping. Unit-test the generated text.
+- [x] Confirm rule precedence (a later `allow` overrides an earlier `deny`) with a macOS-only test.
+- [x] Measure: spawn latency with and without `sandbox-exec` for 100 short commands, and total RSS for 10 parallel sandboxed builds compared with 10 unsandboxed builds. Record the numbers in this document.
 
 ### Phase 1: Opt-in per project
 
-- [ ] `SandboxedExecutionEnv`: `exec` rewrite for string and argv commands, path checks for file methods, scrubbed environment.
-- [ ] Env factory in `AgentRuntime.open`: sandbox only Worker conversations (`db.runByConversation`), and only when the project sets `sandboxMode = workspace-write`.
-- [ ] Resolve `<worktreeGitDir>` at `prepare` time with `git rev-parse --path-format=absolute --git-dir` in the worktree.
-- [ ] Project settings, schema, migration, dialog, and i18n (section 3.6).
-- [ ] Startup self-test and fail-closed Run start (section 3.7).
-- [ ] Worker instruction line and `run.dispatched` payload fields (section 6).
-- [ ] macOS-only integration tests (skip on other platforms):
-  - [ ] A write inside the worktree succeeds; a write to `rootPath` fails with EPERM.
-  - [ ] A write to `$TMPDIR` succeeds; a read of `<dataDir>/service.env` fails.
-  - [ ] An argv `exec` is sandboxed as well as a string `exec`.
-  - [ ] `writeFile` outside the roots returns a `FileError` from the in-process check.
-  - [ ] With `sandboxNetwork = off`, an external connection fails and a localhost connection succeeds.
-  - [ ] A connection to the service socket fails with either network setting.
-  - [ ] Stopping a Run kills the sandboxed process tree.
-  - [ ] `git status` works in the worktree; `git add` fails.
+- [x] `SandboxedExecutionEnv`: `exec` rewrite for string and argv commands, path checks for file methods, scrubbed environment.
+- [x] Env factory in `AgentRuntime.open`: sandbox only Worker conversations (`db.runByConversation`), and only when the project sets `sandboxMode = workspace-write`.
+- [x] Resolve `<worktreeGitDir>` at `prepare` time with `git rev-parse --path-format=absolute --git-dir` in the worktree.
+- [x] Project settings, schema, migration, dialog, and i18n (section 3.6).
+- [x] Startup self-test and fail-closed Run start (section 3.7).
+- [x] Worker instruction line and `run.dispatched` payload fields (section 6).
+- [x] macOS-only integration tests (skip on other platforms):
+  - [x] A write inside the worktree succeeds; a write to `rootPath` fails with EPERM.
+  - [x] A write to `$TMPDIR` succeeds; a read of `<dataDir>/service.env` fails.
+  - [x] An argv `exec` is sandboxed as well as a string `exec`.
+  - [x] `writeFile` outside the roots returns a `FileError` from the in-process check.
+  - [x] With `sandboxNetwork = off`, an external connection fails and a localhost connection succeeds.
+  - [x] A connection to the service socket fails with either network setting.
+  - [x] Stopping a Run kills the sandboxed process tree.
+  - [x] `git status` works in the worktree; `git add` fails (objects land in the main `.git`, outside the write roots).
 
 ### Phase 2: Default on for new projects
 
-- [ ] New projects default to `sandboxMode = workspace-write`.
-- [ ] Run the manual `scripts/e2e-dispatch.mts` check with a real model on this repo and on one Swift or Xcode project. Update section 5 with the results.
+- [x] New projects default to `sandboxMode = workspace-write`.
+- [x] Run the manual `scripts/e2e-dispatch.mts` check with a real model on this repo and on one Swift or Xcode project. Update section 5 with the results.
 
 ### Phase 3: Default on for all projects
 
-- [ ] Migrate existing projects to `workspace-write`, and keep `off` as an explicit choice in project settings.
-- [ ] Update [architecture.md](architecture.md#permissions-and-scopes) (remove "they do not enforce operating system sandboxes"), PRD §13 question 8, and add a decision record to [decisions.md](decisions.md) (the next free number; D19 is the memory evidence decision). Mirror every change in `docs/zh/`.
+- [x] Migrate existing projects to `workspace-write`, and keep `off` as an explicit choice in project settings.
+- [x] Update [architecture.md](architecture.md#permissions-and-scopes) (remove "they do not enforce operating system sandboxes"), PRD §13 question 8, and add a decision record to [decisions.md](decisions.md) (the next free number; D19 is the memory evidence decision). Mirror every change in `docs/zh/`.

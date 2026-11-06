@@ -41,7 +41,7 @@ Login autostart, service execution, and application connections stay independent
 
 The "Service & Upgrades" panel in Settings operates even when the service is offline. You can inspect versions, connect, disconnect, start, stop, toggle autostart, install companion services, and recover interrupted upgrades.
 
-The service rejects upgrades and stop requests while active work is in progress. It checks Durable tasks, queued submissions, Runs, and review operations before proceeding. Legacy services without version metadata trigger an explicit warning. Confirm that ongoing tasks are safe to pause, stop the legacy service, and install the new release. Data persists across upgrades. Newer applications do not connect to older service protocols.
+The service rejects upgrades and stop requests while active work is in progress. It checks Durable tasks, queued submissions, Runs, and review operations before proceeding. Legacy services without version metadata trigger an explicit warning. Confirm that ongoing tasks are safe to pause, stop the legacy service, and install the new release. Newer applications do not connect to older service protocols. Database schema bumps do not migrate data: an older `tian.db` gets a consistent `VACUUM INTO` snapshot at `<dataDir>/tian.db_v<N>.backup`, then the database is recreated empty at the current version.
 
 Upgrades execute as atomic transactions: validate release manifests (dynamic chunks, platform, architecture, protocol, database version, Node runtime) → acquire upgrade mutex and verify idle state → record persistent maintenance flags → stop the older service and back up databases under lock → start the new service in maintenance mode → verify versions, commit, clear maintenance flags, and resume operations.
 

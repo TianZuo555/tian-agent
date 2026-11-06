@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
@@ -446,6 +446,62 @@ test('commands answer over WeChat without submitting a turn', async (t) => {
   f.client.deliver(incoming('/scope 不存在', 2));
   await until(() => f.client.sent.some((m) => m.text.includes('未知 scope')));
   assert.equal(f.service.listConversations().length, 0);
+});
+
+test('/scope routes the user to the project manager', async (t) => {
+  const f = fixture(t);
+  await f.init();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const projectId = (await f.service.addProject('demo', project, '阿七')).find(
+    (scope) => scope.kind === 'project',
+  )!.id;
+  f.client.deliver(incoming('你好', 1));
+  await until(() => f.service.listConversations().length === 1);
+  f.client.deliver(incoming('/scope demo', 2));
+  await until(() =>
+    f.client.sent.some((m) => m.text.includes('已切换到 scope')),
+  );
+  f.client.deliver(incoming('项目里的事', 3));
+  // A project scope holds only its manager (M6): the user's messages open
+  // and land in the manager conversation, never a project chief.
+  let managerId = '';
+  await until(async () => {
+    const manager = f.service
+      .listConversations()
+      .find((c) => c.scopeId === projectId && c.role === 'manager');
+    if (!manager) return false;
+    managerId = manager.conversationId;
+    const conversation = await (
+      f.service as unknown as {
+        agents: { conversation(id: string): Promise<Conversation> };
+      }
+    ).agents.conversation(managerId);
+    const page = await conversation.entries(
+      { order: 'ascending' },
+      100,
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    return page.items.some((entry) => entry.kind === 'pi.user');
+  });
+  const scoped = (
+    f.service as unknown as {
+      db: {
+        sqlite: {
+          prepare(sql: string): {
+            get(...args: unknown[]): { scope_id: string } | undefined;
+          };
+        };
+      };
+    }
+  ).db.sqlite
+    .prepare('SELECT scope_id FROM wechat_users WHERE user_id = ?')
+    .get(USER);
+  assert.equal(scoped?.scope_id, projectId);
+  // Settle the pending submission so closing the service stays quiet.
+  await reply(f.service, managerId, '收到');
+  await until(() => f.client.sent.some((m) => m.text === '收到'));
 });
 
 test('stop() settles the adapter so the service can close', async (t) => {

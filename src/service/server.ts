@@ -119,7 +119,7 @@ export class ResidentServer {
         this.emit,
         this.options.telegram ?? {},
         this.options.wechat ?? null,
-        { warmModels: true },
+        { warmModels: true, socketPath: this.paths.socketPath },
       );
       this.maintenance = existsSync(
         join(this.paths.installationDir, 'maintenance.json'),

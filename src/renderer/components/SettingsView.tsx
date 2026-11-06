@@ -11,7 +11,9 @@ import {
   Moon,
   Notebook,
   PaintBrush,
+  PlugsConnected,
   Pulse,
+  Robot,
   Sun,
   Translate,
   X,
@@ -47,12 +49,16 @@ import { UsageHeatmap } from './UsageHeatmap';
 import { ServiceSettings } from './ServiceSettings';
 import { WechatSettings } from './WechatSettings';
 import { ImprovementLog } from './ImprovementLog';
+import { ProvidersSection } from './ProvidersSection';
+import { WorkersSection } from './WorkersSection';
 
 /** One page per category: the rail switches pages, it does not scroll a long one. */
 type SettingsPage =
   | 'general'
   | 'appearance'
   | 'model'
+  | 'providers'
+  | 'workers'
   | 'usage'
   | 'log'
   | 'channels'
@@ -62,6 +68,16 @@ const SECTIONS: { id: SettingsPage; label: MessageKey; icon: Icon }[] = [
   { id: 'general', label: 'settings.section.general', icon: Translate },
   { id: 'appearance', label: 'settings.section.appearance', icon: PaintBrush },
   { id: 'model', label: 'settings.section.model', icon: Cpu },
+  {
+    id: 'providers',
+    label: 'settings.section.providers',
+    icon: PlugsConnected,
+  },
+  {
+    id: 'workers',
+    label: 'settings.section.workers',
+    icon: Robot,
+  },
   { id: 'usage', label: 'settings.section.usage', icon: ChartBar },
   { id: 'log', label: 'settings.section.log', icon: Notebook },
   {
@@ -82,6 +98,14 @@ const PAGES: Record<
     render: () => <AppearancePage />,
   },
   model: { title: 'settings.section.model', render: () => <ModelSection /> },
+  providers: {
+    title: 'settings.section.providers',
+    render: () => <ProvidersPage />,
+  },
+  workers: {
+    title: 'settings.section.workers',
+    render: () => <WorkersPage />,
+  },
   usage: { title: 'settings.section.usage', render: () => <UsageSection /> },
   log: { title: 'settings.section.log', render: () => <LogSection /> },
   channels: {
@@ -238,24 +262,179 @@ function AppearancePage() {
   );
 }
 
-function ModelSection() {
+function ProvidersPage() {
+  const t = useT();
+  return (
+    <Section
+      id="providers"
+      title={t('settings.section.providers')}
+      icon={PlugsConnected}
+    >
+      <ProvidersSection />
+    </Section>
+  );
+}
+
+function WorkersPage() {
+  const t = useT();
+  return (
+    <Section id="workers" title={t('settings.section.workers')} icon={Robot}>
+      <WorkersSection />
+    </Section>
+  );
+}
+
+/** 'provider:model' ref — the pickers' value shape across every provider. */
+const parseModelRef = (value: string) => {
+  const index = value.indexOf(':');
+  return { provider: value.slice(0, index), modelId: value.slice(index + 1) };
+};
+
+/** The two role-model pickers and their save row — drafts live here (D21). */
+function ModelPickers() {
   const t = useT();
   const settings = useStore((s) => s.settings);
-  const catalog = useStore((s) => s.catalog);
-  const savedId = settings?.model.modelId ?? '';
-  // A draft stays local until saved, so a service update cannot overwrite a
+  const providers = useStore((s) => s.providers);
+  const chiefSaved = settings
+    ? `${settings.model.provider}:${settings.model.modelId}`
+    : '';
+  const managerSaved = settings?.managerModel
+    ? `${settings.managerModel.provider}:${settings.managerModel.modelId}`
+    : '';
+  // Drafts stay local until saved, so a service update cannot overwrite a
   // selection the user is about to commit.
-  const [draft, setDraft] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [draftChief, setDraftChief] = useState<string | null>(null);
+  const [draftManager, setDraftManager] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const modelId = draft ?? savedId;
+  const chief = draftChief ?? chiefSaved;
+  const manager = draftManager ?? managerSaved;
 
-  const models = catalog?.models ?? [];
-  const items = models.map((m) => ({ label: m.name, value: m.id }));
-  const current =
-    items.find((i) => i.value === modelId) ??
-    (modelId ? { label: modelId, value: modelId } : null);
-  const dirty = draft !== null && draft !== savedId;
+  const items = providers
+    .filter((provider) => provider.enabled)
+    .flatMap((provider) =>
+      provider.models.map((model) => ({
+        label: `${provider.name || provider.id} · ${model.name}`,
+        value: `${provider.id}:${model.id}`,
+      })),
+    );
+  const chiefCurrent =
+    items.find((i) => i.value === chief) ??
+    (chief ? { label: chief, value: chief } : null);
+  const managerItems = [{ label: t('model.managerSame'), value: '' }, ...items];
+  const managerCurrent =
+    managerItems.find((i) => i.value === manager) ??
+    (manager ? { label: manager, value: manager } : null);
+  const dirty =
+    (draftChief !== null && draftChief !== chiefSaved) ||
+    (draftManager !== null && draftManager !== managerSaved);
+
+  return (
+    <>
+      <Field>
+        <FieldLabel htmlFor="settings-model">{t('model.chief')}</FieldLabel>
+        <Select
+          items={items}
+          value={chiefCurrent}
+          onValueChange={(v) => {
+            const next = v as { value: string } | null;
+            if (next) setDraftChief(next.value);
+          }}
+        >
+          <SelectTrigger id="settings-model">
+            <SelectValue placeholder={t('model.choose')} />
+          </SelectTrigger>
+          <SelectPopup>
+            {items.map((m) => (
+              <SelectItem key={m.value} value={m}>
+                <span className="truncate">{m.label}</span>
+                <span className="ms-auto truncate font-mono text-[10px] text-content-secondary">
+                  {m.value}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <FieldDescription>{t('model.chiefDesc')}</FieldDescription>
+      </Field>
+
+      <Field>
+        <FieldLabel htmlFor="settings-manager-model">
+          {t('model.manager')}
+        </FieldLabel>
+        <Select
+          items={managerItems}
+          value={managerCurrent}
+          onValueChange={(v) => {
+            const next = v as { value: string } | null;
+            if (next !== null) setDraftManager(next.value);
+          }}
+        >
+          <SelectTrigger id="settings-manager-model">
+            <SelectValue placeholder={t('model.managerSame')} />
+          </SelectTrigger>
+          <SelectPopup>
+            {managerItems.map((m) => (
+              <SelectItem key={m.value || 'default'} value={m}>
+                <span className="truncate">{m.label}</span>
+                {m.value && (
+                  <span className="ms-auto truncate font-mono text-[10px] text-content-secondary">
+                    {m.value}
+                  </span>
+                )}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <FieldDescription>{t('model.managerDesc')}</FieldDescription>
+      </Field>
+
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          loading={saving}
+          disabled={!dirty}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              if (draftChief !== null && draftChief !== chiefSaved)
+                await actions.setModel(
+                  parseModelRef(draftChief).provider,
+                  parseModelRef(draftChief).modelId,
+                );
+              if (draftManager !== null && draftManager !== managerSaved)
+                await actions.setManagerModel(
+                  draftManager === '' ? null : parseModelRef(draftManager),
+                );
+              setDraftChief(null);
+              setDraftManager(null);
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          <Check size={13} weight="bold" />
+          {t('model.save')}
+        </Button>
+        <span role="status" className="text-[11px] text-content-secondary">
+          {dirty
+            ? t('model.unsaved')
+            : settings
+              ? t('model.using', { id: settings.model.modelId })
+              : ''}
+        </span>
+      </div>
+    </>
+  );
+}
+
+function ModelSection() {
+  const t = useT();
+  const catalog = useStore((s) => s.catalog);
+  const providers = useStore((s) => s.providers);
+  const [refreshing, setRefreshing] = useState(false);
+  const modelCount = providers
+    .filter((provider) => provider.enabled)
+    .reduce((count, provider) => count + provider.models.length, 0);
 
   return (
     <Section
@@ -264,7 +443,7 @@ function ModelSection() {
       icon={Cpu}
       trailing={
         <span className="font-mono text-[9.5px] text-content-disabled">
-          {t('model.available', { count: models.length })}
+          {t('model.available', { count: modelCount })}
         </span>
       }
     >
@@ -309,59 +488,7 @@ function ModelSection() {
           </Button>
         </div>
 
-        <Field>
-          <FieldLabel htmlFor="settings-model">{t('model.default')}</FieldLabel>
-          <Select
-            items={items}
-            value={current}
-            onValueChange={(v) => {
-              const next = v as { value: string } | null;
-              if (next) setDraft(next.value);
-            }}
-          >
-            <SelectTrigger id="settings-model">
-              <SelectValue placeholder={t('model.choose')} />
-            </SelectTrigger>
-            <SelectPopup>
-              {items.map((m) => (
-                <SelectItem key={m.value} value={m}>
-                  <span className="truncate">{m.label}</span>
-                  <span className="ms-auto truncate font-mono text-[10px] text-content-secondary">
-                    {m.value}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-          <FieldDescription>{t('model.desc')}</FieldDescription>
-        </Field>
-
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            loading={saving}
-            disabled={!dirty}
-            onClick={async () => {
-              setSaving(true);
-              try {
-                await actions.setModel('magpie', modelId);
-                setDraft(null);
-              } finally {
-                setSaving(false);
-              }
-            }}
-          >
-            <Check size={13} weight="bold" />
-            {t('model.save')}
-          </Button>
-          <span role="status" className="text-[11px] text-content-secondary">
-            {dirty
-              ? t('model.unsaved')
-              : settings
-                ? t('model.using', { id: settings.model.modelId })
-                : ''}
-          </span>
-        </div>
+        <ModelPickers />
 
         <div className="rounded-xl border border-border px-3 py-2.5">
           <div className="mb-1 flex items-center gap-2">

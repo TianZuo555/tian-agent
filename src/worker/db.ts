@@ -18,16 +18,26 @@ export interface ProjectRow {
   rootPath: string;
   autoLand: number;
   allowInPlace: number;
-  agentKind: string;
+  /** Default worker Intent name for dispatches that name none (M6); NULL = pi default. */
+  defaultIntent: string | null;
   runTimeoutMin: number;
   baseBranch: string;
   promptPreamble: string;
+  /** 'provider:model' — per-project Manager model override (D21); NULL = default. */
+  managerModel: string | null;
   /**
    * What Tian calls this project's manager ("阿七"). Required: every project
    * has exactly one manager (D18), named when the project is added. Its bound
    * conversation is created on first use.
    */
   managerName: string;
+  /** Seatbelt mode for Worker commands (todo-worker-sandbox.md). */
+  sandboxMode: string;
+  /** External network inside the sandbox (1 = on; localhost always open). */
+  sandboxNetwork: number;
+  /** Extra writable roots and re-allowed read roots, newline-separated. */
+  sandboxExtraWrite: string;
+  sandboxAllowRead: string;
   createdAt: string;
 }
 export type ConversationRow = ConversationInfo;
@@ -36,6 +46,16 @@ export interface RunRow extends RunInfo {
   chiefConversationId: string | null;
   currentPrompt: string;
   deadlineAt: string;
+  /** External runtime session id (e.g. a codex thread); null for pi. */
+  externalSession?: string | null;
+  /** The attempt the external session last ran; null for pi. */
+  externalAttempt?: number | null;
+  /** The attempt that already used its one automatic resume; null = none. */
+  autoResumed?: number | null;
+  /** Last external tool call (`name: args`), named in a restart-resume prompt. */
+  externalLastCall?: string | null;
+  /** Process group of the last external process; killed if still alive at a resume. */
+  externalPid?: number | null;
 }
 export interface Notification {
   id: string;
@@ -49,7 +69,7 @@ export interface AgentMessageRow {
   /** Insertion order within the run's thread. */
   seq: number;
   runId: string;
-  sender: 'chief' | 'worker';
+  sender: 'manager' | 'worker';
   body: string;
   createdAt: string;
   /** When the recipient read it; null while pending. */
@@ -107,19 +127,37 @@ export class Db {
       throw new Error('The database requires a newer service version');
     }
     this.db.exec('PRAGMA journal_mode = WAL;');
-    // A real upgrade (not a fresh database, not a same-version reopen) gets a
-    // consistent snapshot first and runs inside one transaction: if any step
-    // throws, the schema rolls back and the backup file remains for recovery.
-    const upgrading = version > 0 && version < DATABASE_VERSION;
-    if (upgrading)
+    // No incremental migrations: a schema from another version gets a
+    // consistent snapshot for recovery, then the database is recreated from
+    // scratch at the current version (D-reset: every bump starts clean). A
+    // version-0 file with existing tables is also a foreign database; only
+    // an empty file is fresh.
+    const hasTables =
+      (
+        this.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+          )
+          .get() as { n: number }
+      ).n > 0;
+    if (version !== DATABASE_VERSION && hasTables) {
       this.backupDatabase(join(userDataDir, `tian.db_v${version}.backup`));
+      this.db.close();
+      for (const suffix of ['', '-wal', '-shm'])
+        rmSync(join(userDataDir, `tian.db${suffix}`), { force: true });
+      this.db = new DatabaseSync(join(userDataDir, 'tian.db'));
+      this.db.exec('PRAGMA journal_mode = WAL;');
+    }
     const migrate = () => {
       this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL,
         auto_land INTEGER NOT NULL DEFAULT 0, allow_in_place INTEGER NOT NULL DEFAULT 0,
-        agent_kind TEXT NOT NULL DEFAULT 'durable-worker', run_timeout_min INTEGER NOT NULL DEFAULT 0,
+        default_intent TEXT, run_timeout_min INTEGER NOT NULL DEFAULT 0,
         base_branch TEXT NOT NULL DEFAULT 'main', prompt_preamble TEXT NOT NULL DEFAULT '', manager_name TEXT,
+        manager_model TEXT,
+        sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write', sandbox_network INTEGER NOT NULL DEFAULT 1,
+        sandbox_extra_write TEXT NOT NULL DEFAULT '', sandbox_allow_read TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS conversations (
@@ -136,17 +174,21 @@ export class Db {
         status TEXT NOT NULL DEFAULT 'pending', goal_id TEXT, owner TEXT NOT NULL DEFAULT 'user',
         outcome TEXT, summary TEXT, trigger TEXT NOT NULL DEFAULT 'manual', trigger_ref TEXT,
         dedupe_key TEXT UNIQUE, attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 3,
-        due TEXT, started_at TEXT, created_at TEXT NOT NULL, done_at TEXT, updated_at TEXT
+        due TEXT, started_at TEXT, created_at TEXT NOT NULL, done_at TEXT, updated_at TEXT,
+        assignee TEXT, report_to TEXT
       );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL, conversation_id TEXT, chief_conversation_id TEXT,
-        agent_kind TEXT NOT NULL, prompt TEXT NOT NULL, current_prompt TEXT NOT NULL DEFAULT '',
+        runtime TEXT NOT NULL DEFAULT 'pi',
+        prompt TEXT NOT NULL, current_prompt TEXT NOT NULL DEFAULT '',
         root_path TEXT NOT NULL DEFAULT '', base_branch TEXT NOT NULL DEFAULT 'main',
         execution_mode TEXT NOT NULL DEFAULT 'worktree', worktree_path TEXT, branch TEXT,
         status TEXT NOT NULL DEFAULT 'queued', review_status TEXT NOT NULL DEFAULT 'pending',
         attempt INTEGER NOT NULL DEFAULT 1, error TEXT, pr_url TEXT, report_path TEXT,
         exit_code INTEGER, started_at TEXT NOT NULL, finished_at TEXT, deadline_at TEXT NOT NULL DEFAULT '',
-        model TEXT, thinking_level TEXT
+        model TEXT, thinking_level TEXT,
+        external_session TEXT, external_attempt INTEGER, auto_resumed INTEGER, external_last_call TEXT, external_pid INTEGER,
+        task_id INTEGER, injected_skills TEXT
       );
       CREATE TABLE IF NOT EXISTS run_attempts (
         run_id TEXT NOT NULL, attempt INTEGER NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL,
@@ -175,83 +217,12 @@ export class Db {
       CREATE INDEX IF NOT EXISTS runs_project_status ON runs(project_id, status);
       CREATE INDEX IF NOT EXISTS agent_messages_run ON agent_messages(run_id);
       CREATE INDEX IF NOT EXISTS manager_messages_project ON manager_messages(project_id);
-    `);
-      this.ensureColumns('projects', {
-        allow_in_place: 'INTEGER NOT NULL DEFAULT 0',
-        // D14/D18: the chief and Tian address a project's manager by this
-        // name. Required by the service; older rows are backfilled below.
-        manager_name: 'TEXT',
-      });
-      this.ensureColumns('conversations', {
-        archived_at: 'TEXT',
-      });
-      this.ensureColumns('tasks', {
-        goal_id: 'TEXT',
-        owner: "TEXT NOT NULL DEFAULT 'user'",
-        outcome: 'TEXT',
-        summary: 'TEXT',
-        trigger: "TEXT NOT NULL DEFAULT 'manual'",
-        trigger_ref: 'TEXT',
-        // UNIQUE comes from the tasks_dedupe_key index created after this call.
-        dedupe_key: 'TEXT',
-        attempts: 'INTEGER NOT NULL DEFAULT 0',
-        max_attempts: 'INTEGER NOT NULL DEFAULT 3',
-        started_at: 'TEXT',
-        updated_at: 'TEXT',
-        assignee: 'TEXT',
-        report_to: 'TEXT',
-      });
-      this.ensureColumns('manager_messages', {
-        kind: "TEXT NOT NULL DEFAULT 'message'",
-        task_id: 'INTEGER',
-        reply_to: 'TEXT',
-        closed_at: 'TEXT',
-      });
-      this.ensureColumns('runs', {
-        chief_conversation_id: 'TEXT',
-        current_prompt: "TEXT NOT NULL DEFAULT ''",
-        root_path: "TEXT NOT NULL DEFAULT ''",
-        base_branch: "TEXT NOT NULL DEFAULT 'main'",
-        execution_mode: "TEXT NOT NULL DEFAULT 'worktree'",
-        review_status: "TEXT NOT NULL DEFAULT 'pending'",
-        attempt: 'INTEGER NOT NULL DEFAULT 1',
-        error: 'TEXT',
-        pr_url: 'TEXT',
-        task_id: 'INTEGER',
-        injected_skills: 'TEXT',
-        deadline_at: "TEXT NOT NULL DEFAULT ''",
-        // Per-run model override (a magpie model id); NULL = the global default.
-        model: 'TEXT',
-        // Per-run thinking level (a pi level name); NULL = the model's own.
-        thinking_level: 'TEXT',
-      });
-      this.db.exec(`
-      -- A fresh tasks table declares dedupe_key UNIQUE, but migrated databases
-      -- got it through ALTER TABLE, where UNIQUE is not allowed. The index makes
-      -- task creation dedupe work on both shapes (NULLs stay allowed, so plain
-      -- to-dos are unaffected). It must run after ensureColumns added the column.
       CREATE UNIQUE INDEX IF NOT EXISTS tasks_dedupe_key ON tasks(dedupe_key);
     `);
-      this.db.exec(`
-      UPDATE runs SET root_path = COALESCE((SELECT root_path FROM projects WHERE projects.id = runs.project_id), '') WHERE root_path = '';
-      UPDATE runs SET current_prompt = prompt WHERE current_prompt = '';
-      -- D5: migrate the old todo statuses to the task state machine, idempotently.
-      UPDATE tasks SET status = 'pending' WHERE status = 'open';
-      UPDATE tasks SET status = 'completed' WHERE status = 'done';
-      UPDATE tasks SET updated_at = COALESCE(updated_at, created_at);
-      UPDATE runs SET execution_mode = 'in-place' WHERE branch IS NULL;
-      UPDATE runs SET status = 'interrupted', review_status = 'discarded' WHERE status = 'discarded';
-      -- D18: every project has a named manager; unnamed projects take their own name.
-      UPDATE projects SET manager_name = name WHERE manager_name IS NULL OR trim(manager_name) = '';
-    `);
-      // Memory schema changes live in the same versioned transaction, so a
-      // failure rolls back the version bump instead of marking an old schema
-      // as current for MemoryStore to patch outside any transaction.
       this.migrateMemory();
       this.db.exec(`PRAGMA user_version = ${DATABASE_VERSION};`);
     };
-    if (upgrading) this.transaction(migrate);
-    else migrate();
+    migrate();
   }
 
   /**
@@ -267,6 +238,7 @@ export class Db {
         kind TEXT NOT NULL, content TEXT NOT NULL, source_type TEXT NOT NULL, source_ref TEXT,
         trust_level TEXT NOT NULL, confidence REAL, status TEXT NOT NULL DEFAULT 'active',
         core INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, supersedes INTEGER,
+        conditions TEXT NOT NULL DEFAULT '', observed_at TEXT, verified_at TEXT, valid_until TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(scope_id, seq)
       );
@@ -278,14 +250,6 @@ export class Db {
         key TEXT PRIMARY KEY, value TEXT NOT NULL
       );
     `);
-    this.ensureColumns('memories', {
-      supersedes: 'INTEGER',
-      core: 'INTEGER NOT NULL DEFAULT 0',
-      conditions: "TEXT NOT NULL DEFAULT ''",
-      observed_at: 'TEXT',
-      verified_at: 'TEXT',
-      valid_until: 'TEXT',
-    });
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_evidence (
         id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -344,19 +308,6 @@ export class Db {
   private backupDatabase(path: string): void {
     rmSync(path, { force: true });
     this.db.prepare('VACUUM INTO ?').run(path);
-  }
-
-  private ensureColumns(
-    table: string,
-    definitions: Record<string, string>,
-  ): void {
-    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as {
-      name: string;
-    }[];
-    for (const [name, definition] of Object.entries(definitions)) {
-      if (!columns.some((column) => column.name === name))
-        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
-    }
   }
 
   get sqlite(): DatabaseSync {
@@ -450,8 +401,29 @@ export class Db {
   close(): void {
     this.db.close();
   }
-  addProject(project: Omit<ProjectRow, 'createdAt'>): void {
+  addProject(
+    project: Omit<
+      ProjectRow,
+      | 'createdAt'
+      | 'managerModel'
+      | 'defaultIntent'
+      | 'sandboxMode'
+      | 'sandboxNetwork'
+      | 'sandboxExtraWrite'
+      | 'sandboxAllowRead'
+    > & {
+      managerModel?: string | null;
+      defaultIntent?: string | null;
+    },
+  ): void {
     this.insert('projects', {
+      managerModel: null,
+      defaultIntent: null,
+      // Phase 5: every project starts sandboxed; opt out per project.
+      sandboxMode: 'workspace-write',
+      sandboxNetwork: 1,
+      sandboxExtraWrite: '',
+      sandboxAllowRead: '',
       ...project,
       createdAt: new Date().toISOString(),
     });
@@ -579,8 +551,9 @@ export class Db {
   }
   /**
    * Latest non-archived conversation in a scope that scope-level wakes may
-   * target. Manager conversations are excluded: untargeted notifications
-   * (inbox scans, goal wakes) belong to the chief, not the project manager.
+   * target. Manager conversations are excluded: untargeted Global wakes
+   * (inbox scans, goal wakes) belong to the chief. Project-scope wakes go to
+   * the manager instead — see `managerConversation`.
    */
   latestConversation(scopeId: string): ConversationRow | undefined {
     const value = this.db
@@ -609,6 +582,15 @@ export class Db {
         )
         .get(conversationId),
     );
+  }
+  /** The project a manager-bound conversation supervises, if any. */
+  managerProjectId(conversationId: string): string | null {
+    const row = this.db
+      .prepare(
+        "SELECT external_id FROM channel_sessions WHERE channel = 'manager' AND conversation_id = ?",
+      )
+      .get(conversationId) as { external_id: string } | undefined;
+    return row?.external_id ?? null;
   }
   /** Every conversation id currently bound as a project manager. */
   managerConversationIds(): string[] {
@@ -997,10 +979,14 @@ export class Db {
         .all(runId),
     );
   }
-  chiefReplyAfter(runId: string, seq: number): AgentMessageRow | undefined {
+  /** The next supervisor (manager) message in a run's thread after `seq`. */
+  supervisorReplyAfter(
+    runId: string,
+    seq: number,
+  ): AgentMessageRow | undefined {
     const value = this.db
       .prepare(
-        "SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? AND sender = 'chief' AND rowid > ? ORDER BY rowid LIMIT 1",
+        "SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? AND sender = 'manager' AND rowid > ? ORDER BY rowid LIMIT 1",
       )
       .get(runId, seq);
     return value ? row<AgentMessageRow>(value) : undefined;
@@ -1009,7 +995,7 @@ export class Db {
     return rows(
       this.db
         .prepare(
-          "SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? AND delivered_at IS NULL AND sender = 'chief' ORDER BY rowid",
+          "SELECT rowid AS seq, * FROM agent_messages WHERE run_id = ? AND delivered_at IS NULL AND sender = 'manager' ORDER BY rowid",
         )
         .all(runId),
     );

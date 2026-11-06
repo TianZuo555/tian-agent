@@ -148,26 +148,30 @@ export function relevantContext(
   return lines.join('\n');
 }
 
+/**
+ * Lexically relevant memories, notes and history for the current turn. The
+ * chief searches the Global scope; a manager searches only its own project —
+ * its window on General is the curated General Core in <memory> (M6).
+ */
 export function relevantMemorySection(
   deps: {
     db: Db;
     scopes: Scopes;
     currentInput: (id: string) => Promise<{ text: string } | null>;
   },
-  withProject: boolean,
+  actor: 'chief' | 'manager',
 ) {
   return section('relevant_context', async (input) => {
     const id = String(input.conversationId);
     const scope = deps.db.conversationScope(id);
     const turn = await deps.currentInput(id);
-    const scopes =
-      withProject && scope !== 'global' ? ['global', scope] : ['global'];
+    const scopeIds = actor === 'manager' ? [scope] : ['global'];
     const task = deps.db
       .listTasks(scope)
       .find((task) => task.status === 'running');
     return relevantContext(
       deps,
-      scopes,
+      scopeIds,
       `${turn?.text ?? ''} ${task?.title ?? ''}`,
     );
   });

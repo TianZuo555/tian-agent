@@ -14,6 +14,8 @@ import type {
   MemoryDump,
   MemoryRevisionResult,
   ProjectPatch,
+  ProviderConfig,
+  ProviderInfo,
   RunInfo,
   ScopeInfo,
   SettingsInfo,
@@ -25,6 +27,8 @@ import type {
   ServiceInfo,
   UsageStats,
   WechatStatus,
+  WorkerSettingsInfo,
+  RuntimeStatusInfo,
 } from './types';
 
 import type { DesktopApi, ServiceActivity } from './desktop';
@@ -141,26 +145,130 @@ export interface Commands {
   wechatStatus: Command<[], WechatStatus>;
   wechatRelogin: Command<[], WechatStatus>;
   setModel: Command<[model: SettingsInfo['model']], void>;
+  /** The default Manager model (D21); null falls back to the chief model. */
+  setManagerModel: Command<[model: SettingsInfo['model'] | null], void>;
   modelCatalog: Command<[], ModelCatalog>;
   refreshModels: Command<[], ModelCatalog>;
+  /** pi-ai built-in provider ids for the add-provider form. */
+  builtinProviders: Command<[], { id: string; name: string; oauth: boolean }[]>;
+  /** Provider CRUD and credentials — secrets never come back (D21). */
+  listProviders: Command<[], ProviderInfo[]>;
+  addProvider: Command<[config: ProviderConfig], ProviderInfo[]>;
+  updateProvider: Command<[id: string, config: ProviderConfig], ProviderInfo[]>;
+  removeProvider: Command<[id: string], ProviderInfo[]>;
+  setProviderKey: Command<[id: string, key: string], ProviderInfo[]>;
+  deleteProviderKey: Command<[id: string], ProviderInfo[]>;
+  /** OAuth login; progress streams as 'providerLogin' events. */
+  providerLogin: Command<[id: string], ProviderInfo[]>;
+  providerLoginAnswer: Command<
+    [id: string, promptId: string, answer: string],
+    void
+  >;
+  providerLoginCancel: Command<[id: string], void>;
+  /** Whole-block replace of worker runtimes, caps and intents (M6). */
+  setWorkers: Command<[workers: WorkerSettingsInfo], void>;
+  /** Whether an external runtime's CLI is installed and signed in right now. */
+  runtimeStatus: Command<[runtime: string], RuntimeStatusInfo>;
   usageStats: Command<[scopeId: string | null], UsageStats>;
 }
 
 const id = Type.String({ minLength: 1, maxLength: 256 });
 const text = Type.String({ minLength: 1, maxLength: 100_000 });
 const nullableId = Type.Union([id, Type.Null()]);
+const model = Type.Object(
+  {
+    provider: id,
+    modelId: id,
+  },
+  { additionalProperties: false },
+);
+const workerIntent = Type.Object(
+  {
+    name: Type.String({
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[a-z][a-z0-9_-]*$',
+    }),
+    runtime: Type.String({
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[a-z][a-z0-9_-]*$',
+    }),
+    model: Type.Optional(
+      Type.Union([Type.String({ maxLength: 512 }), Type.Null()]),
+    ),
+    thinkingLevel: Type.Optional(
+      Type.Union([Type.String({ maxLength: 64 }), Type.Null()]),
+    ),
+    purpose: Type.Optional(Type.String({ maxLength: 2000 })),
+  },
+  { additionalProperties: false },
+);
+const workerSettings = Type.Object(
+  {
+    maxConcurrent: Type.Integer({ minimum: 1, maximum: 64 }),
+    runtimes: Type.Array(
+      Type.Object(
+        {
+          id: Type.String({
+            minLength: 1,
+            maxLength: 64,
+            pattern: '^[a-z][a-z0-9_-]*$',
+          }),
+          enabled: Type.Boolean(),
+          maxConcurrent: Type.Optional(
+            Type.Union([
+              Type.Integer({ minimum: 1, maximum: 64 }),
+              Type.Null(),
+            ]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 32 },
+    ),
+    intents: Type.Array(workerIntent, { maxItems: 64 }),
+  },
+  { additionalProperties: false },
+);
+const providerConfig = Type.Object(
+  {
+    id: Type.String({
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[a-z0-9][a-z0-9_-]*$',
+    }),
+    kind: Type.Union([Type.Literal('gateway'), Type.Literal('builtin')]),
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+    baseUrl: Type.Optional(Type.String({ maxLength: 2048 })),
+    builtinId: Type.Optional(Type.String({ maxLength: 64 })),
+    enabled: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
 const patch = Type.Partial(
   Type.Object({
     name: Type.String({ minLength: 1, maxLength: 200 }),
     rootPath: Type.String({ minLength: 1, maxLength: 4096 }),
     autoLand: Type.Boolean(),
     allowInPlace: Type.Boolean(),
-    agentKind: Type.Literal('durable-worker'),
+    // '' or NULL clears it; absent keeps the current value. The service
+    // validates that a non-empty value names a configured intent.
+    defaultIntent: Type.Union([Type.String({ maxLength: 64 }), Type.Null()]),
+    sandboxMode: Type.Union([
+      Type.Literal('off'),
+      Type.Literal('workspace-write'),
+    ]),
+    sandboxNetwork: Type.Boolean(),
+    sandboxExtraWrite: Type.String({ maxLength: 2000 }),
+    sandboxAllowRead: Type.String({ maxLength: 2000 }),
     // 0 = no run deadline; any positive value is the per-attempt limit in minutes.
     runTimeoutMin: Type.Integer({ minimum: 0, maximum: 1440 }),
     baseBranch: Type.String({ minLength: 1, maxLength: 256 }),
     promptPreamble: Type.String({ maxLength: 100_000 }),
     managerName: Type.String({ minLength: 1, maxLength: 200 }),
+    // 'provider:model' or null to clear the manager model override (D21).
+    managerModel: Type.Union([Type.String({ maxLength: 512 }), Type.Null()]),
   }),
   { additionalProperties: false },
 );
@@ -330,17 +438,22 @@ export const commandArgs = {
   getSettings: Type.Tuple([]),
   wechatStatus: Type.Tuple([]),
   wechatRelogin: Type.Tuple([]),
-  setModel: Type.Tuple([
-    Type.Object(
-      {
-        provider: Type.Literal('magpie'),
-        modelId: id,
-      },
-      { additionalProperties: false },
-    ),
-  ]),
+  setModel: Type.Tuple([model]),
+  setManagerModel: Type.Tuple([Type.Union([model, Type.Null()])]),
   modelCatalog: Type.Tuple([]),
   refreshModels: Type.Tuple([]),
+  builtinProviders: Type.Tuple([]),
+  listProviders: Type.Tuple([]),
+  addProvider: Type.Tuple([providerConfig]),
+  updateProvider: Type.Tuple([id, providerConfig]),
+  removeProvider: Type.Tuple([id]),
+  setProviderKey: Type.Tuple([id, Type.String({ maxLength: 4096 })]),
+  deleteProviderKey: Type.Tuple([id]),
+  providerLogin: Type.Tuple([id]),
+  providerLoginAnswer: Type.Tuple([id, id, Type.String({ maxLength: 4096 })]),
+  providerLoginCancel: Type.Tuple([id]),
+  setWorkers: Type.Tuple([workerSettings]),
+  runtimeStatus: Type.Tuple([Type.String()]),
   usageStats: Type.Tuple([nullableId]),
 } satisfies Record<keyof Commands, TSchema>;
 

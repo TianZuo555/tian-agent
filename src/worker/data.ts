@@ -252,7 +252,7 @@ export class DataService {
       this.db.addAgentMessage({
         id: `msg:${runId}:${operationId ?? randomUUID()}`,
         runId,
-        sender: 'chief',
+        sender: 'manager',
         body: body.trim(),
       }),
     );

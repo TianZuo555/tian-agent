@@ -25,24 +25,22 @@
 
 ## 归属（[D18](decisions.md#d18--记忆按角色归属总管管-global管理者管项目)）
 
-| 角色    | 写入        | 注入的 Core                    | 按需只读                                 |
-| ------- | ----------- | ------------------------------ | ---------------------------------------- |
-| Chief   | 只写 Global | 只有 Global                    | 任意项目的记忆与 Notes（带 `scope`）     |
-| Manager | 只写本项目  | Global + 本项目                | Global 记忆（`recall scope=global`）     |
-| Worker  | 不写        | 无（读取预算化的任务相关记忆） | 本项目 `recall` / `read_history`（只读） |
+| 角色    | 写入        | 注入的 Core     | 按需查询                                                                    |
+| ------- | ----------- | --------------- | --------------------------------------------------------------------------- |
+| Chief   | 只写 Global | 只有 Global     | Global 的记忆、Notes 与 History；任意项目的记忆与 Notes（带 `scope`，只读） |
+| Manager | 只写本项目  | Global + 本项目 | 只有本项目的记忆、Notes 与 History；Core 之外不能查询 Global                |
+| Worker  | 不写        | 无              | 无（没有记忆、Notes 与 History 工具；只有派发简报与 worktree）              |
 
 - 写工具（`remember` / `revise` / `promote` / `forget` / `select` / `deselect`）没有 `scope` / `target` 参数：目标由角色固定，`#seq` 永远指向自己那份记忆，不会误改别人的条目。
 - 总管在项目会话里学到的项目事实不自己记，转交该项目的管理者（`send_manager_msg` 或 `delegate` 简报）；管理者在 Tian 直连时听到与项目无关的个人信息也不写——由 Tian 直接告诉总管。
 - 跨 scope 的只读结果带 `read-only` 头，标明所有者，避免模型把对方的 `#seq` 当成自己的去修订。
 - 自动提取（Memory Worker）与 Memory 面板仍按 scope 工作，不受角色限制：候选落在来源会话所在的 scope，用户在面板上的操作视为 user。
 
-### 会话边界（提案）
+### 会话边界
 
 Scope 与角色一一对应：Global Scope 里只有总管会话（包括所有 Goal 会话），Project Scope 里只有该项目的管理者会话与工兵会话。因此下面的每条边界只按 Scope 执行。
 
 日常对话只留在总管这边。日常对话指 Global scope 会话的内容、Global History 与 Global Notes。边界按通道划分，不按内容划分：系统无法可靠判断一句话属于"日常"还是"项目"，但可以强制规定管理者能读哪些通道。
-
-代码缺口：目前 Project Scope 里有总管会话（项目 Goal 会话、`/scope <项目>` 之后的渠道会话、项目下其他非管理者会话）。按此边界，Goal 会话移到 Global Scope，项目入口路由到管理者（[channels.md](channels.md#telegram)），已有的总管会话迁出 Project Scope。
 
 日常对话中的信息只能经两个通道到达管理者：
 
@@ -55,21 +53,15 @@ Scope 与角色一一对应：Global Scope 里只有总管会话（包括所有 
 - Global Notes。
 - Core 之外的 Global Memory，包括 Global 的 candidate、superseded 与 deleted 记忆。
 
-判断标准：一条信息既不在 Global Core 里，也不在发给管理者的消息里，管理者就不知道它。要把日常对话中的信息传过去，总管要么把它选入 Global Core（关于 Tian、对所有项目都成立），要么作为总管消息发送（关于这个项目）。
-
-代码缺口：管理者的 `recall` 接受 `scope=global`，加上 `include_history=true` 时还会去掉状态过滤，所以管理者目前能读到全部 Global Memory，包括 candidate、superseded 与 deleted 条目。按此边界，要去掉管理者 `recall` 的 `scope` 参数，并同步修改管理者 prompt 的 `MEMORY` 段。
+判断标准：一条信息既不在 Global Core 里，也不在发给管理者的消息里，管理者就不知道它。要把日常对话中的信息传过去，总管要么把它选入 Global Core（关于 Tian、对所有项目都成立），要么作为总管消息发送（关于这个项目）。管理者的 `recall` 没有 scope 参数：它只搜本项目的 Memory，Core 之外的 Global 事实永远读不到。
 
 #### 总管
 
-规则是对称的：整理过的成品可以跨越边界，原始对话不能。总管只读项目的 active Memory 与 Notes。总管不读项目 History（管理者与工兵的 transcript、项目事件、Tian 与管理者的直接对话）。项目进展只经管理者的汇报（`report_chief`、委派 Task 的结果）与管理者的回答到达总管。
-
-代码缺口：总管的 `search_history` 接受项目 scope 或 `all`，`read_history` 可以展开任何引用（`tools-history.ts`）。按此边界，两者都限制在总管可读的 History 内。
+规则是对称的：整理过的成品可以跨越边界，原始对话不能。总管只读项目的 active Memory 与 Notes。总管不读项目 History（管理者与工兵的 transcript、项目事件、Tian 与管理者的直接对话）：`search_history` 只查 Global scope，`read_history` 拒绝属于项目的引用。项目进展只经管理者的汇报（`report_chief`、委派 Task 的结果）与管理者的回答到达总管。
 
 #### 工兵
 
-工兵没有记忆：没有跨 Run 的自有记忆，没有注入的上下文，也没有记忆查询。它的输入只有派发简报与 worktree（代码与 `AGENTS.md` 等仓库文档）。简报不够时，工兵向它的上级提问。工兵编码时需要的项目约定应放在仓库里，而不是只放在项目记忆里。
-
-代码缺口：工兵 prompt 注入 `<relevant_context>` 并指向项目 notes 目录，工兵还有 `recall` 与 `read_history`（`agents.ts`、`worker-tools.ts`）。按此边界，这些全部去掉。
+工兵没有记忆：没有跨 Run 的自有记忆，没有注入的上下文，也没有记忆查询——prompt 里只有派发简报，工具里没有 Memory、Notes 或 History 访问。它的输入只有派发简报与 worktree（代码与 `AGENTS.md` 等仓库文档）。简报不够时，工兵向它的管理者上级提问。工兵编码时需要的项目约定应放在仓库里，而不是只放在项目记忆里。
 
 ## Core Memory
 
@@ -128,9 +120,9 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 
 ## 任务相关上下文
 
-- Core 是按轮次稳定的显式快照；另有一条独立预算的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索本 Scope 的 Memory、Notes 与 History，默认 1200 tokens。它不会加载全量记忆，也不会跨越项目隔离。
+- Core 是按轮次稳定的显式快照；另有一条独立预算的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索 Memory、Notes 与 History，默认 1200 tokens。它不会加载全量记忆，也不会越过[会话边界](#会话边界)：总管的任务相关上下文只检索 Global，管理者的只检索本项目。
 - 检索使用共享 `planSearch` 与少量显式同义词（如 `中文`↔`Chinese`、`postgres`↔`PostgreSQL`）；这是可解释的词法检索，不是语义理解。
-- Worker 得到本项目的任务相关上下文，并可用只读 `recall` 继续查询、用 `read_history` 展开原始证据（`conv:<id>#<entry>` 与本项目的 `event:<id>`）；Worker 从不写记忆。
+- Worker 没有任务相关上下文（见[工兵](#工兵)）。
 - 被取代/删除记忆的旧 transcript 证据不会经任务相关 History 重新进入默认上下文：只去掉 History 条目中承载该旧断言的句子，同一条目里其他无关的句子仍可检索；若旧断言无法在条目中定位（例如改写后的断言引用整条），则整条不返回。
 - 每轮提取记录在 `memory_worker_runs`（触发原因、来源数、候选数、去重数），并写入 `events`（`memory.extracted`）。
 

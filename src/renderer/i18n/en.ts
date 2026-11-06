@@ -380,6 +380,8 @@ export const en = {
   'settings.section.general': 'General',
   'settings.section.appearance': 'Appearance',
   'settings.section.model': 'Model',
+  'settings.section.providers': 'Providers',
+  'settings.section.workers': 'Workers',
   'settings.section.usage': 'Usage',
   'settings.section.log': 'Improvement log',
   'settings.section.service': 'Service',
@@ -415,10 +417,14 @@ export const en = {
   'model.connected': 'Magpie connected',
   'model.unreachable': 'Magpie unreachable',
   'model.refresh': 'Refresh',
-  'model.default': 'Default model',
+  'model.chief': 'Chief model',
   'model.choose': 'Choose a model',
-  'model.desc':
-    'New conversations use the selected model; existing ones keep the model they started with.',
+  'model.chiefDesc':
+    'The Chief conversation and goal work use this model; a change applies from each conversation’s next turn.',
+  'model.manager': 'Default manager model',
+  'model.managerSame': 'Same as Chief',
+  'model.managerDesc':
+    'Project managers use this model unless a project overrides it in its settings.',
   'model.save': 'Save model',
   'model.unsaved': 'Unsaved change',
   'model.using': 'Using {id}',
@@ -427,6 +433,66 @@ export const en = {
   'model.gatewayDesc.mid': ' and ',
   'model.gatewayDesc.post': ' to point at a different gateway. Defaults to ',
   'model.gatewayDesc.tail': '.',
+
+  'providers.desc':
+    'Model providers: gateways with a discovered catalog and pi-ai built-ins. Secrets stay in the service — only their tail shows here.',
+  'providers.add': 'Add provider',
+  'providers.id': 'Provider id',
+  'providers.idPlaceholder': 'e.g. bigco',
+  'providers.name': 'Display name',
+  'providers.kind': 'Kind',
+  'providers.kind.gateway': 'Gateway',
+  'providers.kind.builtin': 'Built-in',
+  'providers.baseUrl': 'Base URL',
+  'providers.builtin': 'Built-in provider',
+  'providers.builtinChoose': 'Choose a built-in',
+  'providers.preset': 'preset',
+  'providers.enabled': 'Enabled',
+  'providers.removeAria': 'Remove provider {id}',
+  'providers.noKey': 'No credential stored',
+  'providers.setKey': 'Set key',
+  'providers.replaceKey': 'Replace key',
+  'providers.removeKey': 'Remove key',
+  'providers.keyPlaceholder': 'Paste API key',
+  'providers.keyAria': 'API key for {id}',
+  'providers.oauthCredential': 'OAuth',
+  'providers.login': 'Log in',
+  'providers.deviceCode': 'Code',
+  'providers.answer': 'Submit',
+  'providers.loginDone': 'Signed in.',
+  'providers.loginWaiting': 'Waiting for the provider…',
+
+  // ─── 18b. Workers ──────────────────────────────────────────────────────────
+  'workers.maxConcurrent': 'Max concurrent attempts',
+  'workers.maxConcurrentDesc':
+    'Worker attempts of every runtime share this cap. It protects local CPU, memory and builds.',
+  'workers.runtimes': 'Runtimes',
+  'workers.runtimesDesc':
+    'An attempt starts only when it holds a global slot and a slot of its runtime. A full runtime never blocks other runtimes.',
+  'workers.alwaysOn': 'always on',
+  'workers.statusSignIn': 'sign-in required',
+  'workers.statusMissing': 'not installed',
+  'workers.cap': 'Cap',
+  'workers.capUnset': 'unset',
+  'workers.enableRuntime': 'Enable runtime {id}',
+  'workers.intents': 'Intents',
+  'workers.intentsDesc':
+    'Named worker configurations a Manager can pick at dispatch, or set as a project default.',
+  'workers.none': 'No intents yet.',
+  'workers.addIntent': 'Add intent',
+  'workers.editIntent': 'Edit intent {name}',
+  'workers.removeIntent': 'Remove intent {name}',
+  'workers.intentName': 'Name',
+  'workers.intentNamePlaceholder': 'e.g. review',
+  'workers.intentRuntime': 'Runtime',
+  'workers.intentModel': 'Model',
+  'workers.modelDefault': 'Default model',
+  'workers.intentLevel': 'Thinking level',
+  'workers.levelDefault': 'Model default',
+  'workers.intentPurpose': 'Purpose',
+  'workers.intentPurposePlaceholder': 'What this intent is for',
+  'workers.intentPurposeDesc':
+    'Shown to the Manager in its state block so it can pick the right intent.',
 
   // ─── 19. Usage Heatmap ─────────────────────────────────────────────────────
   'usage.aria': 'Model usage in the last {weeks} weeks',
@@ -531,7 +597,7 @@ export const en = {
   'service.installTitleUpgrade': 'Upgrade the bundled background service?',
   'service.installTitle': 'Install and start the background service?',
   'service.installDesc':
-    'Uses the service and runtime bundled with this app. Existing data is kept; the connection drops briefly during the upgrade and the database is backed up first. Running tasks must finish first.',
+    'Uses the service and runtime bundled with this app. The connection drops briefly during the upgrade. The database is backed up first; if the new version changes the database schema, it starts with an empty database and the backup keeps the old data. Running tasks must finish first.',
   'service.upgrade': 'Upgrade bundled service',
   'service.install': 'Install & start service',
   'service.importApp': 'Import new app…',
@@ -593,6 +659,20 @@ export const en = {
   'project.managerNamePlaceholder': 'e.g. 阿七',
   'project.managerNameHint':
     "Required. Every project gets a manager that keeps the project's memory and notes; this is what you and the chief call it.",
+  'project.managerModel': 'Manager model',
+  'project.managerModelDefault': 'Default',
+  'project.managerModelHint':
+    'Overrides the default manager model for this project only. The change applies from the next turn.',
+  'project.defaultIntent': 'Default worker intent',
+  'project.defaultIntentNone': 'No default (Pi worker)',
+  'project.defaultIntentHint':
+    'Runs dispatched without an explicit choice use this intent.',
+  'project.sandbox': 'Sandbox worker commands (macOS Seatbelt)',
+  'project.sandboxOffWarning':
+    'Without the sandbox, Worker commands run with your full user rights. They can write outside the worktree and reach the service socket; a Codex Worker also can change its own configuration.',
+  'project.sandboxNetwork': 'Allow external network inside the sandbox',
+  'project.sandboxExtraWrite': 'Extra writable paths (one per line)',
+  'project.sandboxAllowRead': 'Allowed sensitive reads (one per line)',
   'project.saveAria': 'Save settings for {name}',
 } as const;
 

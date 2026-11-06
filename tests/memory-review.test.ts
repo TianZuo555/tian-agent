@@ -207,7 +207,6 @@ test('relevant context is bounded, scoped, and excludes superseded history', (t)
     rootPath: join(temporary(t), 'project'),
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -259,7 +258,6 @@ test('extractor rewrites keep the original source text as evidence', async (t) =
     rootPath: join(dir, 'p1'),
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -326,7 +324,6 @@ test('a dismissal is scoped and keeps case and conditions', async (t) => {
       rootPath: join(dir, id),
       autoLand: 0,
       allowInPlace: 0,
-      agentKind: 'durable-worker',
       runTimeoutMin: 30,
       baseBranch: 'main',
       promptPreamble: '',
@@ -656,7 +653,6 @@ test('an obsolete fact hides only its own sentence of a history entry', (t) => {
     rootPath: join(temporary(t), 'project'),
     autoLand: 0,
     allowInPlace: 0,
-    agentKind: 'durable-worker',
     runTimeoutMin: 30,
     baseBranch: 'main',
     promptPreamble: '',
@@ -717,73 +713,20 @@ test('the memory panel replacement is forwarded through the command bridge', asy
   assert.deepEqual(calls, [['global', 2, replacement]]);
 });
 
-test('worker read_history expands project events and rejects other projects', async (t) => {
+test('the worker extension exposes no memory, notes or history tools', async (t) => {
   const { db } = store(t);
-  for (const id of ['p1', 'p2'])
-    db.addProject({
-      id,
-      name: id,
-      rootPath: join(temporary(t), id),
-      autoLand: 0,
-      allowInPlace: 0,
-      agentKind: 'durable-worker',
-      runTimeoutMin: 30,
-      baseBranch: 'main',
-      promptPreamble: '',
-      managerName: 'Manager',
-    });
-  db.addRun({
-    id: 'r1',
-    projectId: 'p1',
-    rootPath: '/tmp/p1',
-    baseBranch: 'main',
-    prompt: 'test',
-    currentPrompt: 'test',
-    agentKind: 'durable-worker',
-    conversationId: 'worker-conv',
-    chiefConversationId: null,
-    executionMode: 'in-place',
-    worktreePath: null,
-    branch: null,
-    status: 'running',
-    reviewStatus: 'pending',
-    attempt: 1,
-    error: null,
-    prUrl: null,
-    reportPath: null,
-    exitCode: null,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    deadlineAt: new Date(Date.now() + 60_000).toISOString(),
-  });
-  const events = new EventLog(db);
-  events.record({
-    id: 'e1',
-    type: 'task.completed',
-    actor: 'worker',
-    scopeId: 'p1',
-    summary: 'Deploy finished on staging',
-  });
-  events.record({
-    id: 'e2',
-    type: 'task.completed',
-    actor: 'worker',
-    scopeId: 'p2',
-    summary: 'Other project secret',
-  });
-  const read = workerExtension({ db, wake: async () => {} }).tools?.find(
-    (tool) => tool.name === 'read_history',
-  ) as unknown as {
-    execute: (
-      args: Record<string, unknown>,
-      api: Record<string, unknown>,
-    ) => Promise<{ isError?: boolean; output: { text: string }[] }>;
-  };
-  const api = { conversationId: 'worker-conv', taskId: 't', callId: 'c' };
-  const own = await read.execute({ ref: 'event:e1' }, api);
-  assert.equal(own.isError, undefined);
-  assert.match(own.output[0].text, /Deploy finished on staging/);
-  const other = await read.execute({ ref: 'event:e2' }, api);
-  assert.equal(other.isError, true);
-  assert.doesNotMatch(other.output[0].text, /secret/);
+  const names = (workerExtension({ db, wake: async () => {} }).tools ?? []).map(
+    (tool) => tool.name,
+  );
+  for (const name of [
+    'recall',
+    'read_history',
+    'search_history',
+    'read_note',
+    'list_notes',
+    'search_notes',
+    'write_note',
+    'remember',
+  ])
+    assert.ok(!names.includes(name), name);
 });

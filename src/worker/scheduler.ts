@@ -1,4 +1,5 @@
 import { Cron } from 'croner';
+import { GLOBAL_SCOPE } from './scopes.js';
 import type { Db } from './db.js';
 import type { GoalStore } from './goals.js';
 import type { IssueReporter } from './improvements.js';
@@ -35,7 +36,7 @@ export interface SchedulerDeps {
   db: Db;
   goals: GoalStore;
   /** Return the goal's stable chief conversation id, creating it once. */
-  ensureGoalConversation: (goalId: string, scopeId: string) => Promise<string>;
+  ensureGoalConversation: (goalId: string) => Promise<string>;
   /** Trigger delivery of queued notifications. */
   notify: () => Promise<void>;
   /** Injectable clock. */
@@ -137,10 +138,7 @@ export class GoalScheduler {
     const goal = this.deps.goals.getGoal(schedule.goalId);
     if (!goal) return '';
     if (goal.conversationId) return goal.conversationId;
-    const conversationId = await this.deps.ensureGoalConversation(
-      goal.id,
-      goal.scopeId,
-    );
+    const conversationId = await this.deps.ensureGoalConversation(goal.id);
     this.deps.goals.setGoalConversation(goal.id, conversationId);
     return conversationId;
   }
@@ -197,10 +195,7 @@ export class GoalScheduler {
       throw new Error(`Goal is ${goal.status}, not active — resume it first.`);
     const now = this.now;
     if (!goal.conversationId) {
-      const conversationId = await this.deps.ensureGoalConversation(
-        goal.id,
-        goal.scopeId,
-      );
+      const conversationId = await this.deps.ensureGoalConversation(goal.id);
       this.deps.goals.setGoalConversation(goal.id, conversationId);
     }
     const task = this.deps.db.transaction(() => {
@@ -247,10 +242,12 @@ export class GoalScheduler {
   }): TaskItem {
     const { db, goals } = this.deps;
     const { goal, now } = input;
+    // A goal's run tasks are the chief's work items: they live in Global
+    // even when the goal keeps a project reference (M6).
     if (this.overCap(goal, now)) {
       // One blocked task per goal per day, whatever requested the run.
       const task = db.insertTask({
-        scopeId: goal.scopeId,
+        scopeId: GLOBAL_SCOPE,
         title: input.title,
         status: 'blocked',
         goalId: goal.id,
@@ -270,7 +267,7 @@ export class GoalScheduler {
       return task;
     }
     return db.insertTask({
-      scopeId: goal.scopeId,
+      scopeId: GLOBAL_SCOPE,
       title: input.title,
       goalId: goal.id,
       owner: 'agent',
