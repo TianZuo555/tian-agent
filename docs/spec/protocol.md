@@ -133,7 +133,7 @@ Every event carries a connection-level sequence and a per-channel revision:
 
 - `requestId` is **required** for every write in v1 (for example `submit`, `addProject`, `addTask`, `doneTask`, `createGoal`, `updateGoal`, `setGoalStatus`, `addSchedule`, `followUpRun`, `landRun`, `shipRun`, `discardRun`, `uploadAttachment`, `resolveApproval`, `setProviderKey`, `setWorkers`). Protocol 13 predates it: only `submit` has an optional `requestId`. During the compatibility window, protocol-13 connections keep every current write signature; the server generates and logs a compatibility id when a protocol-13 write omits one.
 - The client generates `requestId` once per user intent — a click, a submit, an approval — and keeps it for every retry of that intent, including retries after reconnect or app restart.
-- The server keeps a dedupe record `(deviceId, command, requestId) → result` for 7 days or until the intent's turn finishes plus 24 h, whichever is longer. A duplicate returns the original result with `deduped: true`. Protocol-13 writes with a generated compatibility id keep their current non-idempotent behavior during the compatibility window. Attachment chunks use `(uploadId, offset)` as their idempotency key instead.
+- The server keeps a dedupe record `(deviceId, command, requestId) → result` for 7 days or until the intent's turn finishes plus 24 h, whichever is longer. A duplicate returns the original result with `deduped: true`. Protocol-13 writes with a generated compatibility id keep their current non-idempotent behavior during the compatibility window. Attachment chunks use `(deviceId, uploadId, offset)` as their idempotency key instead.
 - The server never deduplicates by message text.
 
 ## 9. Multi-Device Semantics
@@ -174,7 +174,7 @@ Commands added for the chat-first client (required for v1):
 - `markRead(conversationId, messageId)` → `{ unread }`.
 - `searchConversations(query, { limit })` → `ConversationInfo[]`. History search already exists as agent tools (`search_history`); the client needs the same index.
 - `listDirectory(path)` → `{ entries: [{ name, path, kind }] }`. Runs execute on the server, so project paths are server paths. A remote client browses the server's filesystem through this command instead of a native picker.
-- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The first call passes `null` for `uploadId`; later calls pass the returned id. Send each chunk as its own write with a distinct `requestId`; the server treats `(uploadId, offset)` as the chunk's idempotency key, and `path` is set under `<dataDir>/attachments/` when `received` equals `size`.
+- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The client generates a stable `uploadId` before the first chunk, so a retry keeps the same id. Send each chunk as its own write with a distinct `requestId`; the server treats `(deviceId, uploadId, offset)` as the chunk's idempotency key, rejects a reused id with different metadata, and sets `path` under `<dataDir>/attachments/` when `received` equals `size`.
 - `resolveApproval(approvalId, decision: 'allow' | 'deny')` → `{ resolved: boolean }`. The approval card in [ui.md](ui.md) uses this; the server records the decision and wakes the blocked turn.
 
 ## 11. Security
