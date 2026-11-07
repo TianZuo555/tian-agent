@@ -84,7 +84,7 @@ Rules:
 - Multiline input. `Enter` sends, `Shift+Enter` inserts a newline on desktop; on mobile the keyboard's send key sends.
 - While a turn streams, the send button becomes `Stop` (maps to `abort`). Typing during streaming is allowed; sending queues a follow-up and shows "Queued · 1" with the server's queue position.
 - Model and thinking level: shown in the composer footer; changed through a popup (D13 semantics: per-conversation default, per-Run override when dispatching).
-- Attachments: v1 supports text files and images. Every client opens a local picker (the share sheet on mobile), downscales images to a 2560 px long edge, and uploads the bytes with `uploadAttachment`; the server returns a path, and the message references it. `listDirectory` is only for server-side project files, never the attachment source.
+- Attachments: v1 supports text files and images. Every client opens a local picker (the share sheet on mobile), downscales images to a 2560 px long edge, and uploads the bytes with `uploadAttachment`; the server returns a path, and the message references it. Clients fetch the bytes with `readAttachment` and show a placeholder while offline. `listDirectory` is only for server-side project files, never the attachment source.
 - Slash commands are not part of v1. The command palette covers actions.
 
 ## 6. Inspector

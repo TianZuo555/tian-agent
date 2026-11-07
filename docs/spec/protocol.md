@@ -164,7 +164,7 @@ Current state: 75 commands in `src/shared/contracts.ts`, validated with TypeBox 
 | Providers               | `listProviders`, `addProvider`, `updateProvider`, `removeProvider`, `setProviderKey`, `deleteProviderKey`, `providerLogin`, `providerLoginAnswer`, `providerLoginCancel` | Keep                                                                                                  |
 | Workers                 | `setWorkers`, `runtimeStatus`                                                                                                                                            | Keep                                                                                                  |
 | Channels                | `wechatStatus`, `wechatRelogin`                                                                                                                                          | Keep                                                                                                  |
-| Attachments             | —                                                                                                                                                                        | Add `uploadAttachment` for client-local files                                                         |
+| Attachments             | —                                                                                                                                                                        | Add `uploadAttachment` and `readAttachment` for client-local files                                    |
 | Approvals               | —                                                                                                                                                                        | Add `resolveApproval` for the blocking approval card                                                  |
 | Devices                 | —                                                                                                                                                                        | Add `listDevices`, `revokeDevice`                                                                     |
 
@@ -175,6 +175,7 @@ Commands added for the chat-first client (required for v1):
 - `searchConversations(query, { limit })` → `ConversationInfo[]`. History search already exists as agent tools (`search_history`); the client needs the same index.
 - `listDirectory(path)` → `{ entries: [{ name, path, kind }] }`. Runs execute on the server, so project paths are server paths. A remote client browses the server's filesystem through this command instead of a native picker.
 - `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The client generates a stable `uploadId` before the first chunk, so a retry keeps the same id. Send each chunk as its own write with a distinct `requestId`; the server treats `(deviceId, uploadId, offset)` as the chunk's idempotency key, rejects a reused id with different metadata, and sets `path` under `<dataDir>/attachments/` when `received` equals `size`.
+- `readAttachment(path, offset, length)` → `{ mediaType, totalBytes, dataBase64, nextOffset? }`. Every client fetches attachment bytes through this command; the server canonicalizes the path, serves only a path under `<dataDir>/attachments/`, and returns chunks under the frame limit. Clients show a placeholder while offline.
 - `resolveApproval(approvalId, decision: 'allow' | 'deny')` → `{ resolved: boolean }`. The approval card in [ui.md](ui.md) uses this; the server records the decision and wakes the blocked turn.
 
 ## 11. Security
@@ -182,6 +183,7 @@ Commands added for the chat-first client (required for v1):
 - The WebSocket listener accepts only tailnet peers. Check the peer address at accept time, then `WhoIs`, then the device record; drop the socket on any failure without an application frame.
 - `wss` only off-localhost. Reject `Origin` headers from browsers other than the configured web origin (the web build is served from the tailnet host in v1).
 - Commands run with the server user's privileges; there is no per-command sandbox. The trust boundary is the tailnet plus the device list, so the ACL must limit the server port to the user's own devices.
+- Attachment reads and writes are confined to `<dataDir>/attachments/`; a path outside it is rejected.
 - The server logs device id, node id, and command name per request. It never logs message bodies or model keys.
 - Model keys live only on the server (`<dataDir>/service.env`, `0600`).
 
@@ -198,7 +200,7 @@ Commands added for the chat-first client (required for v1):
 2. Make `requestId` required for writes on protocol 14; the new client generates it. Keep every protocol-13 write signature unchanged for one cycle; the server generates and logs a compatibility id when a protocol-13 write omits one.
 3. Add `seq`, `revision`, and the one published frame limit. Gate `ping` to protocol 14; protocol-13 connections keep TCP keepalive. Existing event consumers ignore unknown fields.
 4. Add the WebSocket listener and device table. No change to the Unix socket path.
-5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `uploadAttachment`, `resolveApproval`, `listDevices`, `revokeDevice`.
+5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `uploadAttachment`, `readAttachment`, `resolveApproval`, `listDevices`, `revokeDevice`.
 6. Set `SERVICE_PROTOCOL` to 14 when negotiation and the required `requestId` land; drop the protocol-13 `ready` handshake, its write signatures, and the compatibility ids in the next release.
 
 ## 14. Open Questions

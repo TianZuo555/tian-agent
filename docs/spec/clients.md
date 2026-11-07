@@ -83,7 +83,7 @@ Web target specifics: the web build is served by the server at the tailnet host 
 - Cold start shows cached content immediately, then reconciles with the server. The UI marks cached data only when it is disconnected (banner in [ui.md](ui.md#9-states)).
 - Offline is read-only. The composer is disabled with a reason. No client-side write queue exists; a pending intent is a user-visible failed send with a retry that reuses the same `requestId`.
 - Cache limits: 200 MiB per server, LRU by conversation; clearing the cache is a Settings action.
-- Attachments and images are not cached in v1; they show a placeholder when offline.
+- Attachments and images are not cached in v1; they are fetched with `readAttachment` on open and show a placeholder when offline.
 
 ## 6. Platform Services Matrix
 
