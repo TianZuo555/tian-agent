@@ -131,7 +131,7 @@ Every event carries a connection-level sequence and a per-channel revision:
 
 ## 8. Idempotency and Retries
 
-- `requestId` is **required** for every write in v1 (for example `submit`, `addProject`, `addTask`, `doneTask`, `createGoal`, `updateGoal`, `setGoalStatus`, `addSchedule`, `followUpRun`, `landRun`, `shipRun`, `discardRun`, `setProviderKey`, `setWorkers`). In protocol 13 it is optional and only on `submit`.
+- `requestId` is **required** for every write in v1 (for example `submit`, `addProject`, `addTask`, `doneTask`, `createGoal`, `updateGoal`, `setGoalStatus`, `addSchedule`, `followUpRun`, `landRun`, `shipRun`, `discardRun`, `uploadAttachment`, `resolveApproval`, `setProviderKey`, `setWorkers`). In protocol 13 it is optional and only on `submit`.
 - The client generates `requestId` once per user intent — a click, a submit, an approval — and keeps it for every retry of that intent, including retries after reconnect or app restart.
 - The server keeps a dedupe record `(conversationId, requestId) → result` for 7 days or until the intent's turn finishes plus 24 h, whichever is longer. A duplicate returns the original result with `deduped: true`.
 - The server never deduplicates by message text.
@@ -155,7 +155,7 @@ Current state: 75 commands in `src/shared/contracts.ts`, validated with TypeBox 
 | Turns                   | `submit`, `abort`, `watch`, `unwatch`                                                                                                                                    | `requestId` required for `submit`; `watch` → `subscribe` (alias kept)                                 |
 | Tasks, goals, schedules | `listTasks`, `addTask`, `doneTask`, `listGoals`, `createGoal`, `updateGoal`, `setGoalStatus`, `runGoalNow`, `addSchedule`, `removeSchedule`                              | Keep                                                                                                  |
 | Runs                    | `runList`, `runReport`, `runDiff`, `followUpRun`, `stopRun`, `landRun`, `discardRun`, `shipRun`                                                                          | Keep; `dispatch` and `sendRunMsg` stay agent tools, not socket commands                               |
-| Memory                  | `memoryDump`, `memoryRevise`, `memoryForget`, `memoryPromote`, `memoryDismiss`, `memorySelect`, `memoryDeselect`                                                         | Keep; read-mostly from the client                                                                     |
+| Memory                  | `memoryDump`, `memoryRevise`, `memoryForget`, `memoryPromote`, `memoryDismiss`, `memorySelect`, `memoryDeselect`                                                         | Keep; read-mostly from the client; confirm a candidate with `memoryPromote` before `memorySelect`     |
 | Inbox, notices          | `inboxList`, `listNotices`                                                                                                                                               | Keep                                                                                                  |
 | Improvements            | `listImprovements`, `getImprovement`, `addImprovement`, `setImprovementStatus`, `promoteImprovement`, `reportClientIssue`                                                | Keep                                                                                                  |
 | Skills                  | `skillList`, `skillHistory`, `skillApprove`, `skillRetire`, `skillRollback`                                                                                              | Keep                                                                                                  |
@@ -198,7 +198,7 @@ Commands added for the chat-first client (required for v1):
 2. Make `requestId` required for writes; the new client generates it. Keep accepting `submit` without it for one cycle (server generates and logs a warning).
 3. Add `seq`, `revision`, and the one published frame limit. Gate `ping` to protocol 14; protocol-13 connections keep TCP keepalive. Existing event consumers ignore unknown fields.
 4. Add the WebSocket listener and device table. No change to the Unix socket path.
-5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `listDevices`, `revokeDevice`.
+5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `uploadAttachment`, `resolveApproval`, `listDevices`, `revokeDevice`.
 6. Set `SERVICE_PROTOCOL` to 14 when negotiation and the required `requestId` land; drop the protocol-13 `ready` handshake and optional `requestId` in the next release.
 
 ## 14. Open Questions

@@ -59,18 +59,18 @@ A conversation maps 1:1 to a Pi session. Its messages are the Pi transcript, tra
 
 One message renders as one or more blocks. The server decides order and ownership; the client decides only presentation.
 
-| Block            | Content                                                                                                                              | Rules                                                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| User text        | plain text with markdown                                                                                                             | Optimistic echo only until the server snapshot arrives; then the server version replaces it (same `messageId`) |
-| Assistant text   | markdown through NSH `TextView` (headings, lists, code, tables, mermaid where supported)                                             | Rendered incrementally during streaming, throttled to 20 Hz; never re-run a completed block's parse            |
-| Tool activity    | a folded group of tool calls for one round (Chief and Manager only): tool name, one-line argument summary, status, expandable output | Collapsed by default; errors auto-expand; grouped by round, not by tool; Worker tools never appear here        |
-| Progress card    | a Run's four phases on a rail (Understand, Edit, Verify, Report), one plain sentence, elapsed time, change stats                     | At most one per Run thread, updated in place; never show raw Worker output                                     |
-| Approval card    | a request that blocks the agent: destructive operation, missing credential, ambiguous decision                                       | Inline buttons `Allow` / `Deny` plus details; answers map to `resolveApproval` (new in v1)                     |
-| Notice card      | a user notice with severity and a link to the related Goal/Run/Task                                                                  | Resolve/dismiss inline                                                                                         |
-| Run summary      | attempts, changed files, diff link, and `Land` / `Ship` / `Discard`                                                                  | One per completed Run; actions confirm with the target branch                                                  |
-| Memory candidate | an extracted memory with evidence and `Select` / `Dismiss` / `Revise`                                                                | Appears in the owning bot's chat; same commands as the inspector                                               |
-| Error            | command or streaming failure with a retry action                                                                                     | Never replaces the last good message                                                                           |
-| System           | scope change, model switch, archival, divider between sessions                                                                       | Low contrast, no actions                                                                                       |
+| Block            | Content                                                                                                                              | Rules                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| User text        | plain text with markdown                                                                                                             | Optimistic echo only until the server snapshot arrives; then the server version replaces it (same `messageId`)                 |
+| Assistant text   | markdown through NSH `TextView` (headings, lists, code, tables, mermaid where supported)                                             | Rendered incrementally during streaming, throttled to 20 Hz; never re-run a completed block's parse                            |
+| Tool activity    | a folded group of tool calls for one round (Chief and Manager only): tool name, one-line argument summary, status, expandable output | Collapsed by default; errors auto-expand; grouped by round, not by tool; Worker tools never appear here                        |
+| Progress card    | a Run's four phases on a rail (Understand, Edit, Verify, Report), one plain sentence, elapsed time, change stats                     | At most one per Run thread, updated in place; never show raw Worker output                                                     |
+| Approval card    | a request that blocks the agent: destructive operation, missing credential, ambiguous decision                                       | Inline buttons `Allow` / `Deny` plus details; answers map to `resolveApproval` (new in v1)                                     |
+| Notice card      | a user notice with severity and a link to the related Goal/Run/Task                                                                  | Dismiss inline; the client hides it locally (no server mutation in v1)                                                         |
+| Run summary      | attempts, changed files, diff link, and `Land` / `Ship` / `Discard`                                                                  | One per completed Run; actions confirm with the target branch                                                                  |
+| Memory candidate | an extracted memory with evidence and `Confirm` / `Confirm and select into Core` / `Revise` / `Reject`                               | Appears in the owning bot's chat; confirmation uses `memoryPromote` and activates the candidate before optional Core selection |
+| Error            | command or streaming failure with a retry action                                                                                     | Never replaces the last good message                                                                                           |
+| System           | scope change, model switch, archival, divider between sessions                                                                       | Low contrast, no actions                                                                                                       |
 
 Rules:
 
@@ -89,13 +89,13 @@ Rules:
 
 ## 6. Inspector
 
-| Tab     | Content                                                   | Notes                                                |
-| ------- | --------------------------------------------------------- | ---------------------------------------------------- |
-| Tasks   | the scope's tasks: open, due, done; quick add             | Owner badges (user / agent)                          |
-| Runs    | runs of the scope: state, attempts, branch, review state  | Row opens the Run thread or the diff                 |
-| Notes   | project notes for the Manager's scope                     | Read-only in v1                                      |
-| Memory  | memories for the scope: Core selection, candidates, usage | Read-mostly; write actions open the tool-driven flow |
-| Details | scope, manager name, model, token usage, archive          | —                                                    |
+| Tab     | Content                                                   | Notes                                                                                      |
+| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Tasks   | the scope's tasks: open, due, done; quick add             | Owner badges (user / agent)                                                                |
+| Runs    | runs of the scope: state, attempts, branch, review state  | Row opens the Run thread or the diff                                                       |
+| Notes   | project notes for the Manager's scope                     | Read-only in v1                                                                            |
+| Memory  | memories for the scope: Core selection, candidates, usage | Read-mostly; candidate review uses Confirm / Revise / Reject, then optional Core selection |
+| Details | scope, manager name, model, token usage, archive          | —                                                                                          |
 
 Inspector state is per window and does not persist across launches in v1.
 

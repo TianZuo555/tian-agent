@@ -10,7 +10,7 @@ Pi runs as one server on one machine. It is the single writer: it owns the Postg
 
 ```
 Pi Server  (one machine: launchd/systemd, PostgreSQL, Durable, tools, keys)
-    │  Pi Server API v1: hello · call · event · resume
+    │  Pi Server API v1: hello · request · event · resume
     ├── NSH app on macOS      (AppKit)
     ├── NSH app on Windows    (Win32)
     ├── NSH app on Linux      (GTK 4)
