@@ -83,7 +83,7 @@ Electron 客户端在移除前沿用旧的「墨色单色」语言。旧版本�
 | 数据与元数据 | Geist Mono                                | 9.5–12px；ID、时间、模型、路径             |
 | 分组标题     | Geist Mono，大写，字距 `0.12em`           | 10px                                       |
 
-消息正文最宽 720px。对话字号 15px / 1.7 由 D23 确定，取代草案 `docs/spec/ui.md` §11 中的 16px / 1.5。
+消息正文最宽 720px。对话字号 15px / 1.7 由 D23 确定，已写入 `docs/spec/ui.md` §11。
 
 ## 6. 形状
 
@@ -193,10 +193,9 @@ macOS：从齿轮或 `⌘,` 打开，盖住整个窗口；`Esc` 关闭并回到�
 
 1. Manager 色相：自动分配，还是注册项目时选。
 2. NSH 是否支持 iOS App Extension（Share Extension、Live Activity）。
-3. 草案 `docs/spec/ui.md` §11（分支 `docs/server-first-spec`）仍写 16px / 1.5；规范落地时改为 15px / 1.7。
 
 ## 参考
 
-- [docs/research/persistent-agent-ui.md](research/persistent-agent-ui.md)：Grok Bot、Muse、DS Bot。
+- [docs/research/persistent-agent-ui.md](../research/persistent-agent-ui.md)：Grok Bot、Muse、DS Bot。
 - NSH：`TextView`（Markdown）、`DiffView`、`glassEffect` 和 `nsh/base` 组件（`nsh.dev`）。
 - [Phosphor Icons](https://phosphoricons.com/)。

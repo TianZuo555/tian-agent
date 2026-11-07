@@ -65,7 +65,7 @@ One message renders as one or more blocks. The server decides order and ownershi
 | Assistant text   | markdown through NSH `TextView` (headings, lists, code, tables, mermaid where supported)                    | Rendered incrementally during streaming, throttled to 20 Hz; never re-run a completed block's parse            |
 | Tool activity    | a folded group of tool calls for one round: tool name, one-line argument summary, status, expandable output | Collapsed by default; errors auto-expand; grouped by round, not by tool                                        |
 | Progress card    | a Run's live progress: latest output lines, current tool, elapsed time                                      | At most one per Run thread, updated in place                                                                   |
-| Approval card    | a request that blocks the agent: destructive operation, missing credential, ambiguous decision              | Inline buttons `Allow` / `Deny` plus details; answers map to `resolveNotice`                                   |
+| Approval card    | a request that blocks the agent: destructive operation, missing credential, ambiguous decision              | Inline buttons `Allow` / `Deny` plus details; answers map to `resolveApproval` (new in v1)                     |
 | Notice card      | a user notice with severity and a link to the related Goal/Run/Task                                         | Resolve/dismiss inline                                                                                         |
 | Run summary      | attempts, changed files, diff link, and `Land` / `Ship` / `Discard`                                         | One per completed Run; actions confirm with the target branch                                                  |
 | Memory candidate | an extracted memory with evidence and `Select` / `Dismiss` / `Revise`                                       | Appears in the owning bot's chat; same commands as the inspector                                               |
@@ -147,7 +147,7 @@ The command palette (`⌘K`) is the escape hatch and the discovery surface: conv
 ## 11. Visual Language
 
 - Tokens from the shadcn theme read by NSH (`theme.rs`: `neutral` by default), with the app's palette layered on top from [../design-language.md](../design-language.md).
-- Chat typography: 16 px body, 1.5 line height, 720 px max text width; tool output in the monospace stack at 13 px.
+- Chat typography: 15 px body, 1.7 line height, 720 px max text width (14 px on the phone); tool output in the monospace stack at 13 px.
 - Components live in the TSX app on top of `nsh/base`; no component library is vendored from the React build. The React components (`src/components/ui`) are reference only.
 
 ## 12. Open Questions
