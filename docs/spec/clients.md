@@ -29,7 +29,7 @@ The TSX module runs in QuickJS under a capability sandbox. The Rust host crate i
 | Protocol codec, transport (UDS + WSS), reconnect, resume, cache | Rust host          | Exposed to TSX as one typed module (see §3)                                                                                   |
 | Device identity, keychain, tailnet discovery                    | Rust host          | `security-framework` on macOS, DPAPI/Credential Manager on Windows, Secret Service on Linux, Keychain/Keystore on iOS/Android |
 | Notifications, tray, menus, dock, global shortcuts              | Rust host          | Per-platform; TSX calls one interface                                                                                         |
-| File browsing and uploads                                       | Rust host + server | The server owns project files; remote browsing is a server command                                                            |
+| File browsing and uploads                                       | Rust host + server | The server owns project files; remote browsing is a server command, and local attachments upload from the client              |
 | Cache database                                                  | Rust host          | SQLite via `rusqlite`, read-only offline                                                                                      |
 | Updates                                                         | Rust host          | NSH updater or platform installer                                                                                             |
 

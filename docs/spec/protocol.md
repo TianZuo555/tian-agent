@@ -90,14 +90,14 @@ Rules:
 
 ## 5. Frames, Limits, Keepalive
 
-| Limit                             | v1                                                           | Current code                                                              |
-| --------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| Inbound frame                     | 4 MiB, checked twice (client preflight, server hard limit)   | Server accepts 1 MiB, client allows 16 MiB (`server.ts` vs `protocol.ts`) |
-| Outbound event frame              | 4 MiB. Larger payloads are paged by the client               | Snapshots can exceed 1 MiB today                                          |
-| Requests in flight per connection | 64                                                           | 128                                                                       |
-| Streaming rate per conversation   | 20 Hz, then a final frame                                    | Unbounded                                                                 |
-| Keepalive                         | Server `ping` every 20 s; connection idle for 60 s is closed | TCP keepalive only                                                        |
-| Reconnect backoff                 | 0.5 s doubling to 30 s, jittered                             | Same, no jitter                                                           |
+| Limit                             | v1                                                                        | Current code                                                              |
+| --------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Inbound frame                     | 4 MiB, checked twice (client preflight, server hard limit)                | Server accepts 1 MiB, client allows 16 MiB (`server.ts` vs `protocol.ts`) |
+| Outbound event frame              | 4 MiB. Larger payloads are paged by the client                            | Snapshots can exceed 1 MiB today                                          |
+| Requests in flight per connection | 64                                                                        | 128                                                                       |
+| Streaming rate per conversation   | 20 Hz, then a final frame                                                 | Unbounded                                                                 |
+| Keepalive                         | Protocol 14: server `ping` every 20 s; connection idle for 60 s is closed | Protocol 13: TCP keepalive only (no application frame)                    |
+| Reconnect backoff                 | 0.5 s doubling to 30 s, jittered                                          | Same, no jitter                                                           |
 
 The asymmetry above is a real defect today: a client can send a frame the server rejects, and the connection drops with no error frame. v1 fixes it with one published limit and a typed error.
 
@@ -164,6 +164,7 @@ Current state: 75 commands in `src/shared/contracts.ts`, validated with TypeBox 
 | Providers               | `listProviders`, `addProvider`, `updateProvider`, `removeProvider`, `setProviderKey`, `deleteProviderKey`, `providerLogin`, `providerLoginAnswer`, `providerLoginCancel` | Keep                                                                                                  |
 | Workers                 | `setWorkers`, `runtimeStatus`                                                                                                                                            | Keep                                                                                                  |
 | Channels                | `wechatStatus`, `wechatRelogin`                                                                                                                                          | Keep                                                                                                  |
+| Attachments             | —                                                                                                                                                                        | Add `uploadAttachment` for client-local files                                                         |
 | Approvals               | —                                                                                                                                                                        | Add `resolveApproval` for the blocking approval card                                                  |
 | Devices                 | —                                                                                                                                                                        | Add `listDevices`, `revokeDevice`                                                                     |
 
@@ -173,6 +174,7 @@ Commands added for the chat-first client (required for v1):
 - `markRead(conversationId, messageId)` → `{ unread }`.
 - `searchConversations(query, { limit })` → `ConversationInfo[]`. History search already exists as agent tools (`search_history`); the client needs the same index.
 - `listDirectory(path)` → `{ entries: [{ name, path, kind }] }`. Runs execute on the server, so project paths are server paths. A remote client browses the server's filesystem through this command instead of a native picker.
+- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The first call passes `null` for `uploadId`; later calls pass the returned id. The client sends chunks under the frame limit, and `path` is set when `received` equals `size`. Chunks are idempotent by `(uploadId, offset)`.
 - `resolveApproval(approvalId, decision: 'allow' | 'deny')` → `{ resolved: boolean }`. The approval card in [ui.md](ui.md) uses this; the server records the decision and wakes the blocked turn.
 
 ## 11. Security
@@ -185,7 +187,7 @@ Commands added for the chat-first client (required for v1):
 
 ## 12. Compatibility Policy
 
-- Protocol major bump: a breaking frame change. The server keeps the previous major alive for one release cycle; the client negotiates. Protocol 14 keeps the protocol-13 `ready`/`info` handshake during that window.
+- Protocol major bump: a breaking frame change. The server keeps the previous major alive for one release cycle; the client negotiates. Protocol 14 keeps the protocol-13 `ready`/`info` handshake during that window. Application-level `ping` is gated to protocol 14; protocol-13 connections keep TCP keepalive.
 - Additive changes ship behind `capabilities`, never a protocol bump.
 - The web build is pinned to the server version: it is served by the server, so version skew is not possible.
 - App store clients cannot be forced to update. A client older than `minClientVersion` gets a blocking upgrade screen but can still read cached data.
@@ -194,7 +196,7 @@ Commands added for the chat-first client (required for v1):
 
 1. Add `hello`/`welcome` at protocol 14 with range negotiation while keeping the protocol-13 `ready`/`info` handshake. The current Electron client keeps working; the new server accepts both.
 2. Make `requestId` required for writes; the new client generates it. Keep accepting `submit` without it for one cycle (server generates and logs a warning).
-3. Add `seq`, `revision`, `ping`, and the one published frame limit. Existing event consumers ignore unknown fields.
+3. Add `seq`, `revision`, and the one published frame limit. Gate `ping` to protocol 14; protocol-13 connections keep TCP keepalive. Existing event consumers ignore unknown fields.
 4. Add the WebSocket listener and device table. No change to the Unix socket path.
 5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `listDevices`, `revokeDevice`.
 6. Set `SERVICE_PROTOCOL` to 14 when negotiation and the required `requestId` land; drop the protocol-13 `ready` handshake and optional `requestId` in the next release.

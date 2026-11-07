@@ -59,18 +59,18 @@ A conversation maps 1:1 to a Pi session. Its messages are the Pi transcript, tra
 
 One message renders as one or more blocks. The server decides order and ownership; the client decides only presentation.
 
-| Block            | Content                                                                                                     | Rules                                                                                                          |
-| ---------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| User text        | plain text with markdown                                                                                    | Optimistic echo only until the server snapshot arrives; then the server version replaces it (same `messageId`) |
-| Assistant text   | markdown through NSH `TextView` (headings, lists, code, tables, mermaid where supported)                    | Rendered incrementally during streaming, throttled to 20 Hz; never re-run a completed block's parse            |
-| Tool activity    | a folded group of tool calls for one round: tool name, one-line argument summary, status, expandable output | Collapsed by default; errors auto-expand; grouped by round, not by tool                                        |
-| Progress card    | a Run's live progress: latest output lines, current tool, elapsed time                                      | At most one per Run thread, updated in place                                                                   |
-| Approval card    | a request that blocks the agent: destructive operation, missing credential, ambiguous decision              | Inline buttons `Allow` / `Deny` plus details; answers map to `resolveApproval` (new in v1)                     |
-| Notice card      | a user notice with severity and a link to the related Goal/Run/Task                                         | Resolve/dismiss inline                                                                                         |
-| Run summary      | attempts, changed files, diff link, and `Land` / `Ship` / `Discard`                                         | One per completed Run; actions confirm with the target branch                                                  |
-| Memory candidate | an extracted memory with evidence and `Select` / `Dismiss` / `Revise`                                       | Appears in the owning bot's chat; same commands as the inspector                                               |
-| Error            | command or streaming failure with a retry action                                                            | Never replaces the last good message                                                                           |
-| System           | scope change, model switch, archival, divider between sessions                                              | Low contrast, no actions                                                                                       |
+| Block            | Content                                                                                                                              | Rules                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| User text        | plain text with markdown                                                                                                             | Optimistic echo only until the server snapshot arrives; then the server version replaces it (same `messageId`) |
+| Assistant text   | markdown through NSH `TextView` (headings, lists, code, tables, mermaid where supported)                                             | Rendered incrementally during streaming, throttled to 20 Hz; never re-run a completed block's parse            |
+| Tool activity    | a folded group of tool calls for one round (Chief and Manager only): tool name, one-line argument summary, status, expandable output | Collapsed by default; errors auto-expand; grouped by round, not by tool; Worker tools never appear here        |
+| Progress card    | a Run's four phases on a rail (Understand, Edit, Verify, Report), one plain sentence, elapsed time, change stats                     | At most one per Run thread, updated in place; never show raw Worker output                                     |
+| Approval card    | a request that blocks the agent: destructive operation, missing credential, ambiguous decision                                       | Inline buttons `Allow` / `Deny` plus details; answers map to `resolveApproval` (new in v1)                     |
+| Notice card      | a user notice with severity and a link to the related Goal/Run/Task                                                                  | Resolve/dismiss inline                                                                                         |
+| Run summary      | attempts, changed files, diff link, and `Land` / `Ship` / `Discard`                                                                  | One per completed Run; actions confirm with the target branch                                                  |
+| Memory candidate | an extracted memory with evidence and `Select` / `Dismiss` / `Revise`                                                                | Appears in the owning bot's chat; same commands as the inspector                                               |
+| Error            | command or streaming failure with a retry action                                                                                     | Never replaces the last good message                                                                           |
+| System           | scope change, model switch, archival, divider between sessions                                                                       | Low contrast, no actions                                                                                       |
 
 Rules:
 
@@ -84,7 +84,7 @@ Rules:
 - Multiline input. `Enter` sends, `Shift+Enter` inserts a newline on desktop; on mobile the keyboard's send key sends.
 - While a turn streams, the send button becomes `Stop` (maps to `abort`). Typing during streaming is allowed; sending queues a follow-up and shows "Queued · 1" with the server's queue position.
 - Model and thinking level: shown in the composer footer; changed through a popup (D13 semantics: per-conversation default, per-Run override when dispatching).
-- Attachments: v1 supports text files and images through a server-side upload command; the file lives on the server, and the message references it by path. The picker is native only when the client runs on the server; otherwise it browses `listDirectory`.
+- Attachments: v1 supports text files and images. Every client opens a local picker (the share sheet on mobile), downscales images to a 2560 px long edge, and uploads the bytes with `uploadAttachment`; the server returns a path, and the message references it. `listDirectory` is only for server-side project files, never the attachment source.
 - Slash commands are not part of v1. The command palette covers actions.
 
 ## 6. Inspector
@@ -153,7 +153,7 @@ The command palette (`⌘K`) is the escape hatch and the discovery surface: conv
 ## 12. Open Questions
 
 1. Worker Runs: nested rows under the Manager (§3) or their own conversations? Nested is the default; revisit after the first long Run.
-2. Attachments: which types and limits, where they are stored, and whether images are displayed from the server or uploaded to a CDN. v1: text and images on the server filesystem.
+2. Attachments: which file types and size limits, and whether images are displayed from the server or uploaded to a CDN. v1: local picker, text and images stored on the server filesystem.
 3. Approvals: which actions need an inline card versus a tool-level permission prompt? Start with destructive file/git operations and missing credentials.
 4. Search: conversations only, or message text too? v1 ships conversation search; message search needs an FTS index on the server.
 5. Does the list need a "Pinned" section beyond the Chief, or is recency plus needs-input ordering enough?

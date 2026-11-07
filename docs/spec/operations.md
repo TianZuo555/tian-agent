@@ -83,7 +83,7 @@ Constraints:
 - **Automatic:** before every upgrade (a verified `pg_dump` of the application database plus a `pi-session.sqlite` snapshot via the SQLite backup API, WAL checkpointed first). Kept 7 daylies and 4 weeklies, plus every upgrade snapshot for 30 days.
 - **Scheduled:** daily at 03:00 local time to `<dataDir>/backups` (`pg_dump` plus the Pi Durable snapshot), optionally mirrored to the user's backup target (restic/Borg or Time Machine for the data dir and the PostgreSQL data directory).
 - **Verify:** nightly restore of the newest `pg_dump` into a scratch database, plus `PRAGMA integrity_check` on the Pi Durable snapshot; a failed check raises a notice in the client.
-- **Restore:** stop the service, move the current PostgreSQL data directory and `<dataDir>` aside, restore the newest verified `pg_dump` with `pg_restore`, restore the Pi Durable snapshot, start the service, confirm `DATABASE_VERSION` and one conversation. Documented as a short procedure, tested once per release.
+- **Restore:** stop the service, move the current PostgreSQL data directory and `<dataDir>` aside, create an empty PostgreSQL cluster, restore the newest verified `pg_dump` with `pg_restore`, restore the Pi Durable snapshot, start the service, confirm `DATABASE_VERSION` and one conversation. Documented as a short procedure, tested once per release.
 
 ## 5. Logs, Metrics, Health
 
