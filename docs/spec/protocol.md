@@ -7,7 +7,7 @@ Status: Draft v0.1 — 2026-11. Supersedes the client-facing part of `SERVICE_PR
 ## 1. Invariants
 
 1. The server is the only writer of durable state. Clients hold a cache, never the truth.
-2. Every request is safe to retry. A retry reuses the `requestId` of the original intent.
+2. Every protocol-14 request is safe to retry. A retry reuses the `requestId` of the original intent.
 3. Events are ordering hints, not the source of truth. A client that detects a gap re-syncs by snapshot; it never patches around the gap.
 4. A slow or blocked client must not slow the server. The server disconnects it and lets it re-sync.
 5. One protocol for every transport. The transport changes the address and the credentials, not the frames.
@@ -131,9 +131,9 @@ Every event carries a connection-level sequence and a per-channel revision:
 
 ## 8. Idempotency and Retries
 
-- `requestId` is **required** for every write in v1 (for example `submit`, `addProject`, `addTask`, `doneTask`, `createGoal`, `updateGoal`, `setGoalStatus`, `addSchedule`, `followUpRun`, `landRun`, `shipRun`, `discardRun`, `uploadAttachment`, `resolveApproval`, `setProviderKey`, `setWorkers`). In protocol 13 it is optional and only on `submit`.
+- `requestId` is **required** for every write in v1 (for example `submit`, `addProject`, `addTask`, `doneTask`, `createGoal`, `updateGoal`, `setGoalStatus`, `addSchedule`, `followUpRun`, `landRun`, `shipRun`, `discardRun`, `uploadAttachment`, `resolveApproval`, `setProviderKey`, `setWorkers`). Protocol 13 predates it: only `submit` has an optional `requestId`. During the compatibility window, protocol-13 connections keep every current write signature; the server generates and logs a compatibility id when a protocol-13 write omits one.
 - The client generates `requestId` once per user intent — a click, a submit, an approval — and keeps it for every retry of that intent, including retries after reconnect or app restart.
-- The server keeps a dedupe record `(conversationId, requestId) → result` for 7 days or until the intent's turn finishes plus 24 h, whichever is longer. A duplicate returns the original result with `deduped: true`.
+- The server keeps a dedupe record `(deviceId, command, requestId) → result` for 7 days or until the intent's turn finishes plus 24 h, whichever is longer. A duplicate returns the original result with `deduped: true`. Protocol-13 writes with a generated compatibility id keep their current non-idempotent behavior during the compatibility window. Attachment chunks use `(uploadId, offset)` as their idempotency key instead.
 - The server never deduplicates by message text.
 
 ## 9. Multi-Device Semantics
@@ -174,7 +174,7 @@ Commands added for the chat-first client (required for v1):
 - `markRead(conversationId, messageId)` → `{ unread }`.
 - `searchConversations(query, { limit })` → `ConversationInfo[]`. History search already exists as agent tools (`search_history`); the client needs the same index.
 - `listDirectory(path)` → `{ entries: [{ name, path, kind }] }`. Runs execute on the server, so project paths are server paths. A remote client browses the server's filesystem through this command instead of a native picker.
-- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The first call passes `null` for `uploadId`; later calls pass the returned id. The client sends chunks under the frame limit, and `path` is set under `<dataDir>/attachments/` when `received` equals `size`. Chunks are idempotent by `(uploadId, offset)`.
+- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The first call passes `null` for `uploadId`; later calls pass the returned id. Send each chunk as its own write with a distinct `requestId`; the server treats `(uploadId, offset)` as the chunk's idempotency key, and `path` is set under `<dataDir>/attachments/` when `received` equals `size`.
 - `resolveApproval(approvalId, decision: 'allow' | 'deny')` → `{ resolved: boolean }`. The approval card in [ui.md](ui.md) uses this; the server records the decision and wakes the blocked turn.
 
 ## 11. Security
@@ -187,7 +187,7 @@ Commands added for the chat-first client (required for v1):
 
 ## 12. Compatibility Policy
 
-- Protocol major bump: a breaking frame change. The server keeps the previous major alive for one release cycle; the client negotiates. Protocol 14 keeps the protocol-13 `ready`/`info` handshake during that window. Application-level `ping` is gated to protocol 14; protocol-13 connections keep TCP keepalive.
+- Protocol major bump: a breaking frame change. The server keeps the previous major alive for one release cycle; the client negotiates. Protocol 14 keeps the protocol-13 `ready`/`info` handshake during that window. Application-level `ping` is gated to protocol 14; protocol-13 connections keep TCP keepalive. Protocol-13 writes keep their current signatures and receive server-generated compatibility ids.
 - Additive changes ship behind `capabilities`, never a protocol bump.
 - The web build is pinned to the server version: it is served by the server, so version skew is not possible.
 - App store clients cannot be forced to update. A client older than `minClientVersion` gets a blocking upgrade screen but can still read cached data.
@@ -195,11 +195,11 @@ Commands added for the chat-first client (required for v1):
 ## 13. Migration from Protocol 13
 
 1. Add `hello`/`welcome` at protocol 14 with range negotiation while keeping the protocol-13 `ready`/`info` handshake. The current Electron client keeps working; the new server accepts both.
-2. Make `requestId` required for writes; the new client generates it. Keep accepting `submit` without it for one cycle (server generates and logs a warning).
+2. Make `requestId` required for writes on protocol 14; the new client generates it. Keep every protocol-13 write signature unchanged for one cycle; the server generates and logs a compatibility id when a protocol-13 write omits one.
 3. Add `seq`, `revision`, and the one published frame limit. Gate `ping` to protocol 14; protocol-13 connections keep TCP keepalive. Existing event consumers ignore unknown fields.
 4. Add the WebSocket listener and device table. No change to the Unix socket path.
 5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `uploadAttachment`, `resolveApproval`, `listDevices`, `revokeDevice`.
-6. Set `SERVICE_PROTOCOL` to 14 when negotiation and the required `requestId` land; drop the protocol-13 `ready` handshake and optional `requestId` in the next release.
+6. Set `SERVICE_PROTOCOL` to 14 when negotiation and the required `requestId` land; drop the protocol-13 `ready` handshake, its write signatures, and the compatibility ids in the next release.
 
 ## 14. Open Questions
 

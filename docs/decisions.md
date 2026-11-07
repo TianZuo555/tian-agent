@@ -445,11 +445,11 @@ The Native Shell clients (macOS and iOS first) use the "Tian Sky" visual languag
 - One light source: the Chief, at the top left. Five elevation levels (L0–L4). Cards get a top rim highlight and no drop shadow; only floating layers cast shadows. Glass uses NSH `glassEffect`, with an opaque fallback and a glass-intensity setting.
 - Every animation reports a state. Under reduced motion, state is shown by colour only.
 - Workers appear as four phases (Understand, Edit, Verify, Report) that the server derives from tool calls with fixed rules. The raw CLI output is not shown.
-- Chat body text is 15 px / 1.7 (14 px on the phone), at most 720 px wide. This replaces the 16 px / 1.5 in the draft `docs/spec/ui.md` §11.
+- Chat body text is 15 px / 1.7 (14 px on the phone), at most 720 px wide. The UI spec uses this size.
 - Selected rows use a fill only, never a left accent bar.
 - Settings are grouped by owner: Agent (the account), Personal (this device), Operations (the server).
 
-**Consequences**: The research recommendation not to copy coloured avatars is narrowed: identity now uses colour, limited to one hue per Manager and the single gradient of the Chief. The draft UI spec must take the 15 px / 1.7 size when it lands. D1's three-pane layout carries over to the macOS client; its `@pierre/diffs` detail is replaced by NSH `DiffView`. Phosphor remains the only icon set. Manager hue assignment and iOS app-extension support stay open ([design-language.md §14](design-language.md#14-open-questions)).
+**Consequences**: The research recommendation not to copy coloured avatars is narrowed: identity now uses colour, limited to one hue per Manager and the single gradient of the Chief. The UI spec takes the 15 px / 1.7 size. D1's three-pane layout carries over to the macOS client; its `@pierre/diffs` detail is replaced by NSH `DiffView`. Phosphor remains the only icon set. Manager hue assignment and iOS app-extension support stay open ([design-language.md §14](design-language.md#14-open-questions)).
 
 ---
 
