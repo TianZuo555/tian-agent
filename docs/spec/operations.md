@@ -14,6 +14,7 @@ One server per user, on a machine that stays awake: the user's main Mac in v1, a
 | Data directory | `~/Library/Application Support/Tian Agent` (`0700`)                             | `$XDG_DATA_HOME/pi-server`         |
 | Application DB | PostgreSQL cluster on a local socket; its data directory is outside `<dataDir>` | same                               |
 | Pi Durable     | `pi-session.sqlite` under `<dataDir>`                                           | same                               |
+| Attachments    | `<dataDir>/attachments/` (uploaded files)                                       | same                               |
 | Socket         | `<dataDir>/agent.sock`                                                          | same                               |
 | Secrets env    | `<dataDir>/service.env` (`0600`)                                                | same (`systemd` `EnvironmentFile`) |
 | Install dir    | `<dataDir>/service` (versioned releases)                                        | same layout                        |
@@ -80,10 +81,10 @@ Constraints:
 
 ## 4. Backups and Restore
 
-- **Automatic:** before every upgrade (a verified `pg_dump` of the application database plus a `pi-session.sqlite` snapshot via the SQLite backup API, WAL checkpointed first). Kept 7 daylies and 4 weeklies, plus every upgrade snapshot for 30 days.
-- **Scheduled:** daily at 03:00 local time to `<dataDir>/backups` (`pg_dump` plus the Pi Durable snapshot), optionally mirrored to the user's backup target (restic/Borg or Time Machine for the data dir and the PostgreSQL data directory).
-- **Verify:** nightly restore of the newest `pg_dump` into a scratch database, plus `PRAGMA integrity_check` on the Pi Durable snapshot; a failed check raises a notice in the client.
-- **Restore:** stop the service, move the current PostgreSQL data directory and `<dataDir>` aside, create an empty PostgreSQL cluster, restore the newest verified `pg_dump` with `pg_restore`, restore the Pi Durable snapshot, start the service, confirm `DATABASE_VERSION` and one conversation. Documented as a short procedure, tested once per release.
+- **Automatic:** before every upgrade (a verified `pg_dump` of the application database plus a `pi-session.sqlite` snapshot via the SQLite backup API, WAL checkpointed first, and the `<dataDir>/attachments` tree). Kept 7 daylies and 4 weeklies, plus every upgrade snapshot for 30 days.
+- **Scheduled:** daily at 03:00 local time to `<dataDir>/backups` (`pg_dump`, the Pi Durable snapshot, and the attachments tree), optionally mirrored to the user's backup target (restic/Borg or Time Machine for the data dir and the PostgreSQL data directory).
+- **Verify:** nightly restore of the newest `pg_dump` into a scratch database, plus `PRAGMA integrity_check` on the Pi Durable snapshot and a file-count and checksum check of the attachments tree; a failed check raises a notice in the client.
+- **Restore:** stop the service, move the current PostgreSQL data directory and `<dataDir>` aside, create an empty PostgreSQL cluster, restore the newest verified `pg_dump` with `pg_restore`, restore the Pi Durable snapshot and the attachments tree, start the service, confirm `DATABASE_VERSION` and one conversation. Documented as a short procedure, tested once per release.
 
 ## 5. Logs, Metrics, Health
 
@@ -102,7 +103,7 @@ Constraints:
 
 ## 7. Disk and Data Lifecycle
 
-- Baseline: the PostgreSQL data directory plus WAL, `pi-session.sqlite` plus WAL/SHM, worktrees under the project directories, release dirs, logs, backups.
+- Baseline: the PostgreSQL data directory plus WAL, `pi-session.sqlite` plus WAL/SHM, `<dataDir>/attachments`, worktrees under the project directories, release dirs, logs, backups.
 - Watch: PostgreSQL WAL growth after long transactions, `pi-session.sqlite` growth from transcripts (paging in the client does not shrink it), orphaned worktrees from failed Runs.
 - Policy: worktrees older than 30 days with a discarded review are eligible for cleanup; a Run's artifacts follow its review state. Transcript pruning is not automatic in v1.
 - Alerts: free space below 10 GiB, database size over 5 GiB, backup failure, integrity-check failure.

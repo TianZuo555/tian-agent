@@ -174,7 +174,7 @@ Commands added for the chat-first client (required for v1):
 - `markRead(conversationId, messageId)` → `{ unread }`.
 - `searchConversations(query, { limit })` → `ConversationInfo[]`. History search already exists as agent tools (`search_history`); the client needs the same index.
 - `listDirectory(path)` → `{ entries: [{ name, path, kind }] }`. Runs execute on the server, so project paths are server paths. A remote client browses the server's filesystem through this command instead of a native picker.
-- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The first call passes `null` for `uploadId`; later calls pass the returned id. The client sends chunks under the frame limit, and `path` is set when `received` equals `size`. Chunks are idempotent by `(uploadId, offset)`.
+- `uploadAttachment(uploadId, name, mediaType, size, offset, dataBase64)` → `{ uploadId, received, path? }`. The first call passes `null` for `uploadId`; later calls pass the returned id. The client sends chunks under the frame limit, and `path` is set under `<dataDir>/attachments/` when `received` equals `size`. Chunks are idempotent by `(uploadId, offset)`.
 - `resolveApproval(approvalId, decision: 'allow' | 'deny')` → `{ resolved: boolean }`. The approval card in [ui.md](ui.md) uses this; the server records the decision and wakes the blocked turn.
 
 ## 11. Security
