@@ -15,22 +15,29 @@ import { Icon, Press } from "./ui";
 type Tab = "mac" | "ios" | "kit";
 
 function TabButton(props: { id: Tab; label: string; tab: Tab; onSelect: (t: Tab) => void; t: Theme }): JSX.Element {
-  const active = props.tab === props.id;
   return (
     <Press
       label={props.label}
       role="tab"
-      selected={active}
+      selected={props.tab === props.id}
       onPress={() => props.onSelect(props.id)}
       style={{
         height: 26,
         paddingHorizontal: 16,
         borderRadius: 13,
         justifyContent: "center",
-        backgroundColor: active ? props.t.text : "transparent",
+        backgroundColor: props.tab === props.id ? props.t.text : "transparent",
       }}
     >
-      <Text style={{ fontSize: 12, fontWeight: active ? "500" : "normal", color: active ? props.t.winSolid : props.t.text2 }}>{props.label}</Text>
+      <Text
+        style={{
+          fontSize: 12,
+          fontWeight: props.tab === props.id ? "500" : "normal",
+          color: props.tab === props.id ? props.t.winSolid : props.t.text2,
+        }}
+      >
+        {props.label}
+      </Text>
     </Press>
   );
 }

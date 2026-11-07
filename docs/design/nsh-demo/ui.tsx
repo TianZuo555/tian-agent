@@ -498,7 +498,7 @@ export function RailMini(props: { at: number; t: Theme; tone?: Tone }): JSX.Elem
 }
 
 export function Chip(props: { children: string; t: Theme; tone?: string }): JSX.Element {
-  const color = props.tone ?? props.t.text3;
+  const tone = props.tone?.startsWith("#") ? props.tone : undefined;
   return (
     <View
       style={{
@@ -506,10 +506,10 @@ export function Chip(props: { children: string; t: Theme; tone?: string }): JSX.
         paddingVertical: 2,
         borderRadius: 6,
         borderWidth: 1,
-        borderColor: alpha(color.startsWith("#") ? color : props.t.text3, 0.35),
+        borderColor: alpha(tone ?? props.t.text3, 0.35),
       }}
     >
-      <Text style={{ fontFamily: FONT_MONO, fontSize: 10.5, color }}>{props.children}</Text>
+      <Text style={{ fontFamily: FONT_MONO, fontSize: 10.5, color: tone ?? props.t.text3 }}>{props.children}</Text>
     </View>
   );
 }

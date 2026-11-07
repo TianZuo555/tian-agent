@@ -12,6 +12,16 @@ interface as HTML and CSS.
 Sample data only. There is no server and no model call; sending a message adds
 it to the current conversation in memory.
 
+## Language
+
+The copy is the Chinese sample of the mockups
+([`client-mockup.html`](../client-mockup.html), `lang="zh-CN"`), kept as an
+example of the zh locale ([design-language.md §12](../design-language.md#12-iconography-and-accessibility)).
+It is demo content, not the client's shipped UI: production strings live in
+`src/renderer/i18n/en.ts` with `zh.ts` overrides, and this folder does not
+duplicate that dictionary. English users see the visual design through the
+same sample copy as the mockup.
+
 ## Run
 
 Requires `nsh` 0.4.0 (`nsh -V`).
