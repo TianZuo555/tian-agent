@@ -530,7 +530,6 @@ The server is reachable only from the owner's own devices on the tailnet, identi
 
 **Consequences**: Reconnect becomes cheap and correct, and the client can always recover from a lost frame. Every client must generate intent keys that survive retries and restarts, which is a client-core responsibility, not a view concern. The server supports two protocol majors, so client and server releases can move independently. `pickDir` stops being a server command for remote clients: project paths are server paths, browsed through `listDirectory`.
 
-
 ---
 
 ## D29 · PostgreSQL Is the Server Store
@@ -549,4 +548,3 @@ The target server stores application data in PostgreSQL running on the server ma
 - This ADR changes the target only. The current Electron service keeps `node:sqlite` and its file-snapshot upgrades until the new server lands; the migration is a data import, not a runtime dual-write.
 
 **Consequences**: Operations now include a database server: installation, upgrades, authentication (peer or socket auth), backups, and a restore test per release. Development and CI need Postgres. The synchronous `node:sqlite` call sites become asynchronous when the server is ported, which is the largest single piece of that work. In exchange, the store has concurrent readers, standard tooling, and a schema boundary that a future multi-user mode can extend. The client-side read cache is out of scope: it stays local to each device and never becomes a second source of truth.
-
