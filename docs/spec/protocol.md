@@ -2,7 +2,7 @@
 
 **English** | 简体中文 (to follow)
 
-Status: Draft v0.1 — 2026-11. Supersedes the client-facing part of `SERVICE_PROTOCOL = 10`.
+Status: Draft v0.1 — 2026-11. Supersedes the client-facing part of `SERVICE_PROTOCOL = 13`.
 
 ## 1. Invariants
 
@@ -45,8 +45,8 @@ The first frame from the client:
 ```json
 {
   "type": "hello",
-  "minProtocol": 11,
-  "maxProtocol": 11,
+  "minProtocol": 14,
+  "maxProtocol": 14,
   "clientVersion": "0.5.0",
   "platform": "macos",
   "deviceId": "6f1c…",
@@ -61,7 +61,7 @@ The server answers with one of:
 ```json
 {
   "type": "welcome",
-  "protocol": 11,
+  "protocol": 14,
   "serverVersion": "0.6.2",
   "serverId": "b0e1…",
   "deviceId": "6f1c…",
@@ -77,7 +77,7 @@ The server answers with one of:
   "type": "reject",
   "code": "protocol",
   "message": "Client too old",
-  "supported": [11, 12]
+  "supported": [13, 14]
 }
 ```
 
@@ -86,7 +86,7 @@ Rules:
 - The client sends a range; the server picks the highest common version. No common version means `reject`, and the client shows an upgrade screen.
 - The server supports the current protocol and one previous major version. A version is bumped only for a breaking frame or semantic change.
 - `capabilities` replaces version sniffing for additive features. A client must not infer a feature from `serverVersion`.
-- The current implementation (`SERVICE_PROTOCOL = 10`) sends `{type:'ready', info}` and requires an exact match. v1 keeps `ready`/`welcome` compatible in shape (same `info` fields plus `protocol`, `serverId`, `capabilities`, `limits`) so the Electron client keeps working during migration.
+- The current implementation (`SERVICE_PROTOCOL = 13`) sends `{type:'ready', info}` and requires an exact match. The target server keeps that protocol-13 handshake for one release cycle so the current Electron client keeps working, and adds `hello`/`welcome` as protocol 14.
 
 ## 5. Frames, Limits, Keepalive
 
@@ -179,19 +179,19 @@ Commands added for the chat-first client (required for v1):
 
 ## 12. Compatibility Policy
 
-- Protocol major bump: a breaking frame change. The server keeps the previous major alive for one release cycle; the client negotiates.
+- Protocol major bump: a breaking frame change. The server keeps the previous major alive for one release cycle; the client negotiates. Protocol 14 keeps the protocol-13 `ready`/`info` handshake during that window.
 - Additive changes ship behind `capabilities`, never a protocol bump.
 - The web build is pinned to the server version: it is served by the server, so version skew is not possible.
 - App store clients cannot be forced to update. A client older than `minClientVersion` gets a blocking upgrade screen but can still read cached data.
 
-## 13. Migration from Protocol 10
+## 13. Migration from Protocol 13
 
-1. Add `hello`/`welcome` with range negotiation while keeping `ready`/`info`. The old client keeps working; the new server accepts both.
+1. Add `hello`/`welcome` at protocol 14 with range negotiation while keeping the protocol-13 `ready`/`info` handshake. The current Electron client keeps working; the new server accepts both.
 2. Make `requestId` required for writes; the new client generates it. Keep accepting `submit` without it for one cycle (server generates and logs a warning).
 3. Add `seq`, `revision`, `ping`, and the one published frame limit. Existing event consumers ignore unknown fields.
 4. Add the WebSocket listener and device table. No change to the Unix socket path.
 5. Add `markRead`, `pageMessages`, `searchConversations`, `listDirectory`, `listDevices`, `revokeDevice`.
-6. Bump `SERVICE_PROTOCOL` to 11 when the Negotiation and the required `requestId` land; drop `ready` support and optional `requestId` in the next release.
+6. Set `SERVICE_PROTOCOL` to 14 when negotiation and the required `requestId` land; drop the protocol-13 `ready` handshake and optional `requestId` in the next release.
 
 ## 14. Open Questions
 

@@ -6,10 +6,10 @@ Status: Draft v0.1 — 2026-11. Open questions are listed at the end of each doc
 
 ## The Model
 
-Pi runs as one server on one machine. It is the single writer: it owns the SQLite databases, Pi Durable conversations, tools, Runs, model keys, and schedules. Every client is a renderer that reads snapshots and submits intents over one protocol.
+Pi runs as one server on one machine. It is the single writer: it owns the PostgreSQL application database, Pi Durable conversations, tools, Runs, model keys, and schedules. Every client is a renderer that reads snapshots and submits intents over one protocol.
 
 ```
-Pi Server  (one machine: launchd/systemd, SQLite, Durable, tools, keys)
+Pi Server  (one machine: launchd/systemd, PostgreSQL, Durable, tools, keys)
     │  Pi Server API v1: hello · call · event · resume
     ├── NSH app on macOS      (AppKit)
     ├── NSH app on Windows    (Win32)

@@ -461,7 +461,7 @@ The product becomes server-first: one Pi server owns all durable state, and ever
 
 **Decision**:
 
-- The Pi server is the only writer of durable state: SQLite databases, Pi Durable conversations, tools, Runs, schedules, and model keys. It runs on one machine and answers one protocol.
+- The Pi server is the only writer of durable state: the application database (PostgreSQL per D29), Pi Durable conversations, tools, Runs, schedules, and model keys. It runs on one machine and answers one protocol.
 - Clients hold a cache and render server snapshots. They never compute durable state and never keep a write queue; a failed write is retried with the same `requestId`.
 - Two transports, one frame set: a Unix socket when the client runs on the server machine, and WSS otherwise.
 - Read state, presence, and unread counts are server state, so several devices agree without a sync service.
@@ -518,7 +518,7 @@ The server is reachable only from the owner's own devices on the tailnet, identi
 
 ## D28 · Pi Server API v1: One Frame Set, Two Transports, Required Idempotency Keys
 
-**Context**: Protocol 10 is Unix-socket only. Events are whole channel snapshots without a sequence or revision, so a reconnecting client cannot tell what it missed. `requestId` is optional and only on `submit`. The server accepts 1 MiB frames while the client allows 16 MiB, so a valid client frame can drop the connection.
+**Context**: Protocol 13 is Unix-socket only. Events are whole channel snapshots without a sequence or revision, so a reconnecting client cannot tell what it missed. `requestId` is optional and only on `submit`. The server accepts 1 MiB frames while the client allows 16 MiB, so a valid client frame can drop the connection. Protocol 14 is the breaking change.
 
 **Decision**:
 
