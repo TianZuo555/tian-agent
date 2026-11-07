@@ -2,6 +2,8 @@
 
 **English** | [简体中文](zh/architecture.md)
 
+> Current implementation. The target client architecture — one Pi server with Native Shell clients on six targets — is specified in [spec/README.md](spec/README.md). This page describes the Electron client that the NSH client replaces (D24, D25 in [decisions.md](decisions.md)).
+
 ## Processes
 
 | Process          | Responsibility                                                                                                                                                                |

@@ -39,7 +39,8 @@ Toolchain details (Node 26 + pnpm 12.5.1), environment variables, and testing gu
 | Document                                                         | Description                                                                                                          |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | [docs/development.md](docs/development.md)                       | Toolchain (mise), common commands, local env vars, test suites, and React Doctor standards                           |
-| [docs/decisions.md](docs/decisions.md)                           | Architectural design decisions D1–D23: rationales and trade-offs                                                     |
+| [docs/decisions.md](docs/decisions.md)                           | Architectural design decisions D1–D29: rationales and trade-offs                                                     |
+| [docs/spec/](docs/spec/README.md)                                | Server-first specs: Pi Server API v1, chat-first UI, six client targets, and server operations                       |
 | [docs/architecture.md](docs/architecture.md)                     | Process model, desktop client, module map, permissions, and scope isolation                                          |
 | [docs/service.md](docs/service.md)                               | Resident service: installation, operations, exclusive locks, and transactional upgrade/rollback                      |
 | [docs/agent-work.md](docs/agent-work.md)                         | Goals, task lifecycle, scheduling, Run state machines, Manager delegation, and messaging                             |

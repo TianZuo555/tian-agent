@@ -83,7 +83,7 @@ There is **one light source: the Chief**, at the top left (where the Chief sits 
 | Data and metadata | Geist Mono                               | 9.5–12 px; ids, times, models, paths         |
 | Section labels    | Geist Mono, uppercase, `0.12em` tracking | 10 px                                        |
 
-Message text is at most 720 px wide. The 15 px / 1.7 chat size is fixed by D23 and replaces the 16 px / 1.5 in the draft `docs/spec/ui.md` §11.
+Message text is at most 720 px wide. The 15 px / 1.7 chat size is fixed by D23 and is now in `docs/spec/ui.md` §11.
 
 ## 6. Geometry
 
@@ -193,7 +193,6 @@ Under reduced motion every animation stops and state is shown by colour only. No
 
 1. Manager hues: assigned automatically, or chosen at project registration.
 2. Whether NSH supports iOS app extensions (Share Extension, Live Activity).
-3. The draft `docs/spec/ui.md` §11 (branch `docs/server-first-spec`) still says 16 px / 1.5; update it to 15 px / 1.7 when the spec lands.
 
 ## References
 
