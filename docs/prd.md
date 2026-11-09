@@ -168,7 +168,9 @@ Extracted memories enter the candidate state and do not enter Core Memory direct
 
 ### 4.5 F04 — Consolidation and Dreaming (P1 / M4) [Partial]
 
-Current State: Candidate extraction, evidence references, and related-fact hints are implemented. Consolidation relies on exact deduplication, user review, and explicit Core selection. Automated dreaming loops are deferred, and repetition never raises weight automatically.
+Current State: Candidate extraction, evidence references, and related-fact hints are implemented. Consolidation relies on exact deduplication, user review, and explicit Core selection, and repetition never raises weight automatically. Dreaming is implemented as an opt-in offline pass ([D30](decisions.md#d30--dreaming-proposes-the-user-decides-offline-memory-review-writes-candidates-only)): when `settings.json` sets `dreamModel`, the resident service reviews one Scope at a time (that Scope's Memory plus its own recent History), asks the configured model for `revise` / `new` / `support` proposals with verbatim evidence, and writes candidates only. A Dream never activates, replaces, deletes, or selects a memory, so every change still goes through user review.
+
+Deferred: Core select/deselect suggestions; expiry suggestions without a conversation trigger; skill candidates from Run history; a Settings page, socket command, or protocol change for Dreaming; in-chat candidate cards for Dream output; wikis or other derived memory representations; embeddings; cadence by access frequency; a quality evaluation with live models.
 
 Requirements: Explainable promotions; repeated unverified assertions do not gain artificial weight; version histories remain intact; failures do not corrupt existing data. Repeated facts only add evidence; they never create new facts or raise trust by count.
 
@@ -382,7 +384,7 @@ MVP verifies three outcomes: cross-session persistent memory; autonomous schedul
 
 ### M4 / M5 (Post-MVP)
 
-- M4: Memory Worker model extractors, dreaming loops, vector hybrid search.
+- M4: Memory Worker model extractors, dreaming quality evaluation, vector hybrid search.
 - M5: Multi-agent coordination, automated skill refinement.
 
 ### M6 — Role Boundaries, Providers, Worker Runtimes [Completed]

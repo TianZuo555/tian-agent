@@ -118,6 +118,24 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 - dismiss 后相同完整事实（含 scope、正文大小写、条件与有效期）不再重复提取；抑制 key 含 scope，不用全历史相似度永久压制新的纠正。
 - 提取器是可注入接口 `MemoryExtractor`，默认为确定性启发式（`Intl.Segmenter` 多语言分词，中英文模式表见源码），可离线测试；接 Magpie 模型的位置已预留但未接（PRD 问题 6 未决）。
 
+## Dreaming（离线复查）
+
+Dreaming（[D30](decisions.md#d30--dreaming-只提议用户来决定离线记忆复查只写候选)）是 `worker/memory-dream.ts` 提供的可选离线复查。一次 Dream 只读一个 Scope：它的 active 记忆与未处理候选，加上该 Scope 游标之后、role 为 `user` 或 `assistant` 的 History `message` 行。它让模型判断：哪些记忆被对话证明是错的、过时的或范围过宽的，哪些长期事实还没有记下。答案写成带已校验证据的候选；每项改变仍由用户决定，与其他候选一样。Dreaming 默认关闭。
+
+- **开启**：在 `settings.json` 设置 `dreamModel` 为 `{ "provider": "<provider id>", "modelId": "<model id>" }`。未设置，或该模型已不在 Provider 目录中，即为关闭。当前没有设置界面，也没有 socket 命令（D30「不在本决策范围内」）。
+- **输入**：带 `#seq`、kind、条件与有效期的记忆；然后是带 `ref` 与时间戳的 History 行。工具调用、工具结果、Event、`system.notification` 行与 `worker.input` 行从不进入 prompt。prompt 受 `DREAM_INPUT_BUDGET`（24,000 估算 token，`ceil(UTF-8 字节 / 3)`）限制。放不下的行留给下一次 Dream；游标只越过本次实际读过的行。单行超过剩余预算时截断显示，但它的证据摘录按完整原文校验。
+- **模型调用**：经 Provider 注册表调用一次 `Models.completeSimple`，没有工具，不持有数据库事务，输出上限为 `DREAM_MAX_OUTPUT_TOKENS`（4,000）。prompt 说明记忆的用途与 JSON 格式；不规定固定的记录规则；History 作为数据呈现，从不作为指令执行。
+- **提议**：最多 `DREAM_MAX_PROPOSALS`（8）条，每条为 `revise #seq`、`new` 或 `support #seq`，每条引用 1–3 条证据 `{ ref, excerpt }`。
+  - `revise` 写成候选，`supersedes = #seq`；除非提议另行设置，条件与有效期继承目标。
+  - `new` 写成普通候选，`supersedes = null`；kind 默认为 `fact`。
+  - `support` 只为目标追加证据，不改正文、状态、可信度、Core 与 `verified_at`。
+- **校验**：任一规则不满足时，提议被丢弃并按原因计数：`cap`（超过单次上限）；`invalid`（类型未知、字段缺失、kind 不合法，或正文不是单行、超过 1,000 个 Unicode 字符）；`evidence`（没有证据、证据超过 3 条、`ref` 不在本次输入中，或 `excerpt` 不是原文的逐字子串，由 `resolveMemoryEvidence` 校验）；`instruction`（匹配提取时的指令模式）；`target`（目标已不存在、读取到提交之间状态或事实身份变化，或 `revise` 的目标不是 active）；`unchanged`（`revise` 没有改变任何身份字段）；`dismissed`（该身份在本 Scope 已被驳回）。与 active 记忆或候选完全重复时，只在原行追加证据，计为 duplicates。
+- **硬性限制**：Dream 从不写 `active` 行、`core = true`、确认记录、`verified_at`、删除或 Core 选择，也从不调用 `promote`、`forget`、`select`、`deselect`。候选的 actor 为 `worker`，可信度为 `agent_inferred`，版本原因以 `dream` 开头。
+- **门控**：每个 Scope 每 `DREAM_INTERVAL_MS`（24 小时）最多一次；待处理行至少 `DREAM_MIN_NEW_MESSAGES`（20）条；服务暂停或关闭时不运行；失败后等待 `DREAM_FAILURE_BACKOFF_MS`（1 小时）。服务每 15 分钟检查一次。
+- **失败**：模型报错或输出无法解析时不改记忆，游标不动；本次运行带错误记录。
+- **记录**：每次运行写入 `memory_dream_runs`（Scope、起止时间、模型、各结果与丢弃原因计数、token 用量、错误），并写一条 `memory.dreamed` Event；失败的运行在 Event 摘要中写明错误。与 `memory_worker_runs` 一样，该表由所属模块幂等创建，不提升 `DATABASE_VERSION`。
+- **Scope**：一次 Dream 只读一个 Scope、只写一个 Scope，所以[会话边界](#会话边界)不需要新规则。Global Dream 只看 Global Memory 与 Global History；项目 Dream 只看该项目，其他 Scope 的 `ref` 会被丢弃。
+
 ## 任务相关上下文
 
 - Core 是按轮次稳定的显式快照；另有一条独立预算的 `<relevant_context>`，按当前输入与正在运行的 Task 词法检索 Memory、Notes 与 History，默认 1200 tokens。它不会加载全量记忆，也不会越过[会话边界](#会话边界)：总管的任务相关上下文只检索 Global，管理者的只检索本项目。
@@ -134,4 +152,4 @@ Core 不是"所有有效记忆的截断视图"，而是一个**明确选择**的
 - 数据库升级时对旧数据做一次确定性 Core 选择：用户确认优先，其次 preference/decision，再次其余，按 seq 顺序逐条校验最终渲染预算；其余 active 全部保留可检索。迁移结果可在 Memory 面板与导出中看到。
 - App 的 Context Pane 里有 Memory 面板：区分候选、Core 与"可检索未常驻"，显示 Core 用量，用户可直接晋升、驳回、选入/移出、修订（操作者为 user），全部历史保留在版本记录中。该面板当前在 UI 中隐藏（`ContextPane.tsx` 把 `memory` 标签从 tab strip 过滤掉，面板组件与 `memoryPromote` / `memoryDismiss` / `memorySelect` / `memoryDeselect` / `memoryRevise` 命令保留待恢复），隐藏期间候选只能经 Agent 工具审阅。
 
-记什么、选什么由总管模型与用户决定。当前没有向量索引，也没有后台 Dreaming；Notes 检索与 Memory / History 共用同一套查询计划（`worker/search.ts`：AND、大小写不敏感子串），返回有界 snippet 与 `file.md:<line>` 命中，`read_note` 可展开命中行附近的窗口。
+记什么、选什么由总管模型与用户决定。当前没有向量索引；Dreaming 为可选，不依赖向量索引（见 [Dreaming](#dreaming离线复查)）。Notes 检索与 Memory / History 共用同一套查询计划（`worker/search.ts`：AND、大小写不敏感子串），返回有界 snippet 与 `file.md:<line>` 命中，`read_note` 可展开命中行附近的窗口。

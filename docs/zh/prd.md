@@ -175,7 +175,9 @@ Goal 与 Task 由 Goal Store 管理，不属于记忆层。
 
 ### 4.5 F04 — Consolidation / Dreaming　P1（M4）　【部分】
 
-现状：Light 阶段（候选提取、证据引用、相关事实提示）已由 Memory Worker 实现；Consolidate 与 Promote 仍以精确去重、用户审核和显式 Core 选择为主，没有后台 Dreaming，也不按频率自动提高权重。摘要树压缩已删除，不再作为 Consolidate 的雏形。
+现状：Light 阶段（候选提取、证据引用、相关事实提示）已由 Memory Worker 实现；Consolidate 与 Promote 仍以精确去重、用户审核和显式 Core 选择为主，不按频率自动提高权重。Dreaming 已作为可选离线复查实现（[D30](decisions.md#d30--dreaming-只提议用户来决定离线记忆复查只写候选)）：`settings.json` 设置 `dreamModel` 后，常驻服务逐个 Scope 复查（该 Scope 的 Memory 与它自己的近期 History），让所配置的模型给出带逐字证据的 `revise` / `new` / `support` 提议，只写候选。Dream 从不激活、替换、删除或选入记忆，所以每项改变仍要经过用户审核。摘要树压缩已删除，不再作为 Consolidate 的雏形。
+
+暂缓：Core 选入/移出建议；没有对话触发依据的有效期建议；从 Run 历史产生 skill 候选；Dreaming 的设置界面、socket 命令与协议变化；Dream 结果的对话内候选卡片；wiki 等派生记忆表示；向量检索；按访问频率调整节奏；用真实模型做质量评测。
 
 要求：晋升条件可解释；重复出现不能提高不可信内容的权重；保留版本；用户可查看、纠正、删除；失败不损坏已有 Memory。重复事实只补充证据，不制造新事实，也不因出现次数升级可信度。
 
@@ -403,7 +405,7 @@ MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行�
 
 ### M4 / M5（MVP 之后）
 
-- M4：Memory Worker（候选提取已实现，模型提取器待问题 6）、Dreaming、向量 + 全文混合检索。
+- M4：Memory Worker（候选提取已实现，模型提取器待问题 6）、Dreaming 质量评测、向量 + 全文混合检索。
 - M5：Experience Review、Skill（已实现）、多 Agent 协作。
 
 ### M6 — 角色边界、Provider、工兵执行器【已完成】
@@ -416,7 +418,7 @@ MVP 验证三件事：跨会话的持久记忆；没有新消息时自动执行�
 4. **第一个外部执行器：Codex**【已完成】：一次性执行 + resume、事件流进度、带护栏的重启自动续接、登录检测、环境变量白名单（按执行器启用确认的过渡底线已在第 5 期删除）。先接 Codex，因为它开源（适配行为可在源码中核实），且它在 macOS 上的沙箱就是 Seatbelt。
 5. **统一 Seatbelt 沙箱**【已完成】（[todo-worker-sandbox.md](todo-worker-sandbox.md)）：Pi 与外部工兵共用一套按 Run 生成的 profile；Codex 在其中运行时关掉自身沙箱，状态目录可写，配置只读。
 
-MVP 暂不实现：自动 Dreaming、向量检索、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
+MVP 暂不实现：Dreaming 的设置界面与质量评测、向量检索、多 Agent 自主协作、复杂事件订阅、跨设备同步、自主财务操作。
 
 ---
 
