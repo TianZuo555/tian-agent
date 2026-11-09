@@ -106,6 +106,16 @@ export class Settings {
             provider: saved.managerModel.provider,
             modelId: saved.managerModel.modelId,
           };
+        if (
+          typeof saved.dreamModel?.provider === 'string' &&
+          saved.dreamModel.provider.trim() &&
+          typeof saved.dreamModel.modelId === 'string' &&
+          saved.dreamModel.modelId.trim()
+        )
+          this.value.dreamModel = {
+            provider: saved.dreamModel.provider,
+            modelId: saved.dreamModel.modelId,
+          };
         if (Array.isArray(saved.providers))
           this.providerConfigs = saved.providers.filter(
             (entry) =>
@@ -156,6 +166,22 @@ export class Settings {
     this.value = {
       ...this.value,
       managerModel: model ? structuredClone(model) : undefined,
+    };
+    this.persist();
+  }
+
+  /** The Dreaming model (D30); null means Dreaming is off. */
+  dreamModel(): SettingsInfo['model'] | null {
+    return this.value.dreamModel
+      ? structuredClone(this.value.dreamModel)
+      : null;
+  }
+
+  setDreamModel(model: SettingsInfo['model'] | null): void {
+    if (model) this.assertModel(model);
+    this.value = {
+      ...this.value,
+      dreamModel: model ? structuredClone(model) : undefined,
     };
     this.persist();
   }
@@ -304,7 +330,8 @@ export class Settings {
     if (index < 0) throw new Error(`Unknown provider '${id}'`);
     if (
       this.value.model.provider === id ||
-      this.value.managerModel?.provider === id
+      this.value.managerModel?.provider === id ||
+      this.value.dreamModel?.provider === id
     )
       throw new Error(`Provider '${id}' is the selected model — switch first`);
     this.providerConfigs.splice(index, 1);

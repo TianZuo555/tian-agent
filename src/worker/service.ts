@@ -48,6 +48,11 @@ import { HistoryIndex } from './history.js';
 import { GoalStore } from './goals.js';
 import { GoalScheduler, parseCron } from './scheduler.js';
 import { MemoryWorker, type MemoryTrigger } from './memory-worker.js';
+import {
+  DREAM_MAX_OUTPUT_TOKENS,
+  MemoryDreamer,
+  type DreamModel,
+} from './memory-dream.js';
 import { chiefExtension, type ChiefDeps } from './tools.js';
 import { managerExtension, type ManagerDeps } from './manager-tools.js';
 import type { ChannelHost } from './channel-host.js';
@@ -114,6 +119,7 @@ export class Service {
   readonly goals: GoalStore;
   readonly scheduler: GoalScheduler;
   readonly memoryWorker: MemoryWorker;
+  readonly dreamer: MemoryDreamer;
   private telegram: TelegramAdapter | null = null;
   private wechat: WechatAdapter | null = null;
   private agents: AgentRuntime;
@@ -135,6 +141,7 @@ export class Service {
   private inboxTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private maintenance?: ReturnType<typeof setInterval>;
   private memoryTimer?: ReturnType<typeof setInterval>;
+  private dreamTimer?: ReturnType<typeof setInterval>;
   readonly managerLink: ManagerLink;
   readonly outbox: NotificationOutbox;
   private closing = false;
@@ -208,6 +215,17 @@ export class Service {
       scopes: this.scopes,
       history: this.history,
       events: this.events,
+      isPaused: () => this.closing || this.maintenanceMode,
+      emitMemory: (scopeId) => this.emit('memory', scopeId),
+    });
+    // Dreaming (D30): an offline review of one Scope's memory against its own
+    // recent history. Off unless settings.json sets `dreamModel`.
+    this.dreamer = new MemoryDreamer({
+      db: this.db,
+      scopes: this.scopes,
+      history: this.history,
+      events: this.events,
+      model: () => this.dreamModel(),
       isPaused: () => this.closing || this.maintenanceMode,
       emitMemory: (scopeId) => this.emit('memory', scopeId),
     });
@@ -356,6 +374,14 @@ export class Service {
         .catch((error) => this.reportIssue('memory.sweep', error));
     }, 5 * 60_000);
     this.memoryTimer.unref();
+    // Dreaming is gated per scope by its own interval, back-off and cursor;
+    // the timer only decides when the gates are checked.
+    this.dreamTimer = setInterval(() => {
+      void this.dreamer
+        .sweep()
+        .catch((error) => this.reportIssue('memory.dream', error));
+    }, 15 * 60_000);
+    this.dreamTimer.unref();
   }
 
   private async activate(): Promise<void> {
@@ -506,8 +532,10 @@ export class Service {
     this.runs.pause();
     this.scheduler.stop();
     this.memoryWorker.stop();
+    this.dreamer.stop();
     clearInterval(this.maintenance);
     clearInterval(this.memoryTimer);
+    clearInterval(this.dreamTimer);
     await this.telegram?.stop();
     await this.wechat?.stop();
     for (const timer of this.inboxTimers.values()) clearTimeout(timer);
@@ -517,6 +545,7 @@ export class Service {
     this.history.stop();
     await this.history.idle();
     await this.memoryWorker.idle();
+    await this.dreamer.idle();
     await this.historyBackfill;
     await this.modelWarmup;
     await this.outbox.idle();
@@ -1476,6 +1505,42 @@ export class Service {
     void this.memoryWorker
       .trigger(scopeId, trigger, options)
       .catch((error) => this.reportIssue('memory.worker', error, { scopeId }));
+  }
+
+  /**
+   * The configured Dreaming model (D30), or null when Dreaming is off or the
+   * saved model is no longer in the catalog. The prompt is never logged.
+   */
+  private dreamModel(): DreamModel | null {
+    const choice = this.settings.dreamModel();
+    if (!choice) return null;
+    const models = this.settings.models();
+    const model = models.getModel(choice.provider, choice.modelId);
+    if (!model) return null;
+    return {
+      name: `${choice.provider}/${choice.modelId}`,
+      complete: async (prompt) => {
+        const reply = await models.completeSimple(
+          model,
+          {
+            systemPrompt: prompt.system,
+            messages: [
+              { role: 'user', content: prompt.user, timestamp: Date.now() },
+            ],
+          },
+          { maxTokens: DREAM_MAX_OUTPUT_TOKENS },
+        );
+        if (reply.stopReason === 'error')
+          throw new Error(reply.errorMessage ?? 'model call failed');
+        return {
+          text: reply.content
+            .map((block) => (block.type === 'text' ? block.text : ''))
+            .filter(Boolean)
+            .join('\n'),
+          usage: { input: reply.usage.input, output: reply.usage.output },
+        };
+      },
+    };
   }
 
   /**

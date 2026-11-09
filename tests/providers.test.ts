@@ -133,6 +133,25 @@ test('the default manager model survives reopening and clearing settings', () =>
   assert.deepEqual(cleared.managerModel(), chief);
 });
 
+test('the dreaming model is off until settings.json sets it', () => {
+  const root = dir();
+  const settings = new Settings(root);
+  assert.equal(settings.dreamModel(), null);
+
+  const dreamModel = { provider: 'magpie', modelId: 'dream-model' };
+  settings.setDreamModel(dreamModel);
+  assert.deepEqual(settings.get().dreamModel, dreamModel);
+  assert.deepEqual(new Settings(root).dreamModel(), dreamModel);
+  assert.throws(
+    () => settings.setDreamModel({ provider: 'nope', modelId: 'x' }),
+    /Unknown provider 'nope'/,
+  );
+
+  new Settings(root).setDreamModel(null);
+  assert.equal(new Settings(root).dreamModel(), null);
+  assert.equal(new Settings(root).get().dreamModel, undefined);
+});
+
 test('models() registers a provider per enabled config', () => {
   const root = dir();
   writeFileSync(

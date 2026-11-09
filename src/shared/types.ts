@@ -355,6 +355,8 @@ export interface SettingsInfo {
   model: { provider: string; modelId: string };
   /** The default Manager model (D21); absent = `model`. */
   managerModel?: { provider: string; modelId: string };
+  /** The Dreaming model (D30); absent = Dreaming is off. */
+  dreamModel?: { provider: string; modelId: string };
   /** Worker runtimes, concurrency limits and intents (D13, M6). */
   workers: WorkerSettingsInfo;
 }

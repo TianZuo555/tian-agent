@@ -387,6 +387,11 @@ const INSTRUCTION_PATTERNS = [
 const matches = (patterns: RegExp[], text: string) =>
   patterns.some((pattern) => pattern.test(text));
 
+/** True for content that orders the agent around; it never becomes memory. */
+export function isInstruction(text: string): boolean {
+  return matches(INSTRUCTION_PATTERNS, text);
+}
+
 /** Unicode word segmentation supports CJK and mixed identifiers without dropping single words. */
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
 export function tokens(text: string): string[] {
@@ -436,7 +441,7 @@ export function isNoise(source: MemorySource): boolean {
   if (source.role === 'system.notification' || source.role === 'worker.input')
     return true;
   if (matches(CHITCHAT_PATTERNS, text)) return true;
-  if (matches(INSTRUCTION_PATTERNS, text)) return true;
+  if (isInstruction(text)) return true;
   if (matches(TRANSIENT_PATTERNS, text)) return true;
   if (matches(SPECULATION_PATTERNS, text)) return true;
   // A line needs a few content words to say anything durable.
