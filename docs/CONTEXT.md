@@ -104,6 +104,10 @@ _Avoid_: confidence score
 记录用户通过审核或经校验的明确保存请求接受存储正文的动作。仅凭用户是来源不构成 Confirmation。
 _Avoid_: mention
 
+**Dream**:
+对一个 Scope 的 Memory 按该 Scope 近期 History 做的有界后台复查。它只以候选形式提出修订、新事实与补充 Evidence，从不激活、替换、删除或选入 Memory。
+_Avoid_: consolidation, nap, reflection, 摘要, 整理
+
 **Relevant Context（任务相关上下文）**:
 为当前输入或 Task 在参与者自己的 Scope 内检索出的、有独立预算的 Memory、Notes 与 History 子集：Chief 检索 Global，Manager 检索本项目，Worker 没有这一部分。它独立于稳定的 Core Memory 选择。
 

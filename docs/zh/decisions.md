@@ -4,7 +4,7 @@
 
 这里记录**难以回退、且不看就会困惑**的决定：为什么是这个架构、为什么是这个取舍。实现细节与操作方式不写在这里，分别见 [architecture.md](architecture.md)、[memory.md](memory.md)、[data.md](data.md)、[agent-work.md](agent-work.md)、[channels.md](channels.md)、[service.md](service.md)、[improvement-log.md](improvement-log.md)。
 
-每个决策一节，编号 D1–D23，按领域排序。当前 `DATABASE_VERSION = 13`、`SERVICE_PROTOCOL = 13`。每次 schema 变化都提升版本；旧数据库先做快照，再重建为空库（见 [service.md](service.md#服务升级)）。
+每个决策一节，编号 D1–D23 与 D30，按领域排序（D24–D29 暂无中文版，见[英文版](../decisions.md)）。当前 `DATABASE_VERSION = 13`、`SERVICE_PROTOCOL = 13`。每次 schema 变化都提升版本；旧数据库先做快照，再重建为空库（见 [service.md](service.md#服务升级)）。
 
 原先的 `docs/adr/` 已并入本文件，映射如下：
 
@@ -33,6 +33,7 @@
 | —      | D21 模型 Provider 可插拔                                                        |
 | —      | D22 统一 Seatbelt 工兵沙箱                                                      |
 | —      | D23 Native Shell 客户端采用「天色」视觉语言                                     |
+| —      | D30 Dreaming 只提议，用户来决定                                                 |
 
 > 0009 曾因分支并行出现两个文件；审批（approvals）的 ADR 仍在未合并的 `m3-approvals` 分支上，合并时追加为下一个空闲编号。D12–D22 为后续架构演进决策。
 
@@ -472,3 +473,34 @@ Native Shell 客户端（先做 macOS 和 iOS）采用 [design-language.md](desi
 - 设置按归属分组：智能体（账号）、个人（这台设备）、运行（服务器）。
 
 **后果**：调研中「不要照搬彩色头像」的建议收窄为：身份可以用颜色，但每位管理者只有一种色相，总管只有一条渐变。UI 规范采用 15px / 1.7。D1 的三栏布局沿用到 macOS 客户端；其中 `@pierre/diffs` 的细节由 NSH `DiffView` 取代。图标仍然只用 Phosphor。管理者色相的分配方式、iOS App Extension 支持仍待确认（[design-language.md §14](design-language.md#14-待确认)）。
+
+## D30 · Dreaming 只提议，用户来决定：离线记忆复查只写候选
+
+一次 Dream 是对一个 Scope 的有界后台复查。它读取该 Scope 的 Memory 和近期 History，让模型判断：哪些记忆被后来的对话证明是错的或过时的，哪些长期事实还没有记下。答案写成带已校验 Evidence 的 Memory 候选。Dream 从不激活、替换、删除或选入任何记忆。每一项改变都由用户在 Memory 面板决定，和其他候选一样。
+
+**背景**：Anthropic 的 [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory)（2026-11-06）有两个结论适用于本项目：离线对照原始 transcript 检查笔记，可以修正一开始就错或后来漂移的笔记；跨多个会话的复查能发现单个会话看不到的模式。同一篇文章也提醒：注入层里的错误笔记会进入每个会话；Dreaming 消耗算力；wiki 可能比原文还大。本项目里，未经确认的工具写入本来就只能是候选（D4、D19），错误笔记不会自行生效。剩下的缺口不同：已确认的事实会随环境变化而过时；启发式 Memory Worker（F03）每次最多逐行读 200 条新 History，无法把一条记忆和之后的对话对照。F04 把 Dreaming 列为暂缓；2026-10-18 的[记忆调研](research/memory-review.md)建议在有验证用例之前不做整套 Dreaming。Claude Managed Agents 的 Dreams 不能复用：它只处理 Managed Agents 的 memory store 与 session，而本项目的记忆在自己的数据库中，模型经可插拔的 Provider 注册表调用（D21）。
+
+**决定**：
+
+- **工作单元**：一次 Dream 只读一个 Scope，也只写这个 Scope。Global Dream 读 Global Memory 与 Global History；项目 Dream 读该项目的 Memory 与 History。Dream 不读其他 Scope，所以 D18 的对话边界不需要新规则。
+- **输入**：该 Scope 的 active 记忆和未处理候选（带 `#seq`、kind、条件、有效期），加上 Dream 自己游标之后、role 为 `user` 或 `assistant` 的 History `message` 行，按时间正序。不读工具调用、工具结果、Event、`system.notification` 与 `worker.input` 行。输入有固定 token 预算，用 Core 的估算方法（`ceil(UTF-8 字节 / 3)`）。放不下的行留给下一次 Dream；游标只越过本次实际读过的行。
+- **执行**：一次 Dream 是一次经 Provider 注册表（`Models.completeSimple`）的模型调用，没有工具，也没有 Pi Durable 会话。因此 Dream 不产生 transcript，它的输出不进入 History，也不会把自己以前的输出当成证据。模型调用不持有任何数据库事务。
+- **输出**：模型返回 JSON，提议数有固定上限，共三种类型。每条提议引用 1–3 条证据 `{ ref, excerpt }`。
+  - `revise #seq`：对话表明某条 active 记忆错误、过时或适用范围变窄（新条件或有效期）。它成为一条候选，`supersedes` 指向 `#seq`；除非提议另行设置，条件与有效期继承目标。这与今天未确认的 `revise` 工具调用暂存的审核提示相同。只有用户选择「Confirm this replaces #seq」时才替换（D19）。
+  - `new`：记忆中没有的长期事实，成为普通候选，`supersedes = null`。
+  - `support #seq`：为已有 active 记忆或候选补充证据。只追加 Evidence，不改正文、可信度、状态或 Core；重复不提高可信度（D19）。
+- **校验（服务端，在提交事务内）**：任一规则不满足，提议即被丢弃，并按原因计数：
+  - 每条证据的 `ref` 属于本次 Dream 的输入，能在该 Scope 的 History 中解析，且 `excerpt` 逐字出现在原文中（`resolveMemoryEvidence`）；
+  - 正文为单行、不超过 1,000 个 Unicode 字符，且不匹配提取时已在使用的指令模式；
+  - `revise` 与 `support` 的目标 `#seq` 仍然存在，状态与事实身份（正文、条件、有效期）与 Dream 读取时相同；Dream 期间目标被改动，则丢弃提议；
+  - `revise` 的新身份与目标身份不同；
+  - 该事实身份未在本 Scope 被驳回；与 active 记忆或候选完全重复时，只作为证据追加，和 Memory Worker 一致；
+  - 提议数不超过单次上限。
+- **硬性限制**：Dream 从不写 `active` 行、`core = true`、确认记录、`verified_at`、删除或 Core 选择，也从不调用 `promote`、`forget`、`select`、`deselect`。候选的 actor 为 `worker`，可信度为 `agent_inferred`，版本原因以 `dream` 开头。Dream 从不修改 Notes、`MEMORY.md`、prompt 或注入上下文。模型失败或返回无效 JSON 时不做任何改动：记录本次运行及错误，游标不动。
+- **触发与成本**：除非 `settings.json` 设置了 `dreamModel`（`{ provider, modelId }`），Dreaming 关闭。开启后，服务定时器每个 Scope 每个周期（24 小时）最多运行一次 Dream；只在该 Scope 有足够新消息时运行；服务暂停或关闭时不运行；失败后至少等待一小时。每次运行把 Scope、各结果与丢弃原因的计数、模型、token 用量与错误记入模块自有的 `memory_dream_runs` 表，并记录一条 `memory.dreamed` Event。与 `memory_worker_runs` 一样，该表由所属模块幂等创建，不提升 `DATABASE_VERSION`。
+- **Prompt**：说明记忆的用途（该 Scope 的所有者在以后的对话中必须知道什么）与输出格式。不规定固定的记录规则（例如「只记录失败」）；文章发现这类规则会降低强模型从记忆中得到的收益。History 文本作为数据呈现，从不作为指令执行。
+- **可移植性**：Dream 只通过 `Db` 与 `MemoryStore` 读写，不使用 FTS5 查询，因此迁移到 PostgreSQL（D29）时不需要改动。
+
+**不在本决策范围内**（各自需要单独的改动；越过边界时需要单独的决策）：Core 选入/移出建议；没有对话依据的有效期建议；从 Run 历史产生 skill 候选（D10）；Dreaming 的 socket 命令、设置界面或协议变化；Dream 结果的对话内候选卡片；wiki 等派生记忆表示；向量检索；按访问频率调整节奏；用真实模型做质量评测。
+
+**后果**：已确认的事实在后来的对话与之矛盾时，有了重新进入审核的路径；审核面板得到数量更少、但有证据支持的候选。所有写入路径仍是一套规则：证据表达依据，确认表达审核，只有用户能替换。代价：每次 Dream 最多把输入预算内的对话文本发给所配置的 Provider，并消耗模型 token，所以默认关闭；单次上限与 24 小时周期限制了成本和审核量，但上限也可能把真正的修正推迟到下一次 Dream；Dream 只看游标之后的近期 History，后来的对话从未提到的漂移它发现不了。模型提议是否准确到值得花审核时间，要等质量评测后才知道；本决策交付的是机制与离线测试，不对质量下结论。

@@ -104,6 +104,10 @@ _Avoid_: confidence score
 A recorded user action that accepts the stored statement, through review or a verified explicit save request. A user source alone is not Confirmation.
 _Avoid_: mention
 
+**Dream**:
+A bounded background review of one Scope's Memory against that Scope's recent History. It proposes revisions, new facts, and supporting Evidence as candidates only; it never activates, replaces, deletes, or selects a Memory.
+_Avoid_: consolidation, nap, reflection, summary
+
 **Relevant Context**:
 A bounded selection of Memory, Notes, and History retrieved for the current input or Task within the participant's own Scope: Global for the Chief, its project for a Manager. A Worker receives none. It is separate from the stable Core Memory selection.
 _Avoid_: origin, citation

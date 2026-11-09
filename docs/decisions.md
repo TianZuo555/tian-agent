@@ -4,7 +4,7 @@
 
 This document records architectural decisions that are **difficult to reverse and critical to understand**: why this architecture was chosen and what trade-offs were made. Implementation details and operational guides appear in [architecture.md](architecture.md), [memory.md](memory.md), [data.md](data.md), [agent-work.md](agent-work.md), [channels.md](channels.md), [service.md](service.md), and [improvement-log.md](improvement-log.md).
 
-Each decision forms a section numbered D1 through D29, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`; the target client-facing API is Pi Server API v1 ([spec/protocol.md](spec/protocol.md)). Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty, and the target server governs schema and protocol changes with upgrade transactions (see [service.md](service.md#service-upgrades)).
+Each decision forms a section numbered D1 through D30, organized by domain. Current metadata: `DATABASE_VERSION = 13`, `SERVICE_PROTOCOL = 13`; the target client-facing API is Pi Server API v1 ([spec/protocol.md](spec/protocol.md)). Every schema change bumps the version; an older database is snapshotted for recovery and recreated empty, and the target server governs schema and protocol changes with upgrade transactions (see [service.md](service.md#service-upgrades)).
 
 The earlier `docs/adr/` directory has been consolidated into this document:
 
@@ -39,6 +39,7 @@ The earlier `docs/adr/` directory has been consolidated into this document:
 | —          | D27 Chat-first information architecture: bots are Pi roles             |
 | —          | D28 Pi Server API v1: one frame set, two transports                    |
 | —          | D29 PostgreSQL is the server store                                     |
+| —          | D30 Dreaming proposes, the user decides                                |
 
 ---
 
@@ -548,3 +549,36 @@ The target server stores application data in PostgreSQL running on the server ma
 - This ADR changes the target only. The current Electron service keeps `node:sqlite` and its file-snapshot upgrades until the new server lands; the migration is a data import, not a runtime dual-write.
 
 **Consequences**: Operations now include a database server: installation, upgrades, authentication (peer or socket auth), backups, and a restore test per release. Development and CI need Postgres. The synchronous `node:sqlite` call sites become asynchronous when the server is ported, which is the largest single piece of that work. In exchange, the store has concurrent readers, standard tooling, and a schema boundary that a future multi-user mode can extend. The client-side read cache is out of scope: it stays local to each device and never becomes a second source of truth.
+
+---
+
+## D30 · Dreaming Proposes, the User Decides: Offline Memory Review Writes Candidates Only
+
+A Dream is a bounded background pass over one Scope. It reads that Scope's Memory and its recent History, asks a model which memories the conversation shows to be wrong or outdated and which lasting facts are missing, and writes the answers as Memory candidates with validated Evidence. A Dream never activates, replaces, deletes, or selects a memory. The user decides every change in the Memory panel, as for any other candidate.
+
+**Context**: Anthropic's [The components of agent memory](https://www.anthropic.com/research/components-of-agent-memory) (2026-11-06) reports two results that apply here: an offline pass that checks notes against the original transcripts corrects notes that were wrong or that drifted, and a pass over many sessions finds patterns that one session cannot see. The same article warns that an incorrect note in the injected layer reaches every session, that dreaming costs compute, and that a wiki can grow larger than its sources. In this project, unconfirmed tool writes already stay candidates (D4, D19), so a wrong note cannot become active on its own. The remaining gaps are different: a confirmed fact drifts when the world changes, and the heuristic Memory Worker (F03) reads at most 200 new History rows line by line, so it cannot compare a memory with what was said later. F04 lists dreaming as deferred, and the 2026-10-18 [memory review](research/memory-review.md) advised against a full dreaming loop until test cases justify it. Claude Managed Agents Dreams cannot be reused: it operates on Managed Agents memory stores and sessions, and this project stores memory in its own database and calls models through the pluggable provider registry (D21).
+
+**Decision**:
+
+- **Unit of work.** One Dream reads one Scope and writes only to that Scope. The Global Dream reads Global Memory and Global History; a project Dream reads that project's Memory and History. No Dream reads another Scope, so the Conversation Boundary of D18 holds without new rules.
+- **Inputs.** The Scope's active memories and open candidates (with `#seq`, kind, conditions, and expiry), plus History `message` rows with role `user` or `assistant` after the Dream's own cursor, oldest first. Tool calls, tool results, Events, `system.notification` rows, and `worker.input` rows are excluded. The input has a fixed token budget, estimated with the Core estimator (`ceil(UTF-8 bytes / 3)`). Rows that do not fit wait for the next Dream; the cursor advances only past rows the Dream actually read.
+- **Execution.** A Dream is one model completion through the provider registry (`Models.completeSimple`), with no tools and no Pi Durable conversation. A Dream therefore writes no transcript, its output never enters History, and it cannot read its own earlier output as evidence. The model call happens outside any database transaction.
+- **Outputs.** The model returns JSON with at most a fixed number of proposals of three types. Every proposal cites 1–3 pieces of evidence as `{ ref, excerpt }`.
+  - `revise #seq`: an active memory that the conversation shows to be wrong, outdated, or narrower (new conditions or expiry). It becomes a candidate whose `supersedes` names `#seq`, inheriting conditions and expiry unless the proposal sets them. This is the same review hint that an unconfirmed `revise` tool call stages today. The fact is replaced only when the user picks "Confirm this replaces #seq" (D19).
+  - `new`: a lasting fact that is absent from memory. It becomes an ordinary candidate with `supersedes = null`.
+  - `support #seq`: new evidence for an existing active memory or candidate. It appends Evidence only. It never changes text, trust, status, or Core, and repetition never raises trust (D19).
+- **Validation (service side, inside the commit transaction).** A proposal is dropped, and counted by reason, when any rule fails:
+  - each evidence `ref` was part of this Dream's input, resolves in the Scope's History, and its `excerpt` occurs verbatim in the source text (`resolveMemoryEvidence`);
+  - the text is one line of at most 1,000 Unicode characters and does not match the instruction patterns that already guard extraction;
+  - for `revise` and `support`, the target `#seq` still exists with the same status and the same fact identity (text, conditions, expiry) that the Dream read; a target changed during the Dream drops the proposal;
+  - for `revise`, the new identity differs from the target's identity;
+  - the fact identity is not dismissed in this Scope; an exact duplicate of an active memory or candidate becomes evidence on it, as in the Memory Worker;
+  - the proposal is within the per-Dream cap.
+- **Hard limits.** A Dream never writes `active` rows, `core = true`, confirmation records, `verified_at`, deletions, or Core selections, and never calls `promote`, `forget`, `select`, or `deselect`. Candidates carry actor `worker`, trust `agent_inferred`, and a version reason that starts with `dream`. A Dream never edits Notes, `MEMORY.md`, prompts, or injected context. A model that returns invalid JSON or fails changes nothing: the run is recorded with its error, and the cursor stays.
+- **Trigger and cost.** Dreaming is off unless `settings.json` sets `dreamModel` (`{ provider, modelId }`). Then a service timer runs at most one Dream per Scope per interval (24 hours), only when the Scope has enough new eligible messages, never while the service is paused or closing, and with a one-hour back-off after a failed run. Each run records its Scope, counts per outcome and drop reason, model, token usage, and error in a feature-owned `memory_dream_runs` table, and emits a `memory.dreamed` Event. Like `memory_worker_runs`, the table is created idempotently by its module and does not bump `DATABASE_VERSION`.
+- **Prompt.** The prompt states what memory is for (what the Scope's owner must know in later conversations) and the output contract. It does not impose fixed rules about what to record (for example "record only failures"), which the article found to reduce the benefit of memory for strong models. History text is framed as data and is never followed as instructions.
+- **Portability.** The Dream reads and writes only through `Db` and `MemoryStore` and uses no FTS5 query, so the PostgreSQL port (D29) moves it unchanged.
+
+**Not in this decision** (each needs its own change and, where it crosses a boundary, its own decision): Core select/deselect suggestions; expiry suggestions without a conversation trigger; skill candidates from Run history (D10); a socket command, Settings UI, or protocol change for Dreaming; in-chat candidate cards for Dream output; wikis or other derived memory representations; embeddings; cadence by access frequency; a quality evaluation with live models.
+
+**Consequences**: Confirmed facts get a path back to review when later conversation contradicts them, and the review panel gets fewer but evidence-backed candidates. All write paths keep one rule set: evidence supports, confirmation reviews, only the user replaces. Trade-offs: each Dream sends up to its input budget of conversation text to the configured provider and costs model tokens, so it stays opt-in; the per-Dream cap and the 24-hour interval bound both cost and review load, but a cap can also defer a real correction to the next Dream; a Dream sees only recent History after its cursor, so it cannot detect drift that no later conversation mentions. Whether model proposals are precise enough to be worth the review time is unknown until a quality evaluation runs; this decision ships the mechanism with offline tests and no quality claim.
