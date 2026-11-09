@@ -51,15 +51,20 @@ Only a project's Manager dispatches Workers in that project, and the Manager is 
 ```text
 Execution Status:
 dispatch → queued → running → collecting → done / failed
-            │         │
-            └── stop ─┴──→ interrupted
+            │         │           │
+            └── stop ─┴─ discard ─┴──→ interrupted
+done / failed / interrupted ── follow-up ──→ queued (next attempt)
 
 Review Status (recorded independently):
 pending → landing → landed
-       ↘ shipping → shipped
+       ↘ shipping → shipped → landing
        ↘ discarding → discarded
+landing / shipping / shipped ── discard ──→ discarding
 ```
 
+- One module owns these rules: [`src/shared/run-lifecycle.ts`](../src/shared/run-lifecycle.ts). It holds both transition tables, the gate for each action (stop, follow-up, land, ship, discard), and the status a person or an agent reads. `Db.patchRun` refuses any status change the tables do not allow. The service, the agent tools, and the Run panel all use the same gates, so the UI shows a button only when the service accepts the action. Change a rule in that module and in its test, `tests/run-lifecycle.test.ts`, never at a call site.
+- A failed land or ship keeps its `landing` or `shipping` status and the error. It stays retryable and discardable, and the Run panel shows the stored error. A deadline that passes while an attempt waits for a slot moves `queued` straight to `collecting`. A queued attempt that cannot start fails directly.
+- Agents read the Review after the status once a Review began, for example `done, landed` or `interrupted, discarded` (`list_runs`, `run_progress`).
 - Git projects must create an isolated worktree. Worktree failures stop execution immediately. Non-Git projects reject runs by default and require `allowInPlace` to edit files in place.
 - Runs store the dispatch directory, base branch, execution mode, and deadline.
 - Follow-up attempts create new attempts, inputs, results, and reports while reusing the same Worker conversation and worktree.

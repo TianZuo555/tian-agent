@@ -612,7 +612,11 @@ test('a refused maintenance request leaves the scheduler firing', async (t) => {
   // The refusal must not silently stop schedules until the next activate().
   assert.equal(service.scheduler.running, true);
   assert.equal((await service.activity()).maintenance, false);
-  service.db.patchRun('r-busy', { status: 'done', reviewStatus: 'discarded' });
+  service.db.patchRun('r-busy', {
+    status: 'interrupted',
+    reviewStatus: 'discarding',
+  });
+  service.db.patchRun('r-busy', { reviewStatus: 'discarded' });
   const fired = await service.scheduler.fireDue();
   assert.equal(fired.length, 1);
   assert.equal(fired[0].goalId, goal.id);

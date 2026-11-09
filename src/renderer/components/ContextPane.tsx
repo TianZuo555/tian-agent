@@ -48,6 +48,11 @@ import { Markdown } from './Markdown';
 import { PaneHeader } from './PaneHeader';
 import { ContextToggle } from './SidebarToggle';
 import type { MemoryItem, RunInfo } from '@/shared/types';
+import {
+  canRunAction,
+  isRunActive,
+  runDisplayStatus,
+} from '@/shared/run-lifecycle';
 import { actions, useStore } from '../store';
 
 type PaneTab = 'tasks' | 'runs' | 'memory';
@@ -58,13 +63,8 @@ const TABS: { id: PaneTab; label: MessageKey; icon: Icon }[] = [
   { id: 'memory', label: 'context.memory', icon: Stack },
 ];
 
-/** Discarded/landed/shipped runs read as terminal, whatever status they had. */
-function runLabel(run: RunInfo): MessageKey {
-  if (run.reviewStatus === 'discarded') return 'run.discarded';
-  if (run.reviewStatus === 'landed') return 'run.landed';
-  if (run.reviewStatus === 'shipped') return 'run.shipped';
-  return `run.${run.status}`;
-}
+/** A Review result or a running Review operation wins over the execution status. */
+const runLabel = (run: RunInfo): MessageKey => `run.${runDisplayStatus(run)}`;
 
 const statusVariant: Partial<
   Record<
@@ -78,28 +78,13 @@ const statusVariant: Partial<
   'run.done': 'secondary',
   'run.failed': 'destructive',
   'run.interrupted': 'warning',
+  'run.landing': 'secondary',
+  'run.shipping': 'secondary',
+  'run.discarding': 'outline',
   'run.discarded': 'outline',
   'run.landed': 'secondary',
   'run.shipped': 'secondary',
 };
-
-const isLive = (run: RunInfo) =>
-  run.status === 'running' ||
-  run.status === 'queued' ||
-  run.status === 'collecting';
-
-const isDiscarded = (run: RunInfo) => run.reviewStatus === 'discarded';
-
-/** Only pending, finished runs can be landed, shipped, or thrown away. */
-const isReviewable = (run: RunInfo) =>
-  !isDiscarded(run) &&
-  ['done', 'failed', 'interrupted'].includes(run.status) &&
-  run.reviewStatus === 'pending';
-
-/** Stop mirrors the service gate: queued or running, never while collecting. */
-const isStoppable = (run: RunInfo) =>
-  (run.status === 'queued' || run.status === 'running') &&
-  run.reviewStatus === 'pending';
 
 const DIFF_OPTIONS = {
   diffStyle: 'unified',
@@ -165,7 +150,8 @@ function DiffView({ patch }: { patch: string }) {
 
 /** Task row, Beautiful-UI style: icon, label, trailing meta. */
 function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
-  const meta = isLive(run)
+  const live = isRunActive(run);
+  const meta = live
     ? { icon: CircleNotch, spin: true, tone: 'text-info-foreground' }
     : run.status === 'done'
       ? { icon: CheckCircle, spin: false, tone: 'text-content-secondary' }
@@ -189,7 +175,7 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
       >
         <RunIcon
           size={13}
-          weight={isLive(run) ? 'regular' : 'fill'}
+          weight={live ? 'regular' : 'fill'}
           className={`mt-0.5 shrink-0 ${meta.tone} ${meta.spin ? 'animate-spin' : ''}`}
         />
         <span className="min-w-0 flex-1">
@@ -208,7 +194,7 @@ function TaskRow({ run, onOpen }: { run: RunInfo; onOpen: () => void }) {
           className="mt-1 shrink-0 text-content-disabled opacity-0 transition-opacity group-hover:opacity-100"
         />
       </motion.button>
-      {isStoppable(run) && (
+      {canRunAction(run, 'stop') && (
         <Button
           variant="ghost"
           size="icon-xs"
@@ -236,10 +222,9 @@ function RunActionBar({
   onDiscard: () => void;
 }) {
   const t = useT();
-  const reviewable = isReviewable(run);
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-1 border-border border-b px-2 py-1.5">
-      {isStoppable(run) && (
+      {canRunAction(run, 'stop') && (
         <Button
           variant="ghost"
           size="xs"
@@ -251,7 +236,7 @@ function RunActionBar({
           {t('context.stop')}
         </Button>
       )}
-      {!isDiscarded(run) && (
+      {canRunAction(run, 'followUp') && (
         <Button
           variant="ghost"
           size="xs"
@@ -263,28 +248,28 @@ function RunActionBar({
           {t('context.followUp')}
         </Button>
       )}
-      {run.branch && reviewable && (
-        <>
-          <Button
-            variant="ghost"
-            size="xs"
-            loading={busy === 'land'}
-            onClick={() => void act('land', () => actions.landRun(run.id))}
-          >
-            <GitMerge size={11} />
-            {t('context.land')}
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            loading={busy === 'ship'}
-            onClick={() => void act('ship', () => actions.shipRun(run.id))}
-          >
-            {t('context.ship')}
-          </Button>
-        </>
+      {canRunAction(run, 'land') && (
+        <Button
+          variant="ghost"
+          size="xs"
+          loading={busy === 'land'}
+          onClick={() => void act('land', () => actions.landRun(run.id))}
+        >
+          <GitMerge size={11} />
+          {t('context.land')}
+        </Button>
       )}
-      {!isDiscarded(run) && (
+      {canRunAction(run, 'ship') && (
+        <Button
+          variant="ghost"
+          size="xs"
+          loading={busy === 'ship'}
+          onClick={() => void act('ship', () => actions.shipRun(run.id))}
+        >
+          {t('context.ship')}
+        </Button>
+      )}
+      {canRunAction(run, 'discard') && (
         <Button
           variant="ghost"
           size="xs"
@@ -378,6 +363,20 @@ function RunDetail({ run, onBack }: { run: RunInfo; onBack: () => void }) {
         >
           <WarningCircle size={12} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">{error}</span>
+        </div>
+      )}
+
+      {!error && run.error && (
+        <div
+          role="status"
+          className="flex items-start gap-1.5 border-border border-b px-2 py-1.5 text-[11px] text-content-secondary"
+        >
+          <WarningCircle
+            size={12}
+            className="mt-0.5 shrink-0"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 break-words">{run.error}</span>
         </div>
       )}
 
@@ -1219,7 +1218,7 @@ export function ContextPane() {
   const counts: Record<PaneTab, number> = {
     tasks: tasks.filter((t) => t.scopeId === scope && t.status === 'pending')
       .length,
-    runs: runs.filter(isLive).length,
+    runs: runs.filter(isRunActive).length,
     memory: (memory?.items ?? []).filter((m) => m.status === 'active').length,
   };
 

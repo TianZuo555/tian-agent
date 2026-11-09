@@ -51,15 +51,20 @@ Task 状态机：`pending → running → waiting_approval → completed`，另�
 ```text
 执行状态（status）：
 dispatch → queued → running → collecting → done / failed
-            │         │
-            └── stop ─┴──→ interrupted
+            │         │           │
+            └── stop ─┴─ discard ─┴──→ interrupted
+done / failed / interrupted ── follow-up ──→ queued（下一个 attempt）
 
 验收状态（reviewStatus，独立记录）：
 pending → landing → landed
-       ↘ shipping → shipped
+       ↘ shipping → shipped → landing
        ↘ discarding → discarded
+landing / shipping / shipped ── discard ──→ discarding
 ```
 
+- 这些规则只由一个模块定义：[`src/shared/run-lifecycle.ts`](../../src/shared/run-lifecycle.ts)。它包含两张状态转换表、每个操作（stop、follow-up、land、ship、discard）的准入条件，以及人和 Agent 看到的状态。`Db.patchRun` 拒绝转换表不允许的状态变化。服务、Agent 工具和 Run 面板使用同一套准入条件，所以界面只在服务接受操作时显示对应按钮。修改规则时，改这个模块和它的测试 `tests/run-lifecycle.test.ts`，不要在调用处改。
+- land 或 ship 失败后，状态保持 `landing` 或 `shipping`，并记录错误。此时可以重试，也可以 discard；Run 面板显示记录的错误。attempt 等待名额时如果截止时间已过，状态直接从 `queued` 变为 `collecting`。queued 的 attempt 如果无法开始，直接变为 failed。
+- 验收开始后，Agent 看到的状态是执行状态加验收状态，例如 `done, landed` 或 `interrupted, discarded`（`list_runs`、`run_progress`）。
 - Git 项目必须成功创建 worktree，隔离失败终止派发并保留记录；非 Git 项目默认拒绝，明确开启 `allowInPlace` 后才可修改原目录。
 - Run 保存派发时的目录、base branch、执行模式及截止时间。
 - follow-up 每轮有独立 attempt、输入、结果和报告，复用工兵会话与 worktree。

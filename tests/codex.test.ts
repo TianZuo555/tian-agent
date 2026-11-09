@@ -312,8 +312,12 @@ test('a restart before codex reports a session ends the attempt interrupted', as
     runtime: 'codex',
   });
   await until(() => f.db.getRun(run.id)?.status === 'done');
-  // Simulate a kill between launch and the thread.started event.
-  f.db.patchRun(run.id, { status: 'running', externalSession: null });
+  // Simulate a kill between launch and the thread.started event: a crash
+  // leaves this row as stored, so it bypasses the lifecycle guard.
+  f.db.sqlite
+    .prepare("UPDATE runs SET status = 'running' WHERE id = ?")
+    .run(run.id);
+  f.db.patchRun(run.id, { externalSession: null });
   const conversation = await f.codex.get(f.db.getRun(run.id)!.conversationId!);
   const submission = await conversation.submit(
     'again',

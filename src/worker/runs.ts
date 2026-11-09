@@ -9,6 +9,7 @@ import type { Emit } from '../shared/types.js';
 import { atomicWrite } from './files.js';
 import * as Git from './dispatch.js';
 import type { RunProgress, RunToolCall } from './run-progress.js';
+import { isRunActive, runActionBlocker } from '../shared/run-lifecycle.js';
 
 export interface WorkerSubmission {
   /**
@@ -428,10 +429,7 @@ export class RunOrchestrator {
         if (!this.closing)
           await this.locked(id, async () => {
             const run = this.require(id);
-            if (
-              run.reviewStatus === 'pending' &&
-              ['queued', 'running', 'collecting'].includes(run.status)
-            )
+            if (run.reviewStatus === 'pending' && isRunActive(run))
               await this.fail(run, error);
           });
       })
@@ -779,11 +777,9 @@ export class RunOrchestrator {
     await this.collectors.get(id);
     return this.locked(id, async () => {
       const run = this.require(id);
-      if (
-        !['done', 'failed', 'interrupted'].includes(run.status) ||
-        run.reviewStatus !== 'pending'
-      )
-        throw new Error('Run is not available for follow-up');
+      const blocked = runActionBlocker(run, 'followUp');
+      if (blocked)
+        throw new Error(`Run ${id} is not available for follow-up: ${blocked}`);
       if (
         !run.conversationId ||
         (run.worktreePath && !existsSync(run.worktreePath))
@@ -818,18 +814,16 @@ export class RunOrchestrator {
       this.locked(`project:${this.require(id).projectId}`, async () => {
         const run = this.require(id);
         if (run.reviewStatus === 'landed') return 'Already landed';
-        if (
-          !run.branch ||
-          !['done', 'failed', 'interrupted'].includes(run.status) ||
-          !['pending', 'shipped', 'landing'].includes(run.reviewStatus)
-        )
-          throw new Error('Run is not available to land');
+        const blocked = runActionBlocker(run, 'land');
+        if (blocked)
+          throw new Error(`Run ${id} is not available to land: ${blocked}`);
+        const branch = run.branch!;
         this.db.patchRun(id, { reviewStatus: 'landing', error: null });
         this.changed();
         let output = 'Already merged';
         try {
-          if (!(await Git.isLanded(run.rootPath, run.baseBranch, run.branch)))
-            output = await Git.merge(run.rootPath, run.branch, run.baseBranch);
+          if (!(await Git.isLanded(run.rootPath, run.baseBranch, branch)))
+            output = await Git.merge(run.rootPath, branch, run.baseBranch);
           await Git.discardWorktree(run.rootPath, run.worktreePath, null);
           this.db.patchRun(id, { reviewStatus: 'landed', worktreePath: null });
           this.events?.record({
@@ -876,10 +870,7 @@ export class RunOrchestrator {
   ): Promise<RunRow> {
     return this.locked(id, async () => {
       const run = this.require(id);
-      if (
-        !['queued', 'running'].includes(run.status) ||
-        run.reviewStatus !== 'pending'
-      ) {
+      if (runActionBlocker(run, 'stop')) {
         if (opts?.strict)
           throw new Error(
             `Run ${id} is not running (${run.status}${run.reviewStatus !== 'pending' ? `, review ${run.reviewStatus}` : ''})`,
@@ -942,8 +933,8 @@ export class RunOrchestrator {
     await this.locked(id, async () => {
       const run = this.require(id);
       if (run.reviewStatus === 'discarded') return;
-      if (run.reviewStatus === 'landed')
-        throw new Error('A landed run cannot be discarded');
+      const blocked = runActionBlocker(run, 'discard');
+      if (blocked) throw new Error(`Run ${id} cannot be discarded: ${blocked}`);
       this.db.patchRun(id, { reviewStatus: 'discarding' });
       this.changed();
       clearTimeout(this.timers.get(id));
@@ -955,9 +946,7 @@ export class RunOrchestrator {
         const updated = this.db.patchRun(id, {
           reviewStatus: 'discarded',
           worktreePath: null,
-          status: ['queued', 'running', 'collecting'].includes(run.status)
-            ? 'interrupted'
-            : run.status,
+          status: isRunActive(run) ? 'interrupted' : run.status,
           finishedAt: run.finishedAt ?? new Date().toISOString(),
         });
         this.db.recordAttempt(updated);
@@ -987,29 +976,27 @@ export class RunOrchestrator {
     return this.locked(id, async () => {
       const run = this.require(id);
       if (run.prUrl) return run.prUrl;
-      if (
-        !run.branch ||
-        !run.worktreePath ||
-        !['done', 'failed', 'interrupted'].includes(run.status) ||
-        !['pending', 'shipping'].includes(run.reviewStatus)
-      )
-        throw new Error('Run is not available to ship');
+      const blocked = runActionBlocker(run, 'ship');
+      if (blocked)
+        throw new Error(`Run ${id} is not available to ship: ${blocked}`);
+      const branch = run.branch!;
+      const worktree = run.worktreePath!;
       this.db.patchRun(id, { reviewStatus: 'shipping', error: null });
       this.changed();
       try {
-        const pushed = await Git.git(run.worktreePath, [
+        const pushed = await Git.git(worktree, [
           'push',
           '-u',
           'origin',
-          run.branch,
+          branch,
         ]);
         if (pushed.code !== 0) throw new Error(`Push failed: ${pushed.stderr}`);
         const existing = JSON.parse(
-          await Git.gh(run.worktreePath, [
+          await Git.gh(worktree, [
             'pr',
             'list',
             '--head',
-            run.branch,
+            branch,
             '--base',
             run.baseBranch,
             '--state',
@@ -1022,14 +1009,14 @@ export class RunOrchestrator {
         ) as { url: string }[];
         const url =
           existing[0]?.url ??
-          (await Git.gh(run.worktreePath, [
+          (await Git.gh(worktree, [
             'pr',
             'create',
             '--fill',
             '--base',
             run.baseBranch,
             '--head',
-            run.branch,
+            branch,
           ]));
         this.db.patchRun(id, { reviewStatus: 'shipped', prUrl: url });
         this.events?.record({

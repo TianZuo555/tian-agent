@@ -2,6 +2,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATABASE_VERSION } from '../shared/version.js';
+import {
+  ACTIVE_RUN_STATUSES,
+  UNSETTLED_REVIEW_STATUSES,
+  assertRunTransition,
+} from '../shared/run-lifecycle.js';
 import type {
   ConversationInfo,
   InboxItem,
@@ -111,6 +116,10 @@ const row = <T>(value: unknown): T =>
   ) as T;
 const rows = <T>(values: unknown[]): T[] =>
   values.map((value) => row<T>(value));
+/** A SQL `IN` list of fixed status names; never pass user input. */
+const sqlList = (values: readonly string[]) =>
+  values.map((value) => `'${value}'`).join(',');
+const ACTIVE_SQL = sqlList(ACTIVE_RUN_STATUSES);
 
 export class Db {
   private db: DatabaseSync;
@@ -803,6 +812,11 @@ export class Db {
   }
   patchRun(id: string, patch: Partial<Omit<RunRow, 'id'>>): RunRow {
     const entries = Object.entries(patch);
+    if (patch.status !== undefined || patch.reviewStatus !== undefined) {
+      const current = this.getRun(id);
+      if (!current) throw new Error(`Unknown run: ${id}`);
+      assertRunTransition(id, current, patch);
+    }
     if (entries.length)
       this.db
         .prepare(
@@ -878,7 +892,7 @@ export class Db {
   activeRuns(): RunRow[] {
     return this.db
       .prepare(
-        "SELECT * FROM runs WHERE status IN ('queued','running','collecting') AND review_status != 'discarded'",
+        `SELECT * FROM runs WHERE status IN (${ACTIVE_SQL}) AND review_status != 'discarded'`,
       )
       .all()
       .map((value) => this.readRun(value));
@@ -886,7 +900,7 @@ export class Db {
   unsettledReviews(): RunRow[] {
     return this.db
       .prepare(
-        "SELECT * FROM runs WHERE review_status IN ('landing','shipping','discarding')",
+        `SELECT * FROM runs WHERE review_status IN (${sqlList(UNSETTLED_REVIEW_STATUSES)})`,
       )
       .all()
       .map((value) => this.readRun(value));
@@ -894,7 +908,7 @@ export class Db {
   projectHasRuns(id: string): boolean {
     return !!this.db
       .prepare(
-        "SELECT 1 FROM runs WHERE project_id = ? AND (status IN ('queued','running','collecting') OR (worktree_path IS NOT NULL AND review_status != 'discarded')) LIMIT 1",
+        `SELECT 1 FROM runs WHERE project_id = ? AND (status IN (${ACTIVE_SQL}) OR (worktree_path IS NOT NULL AND review_status != 'discarded')) LIMIT 1`,
       )
       .get(id);
   }
@@ -942,7 +956,7 @@ export class Db {
       .prepare(
         `SELECT * FROM runs WHERE project_id = ? AND prompt = ?
          AND COALESCE(chief_conversation_id, '') = COALESCE(?, '')
-         AND status IN ('queued', 'running', 'collecting')
+         AND status IN (${ACTIVE_SQL})
          AND review_status = 'pending'
          ORDER BY started_at DESC LIMIT 1`,
       )

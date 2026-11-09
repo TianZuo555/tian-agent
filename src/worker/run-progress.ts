@@ -1,4 +1,5 @@
-import type { ReviewStatus, RunStatus } from '../shared/types.js';
+import { runStateLabel } from '../shared/run-lifecycle.js';
+import type { ReviewStatus, RunInfo, RunStatus } from '../shared/types.js';
 
 /** One tool call the worker made, arguments shortened for reading. */
 export interface RunToolCall {
@@ -40,13 +41,29 @@ function duration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 }
 
+/** One `list_runs` entry: id, state (with its Review once one began), runtime, prompt. */
+export function describeRunLine(
+  run: Pick<
+    RunInfo,
+    | 'id'
+    | 'status'
+    | 'reviewStatus'
+    | 'runtime'
+    | 'projectId'
+    | 'finishedAt'
+    | 'prompt'
+  >,
+): string {
+  return `${run.id} [${runStateLabel(run)}] ${run.runtime} in ${run.projectId}${run.finishedAt ? ` finished:${run.finishedAt}` : ''}\n  ${run.prompt.split('\n')[0].slice(0, 100)}`;
+}
+
 /** One text block both agents can read: state, timing, last output, last calls. */
 export function describeRunProgress(
   progress: RunProgress,
   now = Date.now(),
 ): string {
   const lines = [
-    `run ${progress.id} [${progress.status}] attempt ${progress.attempt} · ${progress.projectId}`,
+    `run ${progress.id} [${runStateLabel(progress)}] attempt ${progress.attempt} · ${progress.projectId}`,
   ];
   if (progress.status === 'running' || progress.status === 'queued') {
     const elapsed = now - Date.parse(progress.startedAt);

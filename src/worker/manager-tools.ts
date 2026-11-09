@@ -19,7 +19,12 @@ import { taskExecutionTools } from './tools-goals.js';
 import type { HistoryDeps } from './tools-history.js';
 import { workerModelLine, type WorkerModelChoice } from './run-model.js';
 import { managerName } from './manager-label.js';
-import { describeRunProgress, type RunProgress } from './run-progress.js';
+import {
+  describeRunLine,
+  describeRunProgress,
+  type RunProgress,
+} from './run-progress.js';
+import { isRunActive } from '../shared/run-lifecycle.js';
 
 export interface ManagerDeps extends MemoryToolDeps {
   goals: GoalStore;
@@ -148,9 +153,7 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
             `  #${t.id} [${t.status}] ${t.assignee === 'manager' ? '[delegated] ' : ''}${t.title}${t.due ? ` (due ${t.due})` : ''}${t.goalId ? ` [goal ${t.goalId}]` : ''}`,
           );
       }
-      const running = db
-        .listRuns(scope)
-        .filter((r) => ['running', 'queued', 'collecting'].includes(r.status));
+      const running = db.listRuns(scope).filter(isRunActive);
       if (running.length > 0)
         lines.push(`active runs: ${running.map((r) => r.id).join(', ')}`);
     } catch {
@@ -436,20 +439,12 @@ HISTORY & NOTES. search_history reads this project's past sessions, tool calls a
   const listRuns = defineTool({
     name: 'list_runs',
     description:
-      "List this project's dispatched runs with status and how long a live one has been running.",
+      "List this project's dispatched runs with their status. Once a run is being or has been landed, shipped, or discarded, that Review follows the status: `done, landed`, `interrupted, discarded`. For a live run's timing, use run_progress.",
     parameters: Type.Object({}),
     execute: async (_args, api) => {
       const runs = db.listRuns(own(String(api.conversationId)));
       if (runs.length === 0) return text('(no runs)');
-      return text(
-        runs
-          .slice(0, 30)
-          .map(
-            (r) =>
-              `${r.id} [${r.status}] ${r.runtime} in ${r.projectId}${r.finishedAt ? ` finished:${r.finishedAt}` : ''}\n  ${r.prompt.split('\n')[0].slice(0, 100)}`,
-          )
-          .join('\n'),
-      );
+      return text(runs.slice(0, 30).map(describeRunLine).join('\n'));
     },
   });
 

@@ -128,6 +128,7 @@ test('ask_manager stops as soon as the run is discarded', async (t) => {
     .tool('ask_manager')
     .execute({ question: 'Should I continue?', wait_seconds: 300 }, api(run));
   await new Promise((resolve) => setTimeout(resolve, 30));
+  f.db.patchRun(run.id, { reviewStatus: 'discarding' });
   f.db.patchRun(run.id, { reviewStatus: 'discarded' });
   const result = await asking;
   assert.match(toolText(result), /cancelled/);

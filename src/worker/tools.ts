@@ -23,7 +23,12 @@ import type { ImprovementStore } from './improvements.js';
 import type { GoalStore } from './goals.js';
 import { goalsTools } from './tools-goals.js';
 import { managerClause, managerName } from './manager-label.js';
-import { describeRunProgress, type RunProgress } from './run-progress.js';
+import {
+  describeRunLine,
+  describeRunProgress,
+  type RunProgress,
+} from './run-progress.js';
+import { isRunActive } from '../shared/run-lifecycle.js';
 
 export interface ChiefDeps {
   scopes: Scopes;
@@ -204,9 +209,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
           );
       }
       // Oversight over every project's runs — the chief never owns one.
-      const running = db
-        .listRuns(null)
-        .filter((r) => ['running', 'queued', 'collecting'].includes(r.status));
+      const running = db.listRuns(null).filter(isRunActive);
       if (running.length > 0)
         lines.push(
           `active runs: ${running.map((r) => `${r.id} (${r.projectId})`).join(', ')}`,
@@ -527,7 +530,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
   const listRuns = defineTool({
     name: 'list_runs',
     description:
-      'List dispatched runs of a scope (or all scopes) with status and how long a live one has been running.',
+      "List dispatched runs of a scope (or all scopes) with their status. Once a run is being or has been landed, shipped, or discarded, that Review follows the status: `done, landed`, `interrupted, discarded`. For a live run's timing, use run_progress.",
     parameters: Type.Object({ scope: ScopeParam }),
     execute: async (args, api) => {
       const scope = args.scope
@@ -535,15 +538,7 @@ LOG. Use log_improvement for durable product feedback: broken behavior, recurrin
         : null;
       const runs = db.listRuns(scope);
       if (runs.length === 0) return text('(no runs)');
-      return text(
-        runs
-          .slice(0, 30)
-          .map(
-            (r) =>
-              `${r.id} [${r.status}] ${r.runtime} in ${r.projectId}${r.finishedAt ? ` finished:${r.finishedAt}` : ''}\n  ${r.prompt.split('\n')[0].slice(0, 100)}`,
-          )
-          .join('\n'),
-      );
+      return text(runs.slice(0, 30).map(describeRunLine).join('\n'));
     },
   });
 
