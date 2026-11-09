@@ -22,7 +22,10 @@ function temporary(t: TestContext): string {
 }
 
 type Prompt = { system: string; user: string };
-type Respond = (prompt: Prompt) => string | Promise<string>;
+type Respond = (
+  prompt: Prompt,
+  signal: AbortSignal,
+) => string | Promise<string>;
 
 interface Fixture {
   dir: string;
@@ -45,7 +48,11 @@ interface Fixture {
 
 function fixture(
   t: TestContext,
-  options: { respond?: Respond; isPaused?: () => boolean } = {},
+  options: {
+    respond?: Respond;
+    isPaused?: () => boolean;
+    timeoutMs?: number;
+  } = {},
 ): Fixture {
   const dir = temporary(t);
   const db = new Db(join(dir, 'data'));
@@ -68,10 +75,10 @@ function fixture(
     state.enabled
       ? {
           name: 'fake/dream',
-          complete: async (prompt) => {
+          complete: async (prompt, signal) => {
             state.prompts.push(prompt);
             return {
-              text: await state.respond(prompt),
+              text: await state.respond(prompt, signal),
               usage: { input: 120, output: 30 },
             };
           },
@@ -85,6 +92,7 @@ function fixture(
     model,
     now: () => new Date(state.clock),
     isPaused: options.isPaused,
+    timeoutMs: options.timeoutMs,
   });
   t.after(() => dreamer.stop());
   db.addProject({
@@ -875,4 +883,105 @@ test('concurrent dreams for one scope share a single run', async (t) => {
       ['p1', false],
     ],
   );
+});
+
+test('stop() aborts a model call that never answers', async (t) => {
+  let atModel: () => void = () => {};
+  const entered = new Promise<void>((resolve) => {
+    atModel = resolve;
+  });
+  const f = fixture(t, {
+    respond: (_prompt, signal) => {
+      atModel();
+      return new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    },
+  });
+  f.seed('p1', row('1', '10', 'We deploy on Mondays from now on'));
+
+  const pending = f.dreamer.dream('p1', { force: true });
+  await entered;
+  f.dreamer.stop();
+  const result = await pending;
+  await f.dreamer.idle();
+
+  assert.equal(result.ran, true);
+  assert.match(result.error ?? '', /stopped/);
+  assert.equal(items(f, 'p1').length, 0);
+  assert.equal(
+    f.count(
+      "SELECT COUNT(*) AS n FROM history_cursors WHERE conversation_id = 'memory-dream:p1'",
+    ),
+    0,
+  );
+  const [run] = f.dreamer.recent('p1');
+  assert.match(run.error ?? '', /stopped/);
+});
+
+test('a model call that never answers times out and keeps the cursor', async (t) => {
+  const f = fixture(t, {
+    // Ignores the signal on purpose: the Dreamer must not wait for it.
+    respond: () => new Promise<string>(() => {}),
+    timeoutMs: 20,
+  });
+  f.seed('p1', row('1', '10', 'We deploy on Mondays from now on'));
+
+  const result = await f.dreamer.dream('p1', { force: true });
+  assert.equal(result.ran, true);
+  assert.match(result.error ?? '', /timed out after 20 ms/);
+  const [run] = f.dreamer.recent('p1');
+  assert.match(run.error ?? '', /timed out after 20 ms/);
+  assert.equal(
+    f.count(
+      "SELECT COUNT(*) AS n FROM history_cursors WHERE conversation_id = 'memory-dream:p1'",
+    ),
+    0,
+  );
+  assert.equal(items(f, 'p1').length, 0);
+  // The failure back-off holds for an hour, so an unforced Dream is skipped.
+  assert.equal((await f.dreamer.dream('p1')).ran, false);
+});
+
+test('a memory section over the input budget records a visible failure', async (t) => {
+  const f = fixture(t);
+  const memory = f.scopes.memory('p1');
+  // Each line is ~340 estimated tokens; the system prompt is ~600.
+  for (let index = 0; index < 80; index++)
+    memory.remember({
+      text: `Stored fact ${index}: ${'x'.repeat(980)}`,
+      actor: 'chief',
+    });
+  f.seed('p1', row('1', '10', 'We deploy on Mondays from now on'));
+
+  const result = await f.dreamer.dream('p1', { force: true });
+  assert.equal(result.ran, true);
+  assert.match(result.error ?? '', /memory section exceeds the Dream input/);
+  assert.match(
+    result.error ?? '',
+    new RegExp(`> ${DREAM_INPUT_BUDGET} tokens`),
+  );
+  const [run] = f.dreamer.recent('p1');
+  assert.match(run.error ?? '', /memory section exceeds the Dream input/);
+  assert.equal(run.sources, 0);
+  assert.equal(
+    f.count(
+      "SELECT COUNT(*) AS n FROM history_cursors WHERE conversation_id = 'memory-dream:p1'",
+    ),
+    0,
+  );
+  assert.equal(
+    f.count(
+      "SELECT COUNT(*) AS n FROM memories WHERE scope_id = 'p1' AND status = 'candidate'",
+    ),
+    0,
+  );
+  // The run is visible and its back-off applies.
+  const events = f.events.list({ type: 'memory.dreamed' });
+  assert.equal(events.length, 1);
+  assert.match(events[0].summary, /memory section exceeds/);
+  assert.equal((await f.dreamer.dream('p1')).ran, false);
+  assert.equal(f.state.prompts.length, 0);
 });

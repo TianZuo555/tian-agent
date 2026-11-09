@@ -132,7 +132,7 @@ Dreaming（[D30](decisions.md#d30--dreaming-只提议用户来决定离线记忆
 - **校验**：任一规则不满足时，提议被丢弃并按原因计数：`cap`（超过单次上限）；`invalid`（类型未知、字段缺失、kind 不合法，或正文不是单行、超过 1,000 个 Unicode 字符）；`evidence`（没有证据、证据超过 3 条、`ref` 不在本次输入中，或 `excerpt` 不是原文的逐字子串，由 `resolveMemoryEvidence` 校验）；`instruction`（匹配提取时的指令模式）；`target`（目标已不存在、读取到提交之间状态或事实身份变化，或 `revise` 的目标不是 active）；`unchanged`（`revise` 没有改变任何身份字段）；`dismissed`（该身份在本 Scope 已被驳回）。与 active 记忆或候选完全重复时，只在原行追加证据，计为 duplicates。
 - **硬性限制**：Dream 从不写 `active` 行、`core = true`、确认记录、`verified_at`、删除或 Core 选择，也从不调用 `promote`、`forget`、`select`、`deselect`。候选的 actor 为 `worker`，可信度为 `agent_inferred`，版本原因以 `dream` 开头。
 - **门控**：每个 Scope 每 `DREAM_INTERVAL_MS`（24 小时）最多一次；待处理行至少 `DREAM_MIN_NEW_MESSAGES`（20）条；服务暂停或关闭时不运行；失败后等待 `DREAM_FAILURE_BACKOFF_MS`（1 小时）。服务每 15 分钟检查一次。
-- **失败**：模型报错或输出无法解析时不改记忆，游标不动；本次运行带错误记录。
+- **失败**：模型报错、输出无法解析、调用超时（每次调用 5 分钟）或服务停止时，不改记忆，游标不动；本次运行带错误记录。记忆部分本身超出输入预算时同样如此：运行记录 `memory section exceeds the Dream input budget`，而不是静默跳过，因此失败退避生效，`recent()` 也能看到原因。
 - **记录**：每次运行写入 `memory_dream_runs`（Scope、起止时间、模型、各结果与丢弃原因计数、token 用量、错误），并写一条 `memory.dreamed` Event；失败的运行在 Event 摘要中写明错误。与 `memory_worker_runs` 一样，该表由所属模块幂等创建，不提升 `DATABASE_VERSION`。
 - **Scope**：一次 Dream 只读一个 Scope、只写一个 Scope，所以[会话边界](#会话边界)不需要新规则。Global Dream 只看 Global Memory 与 Global History；项目 Dream 只看该项目，其他 Scope 的 `ref` 会被丢弃。
 

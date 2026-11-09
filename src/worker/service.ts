@@ -1519,7 +1519,7 @@ export class Service {
     if (!model) return null;
     return {
       name: `${choice.provider}/${choice.modelId}`,
-      complete: async (prompt) => {
+      complete: async (prompt, signal) => {
         const reply = await models.completeSimple(
           model,
           {
@@ -1528,10 +1528,12 @@ export class Service {
               { role: 'user', content: prompt.user, timestamp: Date.now() },
             ],
           },
-          { maxTokens: DREAM_MAX_OUTPUT_TOKENS },
+          { maxTokens: DREAM_MAX_OUTPUT_TOKENS, signal },
         );
-        if (reply.stopReason === 'error')
-          throw new Error(reply.errorMessage ?? 'model call failed');
+        if (reply.stopReason === 'error' || reply.stopReason === 'aborted')
+          throw new Error(
+            reply.errorMessage ?? `Dream model call ${reply.stopReason}`,
+          );
         return {
           text: reply.content
             .map((block) => (block.type === 'text' ? block.text : ''))

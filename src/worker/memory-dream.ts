@@ -41,10 +41,11 @@ import { codePointLength, tokenCost } from './search.js';
 export interface DreamModel {
   /** Model id for the run record; absent when the caller does not name one. */
   readonly name?: string;
-  complete(prompt: {
-    system: string;
-    user: string;
-  }): Promise<{ text: string; usage?: { input: number; output: number } }>;
+  /** Aborting `signal` must settle the call; the Dreamer never waits forever. */
+  complete(
+    prompt: { system: string; user: string },
+    signal: AbortSignal,
+  ): Promise<{ text: string; usage?: { input: number; output: number } }>;
 }
 
 export interface MemoryDreamerDeps {
@@ -55,6 +56,8 @@ export interface MemoryDreamerDeps {
   /** null = Dreaming is off (no `dreamModel` setting). */
   model: () => DreamModel | null;
   now?: () => Date;
+  /** Wall-clock limit for one model call; defaults to DREAM_TIMEOUT_MS. */
+  timeoutMs?: number;
   /** While true (closing/maintenance) dreams are refused. */
   isPaused?: () => boolean;
   /** Push the Memory panel update for a scope that gained candidates. */
@@ -116,6 +119,7 @@ export interface DreamRun {
 
 export const DREAM_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DREAM_FAILURE_BACKOFF_MS = 60 * 60 * 1000;
+export const DREAM_TIMEOUT_MS = 5 * 60 * 1000;
 export const DREAM_MIN_NEW_MESSAGES = 20;
 export const DREAM_INPUT_BUDGET = 24_000;
 export const DREAM_MAX_PROPOSALS = 8;
@@ -260,12 +264,39 @@ function parseProposals(text: string): unknown[] {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+const isTimeout = (reason: unknown): boolean =>
+  (reason as { name?: string } | null)?.name === 'TimeoutError';
+
+/** Settle with `task`, but reject as soon as `signal` aborts. */
+function abortable<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    task.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * One dreamer serves every scope; each keeps its own cursor and gate, so a
  * slow scope never blocks another.
  */
 export class MemoryDreamer {
   private inflight = new Map<string, Promise<DreamResult>>();
+  /** One controller per in-flight Dream, so stop() can abort every call. */
+  private controllers = new Set<AbortController>();
   private stopped = false;
 
   constructor(private deps: MemoryDreamerDeps) {
@@ -347,8 +378,17 @@ export class MemoryDreamer {
     const pending = this.inflight.get(scopeId);
     if (pending) return pending;
     if (!options.force && this.gated(scopeId)) return emptyResult(scopeId);
-    const run = this.dreamScope(scopeId, model).finally(() =>
-      this.inflight.delete(scopeId),
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(this.deps.timeoutMs ?? DREAM_TIMEOUT_MS),
+    ]);
+    const run = this.dreamScope(scopeId, model, signal, controller).finally(
+      () => {
+        this.controllers.delete(controller);
+        this.inflight.delete(scopeId);
+      },
     );
     this.inflight.set(scopeId, run);
     return run;
@@ -371,6 +411,8 @@ export class MemoryDreamer {
 
   stop(): void {
     this.stopped = true;
+    for (const controller of this.controllers) controller.abort();
+    this.controllers.clear();
   }
 
   /** Recent runs, newest first; diagnostics for the UI. */
@@ -445,11 +487,27 @@ export class MemoryDreamer {
   private async dreamScope(
     scopeId: string,
     model: DreamModel,
+    signal: AbortSignal,
+    controller: AbortController,
   ): Promise<DreamResult> {
     const startedAt = this.now.toISOString();
     // Catch the index up first so a Dream right after a turn sees it all.
     await this.deps.history.syncAll([scopeId]);
     const memories = this.memories(scopeId);
+    // A Scope whose memory alone fills the budget could never dream, and a
+    // silent skip would hide that: record it as a failed run instead.
+    const base = this.baseTokens(scopeId, memories);
+    if (base > DREAM_INPUT_BUDGET)
+      return this.failed(
+        scopeId,
+        startedAt,
+        model,
+        memories,
+        [],
+        new Error(
+          `memory section exceeds the Dream input budget (${base} > ${DREAM_INPUT_BUDGET} tokens)`,
+        ),
+      );
     const { sources, last } = this.collect(scopeId, memories);
     // Nothing to review: no prompt, no model call, no cursor move.
     if (sources.length === 0) return emptyResult(scopeId);
@@ -458,11 +516,18 @@ export class MemoryDreamer {
     let text: string;
     let usage = { input: 0, output: 0 };
     try {
-      const result = await model.complete(prompt);
+      const result = await abortable(model.complete(prompt, signal), signal);
       text = result.text;
       usage = result.usage ?? usage;
     } catch (error) {
-      return this.failed(scopeId, startedAt, model, memories, sources, error);
+      return this.failed(
+        scopeId,
+        startedAt,
+        model,
+        memories,
+        sources,
+        this.abortError(error, signal, controller),
+      );
     }
     let proposals: unknown[];
     try {
@@ -597,12 +662,9 @@ export class MemoryDreamer {
       at: string;
       text: string;
     }[];
-    const system = this.systemPrompt(scopeId);
     // Measured part by part: ceil() per part can only overstate the whole, so
     // the rendered prompt never exceeds the budget.
-    let used =
-      tokenCost(system) +
-      tokenCost(`${this.memorySection(memories)}\n\n${HISTORY_HEADING}`);
+    let used = this.baseTokens(scopeId, memories);
     const sources: DreamSource[] = [];
     let last = cursor;
     for (const row of rows) {
@@ -636,6 +698,30 @@ export class MemoryDreamer {
       last = source.rid;
     }
     return { sources, last };
+  }
+
+  /** System prompt, memories, and the History heading: the part before any row. */
+  private baseTokens(scopeId: string, memories: DreamMemory[]): number {
+    return (
+      tokenCost(this.systemPrompt(scopeId)) +
+      tokenCost(`${this.memorySection(memories)}\n\n${HISTORY_HEADING}`)
+    );
+  }
+
+  /** Name a timeout or a stop instead of surfacing a bare DOMException. */
+  private abortError(
+    error: unknown,
+    signal: AbortSignal,
+    controller: AbortController,
+  ): unknown {
+    if (!signal.aborted) return error;
+    if (isTimeout(signal.reason))
+      return new Error(
+        `Dream timed out after ${this.deps.timeoutMs ?? DREAM_TIMEOUT_MS} ms`,
+      );
+    return controller.signal.aborted
+      ? new Error('Dream aborted: the service stopped')
+      : error;
   }
 
   private prompt(
