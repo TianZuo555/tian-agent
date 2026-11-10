@@ -302,17 +302,18 @@ function dayKey(now: Date): string {
 
 /** The wake text: goal state + this task — never the full history. */
 export function wakeContent(goal: GoalItem, task: TaskItem): string {
+  // Absent fields drop out; the '' entries stay as the blank section breaks.
   return [
     `[goal: ${goal.objective}] (id ${goal.id}, status ${goal.status})`,
-    goal.successCriteria ? `success criteria: ${goal.successCriteria}` : '',
-    goal.constraints ? `constraints: ${goal.constraints}` : '',
-    goal.currentState ? `current state: ${goal.currentState}` : '',
+    goal.successCriteria ? `success criteria: ${goal.successCriteria}` : null,
+    goal.constraints ? `constraints: ${goal.constraints}` : null,
+    goal.currentState ? `current state: ${goal.currentState}` : null,
     `next action: ${goal.nextAction || '(decide and record it)'}`,
     '',
     `Task #${task.id} (${task.trigger === 'schedule' ? `schedule ${task.triggerRef}` : task.trigger}): ${task.title}`,
     '',
     'Work this task in this conversation now. Finish it with complete_task or fail_task, and update_goal with the new current state and next action afterwards. If nothing changed (outcome=no_change), do not notify Tian.',
   ]
-    .filter((line) => line !== '')
+    .filter((line) => line !== null)
     .join('\n');
 }

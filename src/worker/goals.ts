@@ -24,6 +24,13 @@ export const NOTICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const snake = (key: string) =>
   key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
+/** The trimmed objective; every write path (UI, IPC, chief tools) checks it here. */
+function requireObjective(objective: string): string {
+  const trimmed = objective.trim();
+  if (!trimmed) throw new Error('Goal objective cannot be empty');
+  return trimmed;
+}
+
 /**
  * Persistent store for goals, schedules and user notices (PRD §5.1, §5.3).
  * Owns its own tables; the tasks table itself stays in `db.ts`. Writes are
@@ -91,7 +98,7 @@ export class GoalStore {
     const goal: GoalRow = {
       id: `g-${randomUUID()}`,
       scopeId: input.scopeId,
-      objective: input.objective.trim(),
+      objective: requireObjective(input.objective),
       successCriteria: input.successCriteria?.trim() ?? '',
       constraints: input.constraints?.trim() ?? '',
       status: 'active',
@@ -150,9 +157,20 @@ export class GoalStore {
   }
 
   updateGoal(id: string, patch: GoalUpdate, now = new Date()): GoalRow {
-    const entries = Object.entries(patch).filter(
-      ([, value]) => value !== undefined,
-    );
+    if (!this.getGoal(id)) throw new Error(`Unknown goal: ${id}`);
+    const entries = Object.entries({
+      ...patch,
+      // Same rules as insertGoal: a goal never loses its objective.
+      ...(patch.objective !== undefined && {
+        objective: requireObjective(patch.objective),
+      }),
+      ...(patch.successCriteria !== undefined && {
+        successCriteria: patch.successCriteria.trim(),
+      }),
+      ...(patch.constraints !== undefined && {
+        constraints: patch.constraints.trim(),
+      }),
+    }).filter(([, value]) => value !== undefined);
     if (entries.length)
       this.db.sqlite
         .prepare(

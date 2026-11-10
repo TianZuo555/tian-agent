@@ -173,6 +173,34 @@ test('task transitions are enforced in one place and illegal moves throw', (t) =
   assert.equal(f.db.getTask(id)!.attempts, 1);
 });
 
+test('a goal objective is trimmed and never blank on any write path', (t) => {
+  const f = fixture(t);
+  assert.throws(
+    () => f.goals.insertGoal({ scopeId: 'global', objective: '   ' }),
+    /objective cannot be empty/,
+  );
+  const goal = f.goals.insertGoal({
+    scopeId: 'global',
+    objective: '  Keep CI green ',
+  });
+  assert.equal(goal.objective, 'Keep CI green');
+  assert.throws(
+    () => f.goals.updateGoal(goal.id, { objective: ' \n ' }),
+    /objective cannot be empty/,
+  );
+  assert.equal(f.goals.getGoal(goal.id)!.objective, 'Keep CI green');
+  const updated = f.goals.updateGoal(goal.id, {
+    objective: ' Keep main green ',
+    constraints: ' read-only ',
+  });
+  assert.equal(updated.objective, 'Keep main green');
+  assert.equal(updated.constraints, 'read-only');
+  assert.throws(
+    () => f.goals.updateGoal('g-missing', { status: 'paused' }),
+    /Unknown goal/,
+  );
+});
+
 test('a schedule fires exactly one task and one notification, even across a mid-fire restart', async (t) => {
   const f = fixture(t);
   const goal = f.goals.insertGoal({
@@ -201,6 +229,13 @@ test('a schedule fires exactly one task and one notification, even across a mid-
   assert.match(notifications[0].content, /success criteria: green for 7 days/);
   assert.match(notifications[0].content, /constraints: read-only/);
   assert.match(notifications[0].content, new RegExp(`Task #${tasks[0].id}`));
+  // Blank lines separate the goal state, the task, and the instructions.
+  assert.match(
+    notifications[0].content,
+    new RegExp(
+      `next action: .*\\n\\nTask #${tasks[0].id} .*\\n\\nWork this task`,
+    ),
+  );
   assert.match(
     wakeContent(goal, tasks[0]),
     /complete_task or fail_task[\s\S]*do not notify Tian/,
