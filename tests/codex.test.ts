@@ -184,10 +184,28 @@ test('a codex run executes, stores its session, and reports progress', async (t)
   const argv = readFileSync(f.log, 'utf8');
   assert.match(
     argv,
-    /exec --json --sandbox workspace-write --skip-git-repo-check finish the task/,
+    /exec --json --sandbox workspace-write --skip-git-repo-check -- finish the task/,
   );
   const progress = await f.runs.progress(run.id);
   assert.equal(progress.lastText, 'worker report text');
+});
+
+test('a prompt that looks like a flag or a subcommand stays the prompt', async (t) => {
+  const f = fixture(t);
+  const run = await f.runs.dispatch({
+    projectRef: 'p1',
+    prompt: '- fix the tests\n- keep the API',
+    chiefConversationId: null,
+    runtime: 'codex',
+  });
+  await until(() => f.db.getRun(run.id)?.status === 'done');
+  await f.runs.followUp(run.id, 'review');
+  await until(() => f.db.getRun(run.id)?.attempt === 2);
+  await until(() => f.db.getRun(run.id)?.status === 'done');
+  const session = f.db.getRun(run.id)!.externalSession!;
+  const argv = readFileSync(f.log, 'utf8');
+  assert.match(argv, /--skip-git-repo-check -- - fix the tests/);
+  assert.match(argv, new RegExp(`resume ${session} -- review\\n`));
 });
 
 test('a follow-up attempt resumes the stored codex session', async (t) => {
@@ -207,7 +225,7 @@ test('a follow-up attempt resumes the stored codex session', async (t) => {
   assert.match(
     argv,
     new RegExp(
-      `exec --json --sandbox workspace-write --skip-git-repo-check resume ${session} second round`,
+      `exec --json --sandbox workspace-write --skip-git-repo-check resume ${session} -- second round`,
     ),
   );
 });
@@ -238,7 +256,7 @@ test('a resubmitted attempt auto-resumes once; a failed resume ends interrupted'
   assert.match(second.reason ?? '', /automatic resume failed/);
   assert.equal(f.db.getRun(run.id)!.autoResumed, 1);
   const argv = readFileSync(f.log, 'utf8');
-  assert.match(argv, /--skip-git-repo-check resume sess-\d+ /);
+  assert.match(argv, /--skip-git-repo-check resume sess-\d+ -- /);
   assert.match(argv, /killed mid-attempt/);
 
   // A third submit of the same attempt can never answer.
@@ -290,7 +308,7 @@ test('a service restart resumes codex once with the last call; a second restart 
   assert.equal(stored.deadlineAt, deadline);
   assert.deepEqual(f.resumed, [run.id]);
   const argv = readFileSync(f.log, 'utf8');
-  assert.match(argv, new RegExp(`resume ${session} `));
+  assert.match(argv, new RegExp(`resume ${session} -- `));
   assert.match(argv, /last tool call was command_execution: .*rm -rf build/);
 
   // Second restart in the same attempt: no second resume, the run ends
@@ -412,12 +430,12 @@ test('codex model and thinking pins apply to initial, follow-up and recovered at
   const pins =
     '--model configured-model --config model_reasoning_effort="high"';
   assert.equal(argv.split(pins).length - 1, 3);
-  assert.ok(argv.includes(`${pins} finish with the configured model`));
+  assert.ok(argv.includes(`${pins} -- finish with the configured model`));
   assert.ok(
-    argv.includes(`${pins} resume ${session} HANG with the same model`),
+    argv.includes(`${pins} resume ${session} -- HANG with the same model`),
   );
   assert.ok(
-    argv.includes(`${pins} resume ${session} The previous codex process`),
+    argv.includes(`${pins} resume ${session} -- The previous codex process`),
   );
   await old.runs.join();
 });

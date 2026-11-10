@@ -114,9 +114,14 @@ class AttemptSlots {
 
   constructor(private readonly max: () => number) {}
 
-  /** A slot now, or null when the cap is reached or the gate is closed. */
+  /**
+   * A slot now, or null when the cap is reached, the gate is closed, or an
+   * earlier attempt still waits: waiters go first, also after a cap raise.
+   */
   tryAcquire(): (() => void) | null {
-    if (this.closed || this.active >= this.max()) return null;
+    this.grant();
+    if (this.closed || this.waiters.length || this.active >= this.max())
+      return null;
     return this.take();
   }
 
@@ -145,6 +150,12 @@ class AttemptSlots {
     for (const grant of this.waiters.splice(0)) grant();
   }
 
+  /** Wake waiters, oldest first, while the live cap has room for them. */
+  private grant(): void {
+    while (this.waiters.length && this.active < this.max())
+      this.waiters.shift()!();
+  }
+
   private take(): () => void {
     this.active++;
     let released = false;
@@ -152,7 +163,7 @@ class AttemptSlots {
       if (released) return;
       released = true;
       this.active--;
-      if (this.active < this.max()) this.waiters.shift()?.();
+      this.grant();
     };
   }
 }

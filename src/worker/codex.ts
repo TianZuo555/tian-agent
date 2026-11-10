@@ -233,6 +233,9 @@ class CodexConversation implements WorkerConversation {
           ]
         : []),
       ...(resume ? ['resume', run.externalSession!] : []),
+      // The prompt is data: a leading `-` (a Markdown bullet) must not parse
+      // as a flag, and a bare `resume` or `review` must not pick a subcommand.
+      '--',
       prompt,
     ];
     const argv = profile ? sandboxArgv(profile, command) : command;

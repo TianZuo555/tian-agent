@@ -958,6 +958,51 @@ test('a second attempt waits for a slot instead of running concurrently', async 
   }
 });
 
+test('a raised cap starts every waiter that fits, oldest first', async (t) => {
+  const f = await fixture(t);
+  const runtime = new FakeRuntime();
+  let cap = 1;
+  const runs = new RunOrchestrator(
+    f.db,
+    f.scopes,
+    runtime,
+    f.userData,
+    () => {},
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { limits: () => ({ global: cap, runtimes: {} }) },
+  );
+  const dispatch = (prompt: string) =>
+    runs.dispatch({ projectRef: 'p1', prompt, chiefConversationId: null });
+  const status = (run: RunRow) => f.db.getRun(run.id)?.status;
+  try {
+    const first = await dispatch('first');
+    await until(() => status(first) === 'running');
+    const second = await dispatch('second');
+    const third = await dispatch('third');
+    // One release after a raise to 3 starts both waiters, not only one.
+    cap = 3;
+    runtime.complete(first.conversationId!);
+    await until(
+      () => status(second) === 'running' && status(third) === 'running',
+    );
+    // Full again; a later dispatch must not jump ahead of an earlier waiter.
+    cap = 2;
+    const fourth = await dispatch('fourth');
+    cap = 3;
+    const fifth = await dispatch('fifth');
+    await until(() => status(fourth) === 'running');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(status(fifth), 'queued');
+  } finally {
+    runs.pause();
+    runtime.stopWaits();
+    await runs.join();
+  }
+});
+
 test('an attempt waiting on a full runtime does not block other runtimes', async (t) => {
   const f = await fixture(t);
   const slow = new FakeRuntime();
