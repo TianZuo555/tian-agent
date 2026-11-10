@@ -352,13 +352,51 @@ test('a rejected send is retried once the user writes again', async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(f.client.sent.length, 0);
 
-  // The user writes again, opening a fresh window: the pending reply lands.
+  // The user writes again, opening a fresh window: the pending reply lands
+  // at once, without waiting out the retry backoff (one second here).
   f.client.reject = false;
+  const wrote = Date.now();
   f.client.deliver(incoming('还在吗', 2));
   await until(() => f.client.sent.some((m) => m.text === '窗口已关闭'));
+  assert.ok(Date.now() - wrote < 600, 'the new message ends the retry wait');
   assert.deepEqual(
     f.client.sent.map((m) => m.text),
     ['窗口已关闭'],
+  );
+});
+
+test('users that share a manager conversation each get its replies once, from when they join', async (t) => {
+  const f = fixture(t, { allowed: `${USER},${OTHER}` });
+  await f.init();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const projectId = (await f.service.addProject('demo', project, '阿七')).find(
+    (scope) => scope.kind === 'project',
+  )!.id;
+  const managerId = f.service.db.managerConversation(projectId)!.conversationId;
+  // Tian talked to the manager on the desktop before any user joined.
+  await reply(f.service, managerId, '桌面上的旧回复');
+  f.client.deliver(incoming('/scope demo', 1, USER));
+  f.client.deliver(incoming('/scope demo', 2, OTHER));
+  await until(
+    () =>
+      f.client.sent.filter((m) => m.text.startsWith('已切换到 scope'))
+        .length === 2,
+  );
+  await reply(f.service, managerId, '管理者的回复');
+  const replies = () => f.client.sent.filter((m) => m.text === '管理者的回复');
+  await until(() => replies().length === 2);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(
+    replies()
+      .map((m) => m.userId)
+      .sort(),
+    [OTHER, USER].sort(),
+  );
+  assert.equal(
+    f.client.sent.some((m) => m.text === '桌面上的旧回复'),
+    false,
+    'joining a conversation does not replay its transcript',
   );
 });
 

@@ -80,7 +80,10 @@ async function fixture(
     const config =
       options.token === null
         ? null
-        : { token: options.token ?? 'test-token', allowedChatIds: [allowed] };
+        : {
+            token: options.token ?? 'test-token',
+            allowedChatIds: allowed.split(','),
+          };
     const instance = new Service(join(root, 'data'), () => {}, {
       config,
       api,
@@ -327,6 +330,44 @@ test('/scope routes the chat to the project manager and persists', async (t) => 
     async () => (await userEntries(service, projectConversation)) === 2,
   );
   assert.equal(await userEntries(service, globalConversation), 1);
+});
+
+test('chats that share a manager conversation each get its replies once, from when they join', async (t) => {
+  const OTHER = 200;
+  const f = await fixture(t, { allowed: `${CHAT},${OTHER}` });
+  const service = await f.start();
+  const project = join(f.root, 'project');
+  mkdirSync(project);
+  const projectId = (await service.addProject('demo', project, '阿七')).find(
+    (scope) => scope.kind === 'project',
+  )!.id;
+  const managerId = service.db.managerConversation(projectId)!.conversationId;
+  // Tian talked to the manager on the desktop before any chat joined.
+  await reply(service, managerId, '桌面上的旧回复');
+  f.api.push(message(1, 11, CHAT, '/scope demo'));
+  f.api.push(message(2, 21, OTHER, '/scope demo'));
+  await until(
+    () =>
+      f.api.sent.filter((sent) => sent.text.startsWith('已切换到 scope'))
+        .length === 2,
+  );
+  await reply(service, managerId, '管理者的回复');
+  const replies = () =>
+    f.api.sent.filter((sent) => sent.text === '管理者的回复');
+  await until(() => replies().length === 2);
+  const polls = f.api.offsets.length;
+  await until(() => f.api.offsets.length >= polls + 5);
+  assert.deepEqual(
+    replies()
+      .map((sent) => sent.chatId)
+      .sort(),
+    [String(CHAT), String(OTHER)],
+  );
+  assert.equal(
+    f.api.sent.some((sent) => sent.text === '桌面上的旧回复'),
+    false,
+    'joining a conversation does not replay its transcript',
+  );
 });
 
 test('commands answer with help, status, and scope errors', async (t) => {
@@ -618,4 +659,9 @@ test('splitMessage prefers line boundaries and never exceeds the limit', () => {
   assert.equal(parts.length, 3);
   assert.ok(parts.every((part) => part.length <= 4096));
   assert.equal(parts.join(''), withLines);
+  // An emoji across the hard cut stays whole in the next part.
+  const emoji = `${'x'.repeat(4095)}😀tail`;
+  const halves = splitMessage(emoji);
+  assert.deepEqual(halves, ['x'.repeat(4095), '😀tail']);
+  assert.ok(halves.every((part) => part.isWellFormed()));
 });

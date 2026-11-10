@@ -363,7 +363,7 @@ Goal 字段：Objective、Success Criteria、Status、Constraints、Schedule / T
 | `memory_worker_runs`                                              | 已有   | Memory Worker 提取轮次审计（触发原因、候选计数）                                                                                                        |
 | `goals`、`schedules`、`user_notices`                              | 已有   | Goal、cron 调度与去重提醒                                                                                                                               |
 | `improvements`                                                    | 已有   | 改进日志（[D11](decisions.md#d11--改进日志用户与总管可写系统错误自动指纹化)）                                                                           |
-| `telegram_chats`、`telegram_state`、`telegram_forward_cursor`     | 已有   | 渠道映射、轮询 offset 与转发游标（[D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)）                               |
+| `telegram_chats`、`telegram_state`、`telegram_recipient_cursor`   | 已有   | 渠道映射、轮询 offset 与转发游标（[D8](decisions.md#d8--telegram-适配器long-polling--白名单-chat转发以会话游标恰好一次)）                               |
 | `skills`                                                          | 已有   | 多版本、状态机与来源引用（[D10](decisions.md#d10--skill-以人工审批为唯一注入闸门经验提取只产候选)）                                                     |
 | `manager_messages`                                                | 已有   | 项目管理者线程（kind / task_id / reply_to / closed_at）（[D12](decisions.md#d12--项目管理者每项目一条持久会话委派即-task-的三级链路)）                  |
 | `approvals`                                                       | 未合并 | 受控操作审批（`m3-approvals` 分支）                                                                                                                     |

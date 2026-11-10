@@ -182,7 +182,7 @@ Schedule 到期时，服务在一个数据库事务内完成三件事：按 `sch
 - **传输**：`getUpdates` 长轮询，用全局 `fetch`，无新依赖。网络或 HTTP 错误按指数退避（1s 起，封顶 60s），循环永不抛出；offset 持久化在自己的 `telegram_state` 表，只有在输入被 Durable 稳定受理（`submit` 返回）后才推进，因此重启不重放已处理的更新，重复投递的同一条更新靠 `tg:<chatId>:<message_id>` 去重。
 - **授权**：`TELEGRAM_ALLOWED_CHAT_IDS` 逗号分隔白名单，非白名单 chat 只记录 chat ID 后忽略。token 只出现在请求 URL 路径，错误日志将其改写为 `[REDACTED]`。
 - **会话与 scope**：chat 的当前 scope 持久化在 `telegram_chats` 表（默认 `global`）；`/scope` 切换时复用渠道绑定为该 (chat, scope) 打开独立 conversation。`/status`、`/help` 是适配器本地命令，直接读 `tian.db`，不进入模型。
-- **出站转发**：以 conversation 为单位维护持久游标（`telegram_forward_cursor`），只转发已提交的 `pi.assistant` 条目中的文本块（流式片段存于 `pi.live` 文档，天然不会转发；thinking 与 tool call 块被过滤）。触发采用「重启补扫 + conversation watch 推送」：启动时从游标补扫，之后由 watch 在新条目提交时即时触发；发送成功后才推进游标。消息按行边界拆分为不超过 4096 字符的纯文本。
+- **出站转发**：以 (chat, conversation) 为单位维护持久游标（`telegram_recipient_cursor`）：多个 chat 可共用同一条管理者会话，每个 chat 都收到每条回复；chat 新加入一条会话时从其最新条目开始，不补发此前的记录。只转发已提交的 `pi.assistant` 条目中的文本块（流式片段存于 `pi.live` 文档，天然不会转发；thinking 与 tool call 块被过滤）。触发采用「重启补扫 + conversation watch 推送」：启动时从游标补扫，之后由 watch 在新条目提交时即时触发；发送成功后才推进游标。消息按行边界拆分为不超过 4096 字符的纯文本。
 - **可测试与配置边界**：Bot API 收敛为 `getUpdates` / `sendMessage` 两个方法的注入接口，测试用假 API 驱动真实轮询循环、退避与游标恢复。渠道配置只在 `service/entry.ts` 读取 `service.env` 后显式传入（`ResidentServer` → `Service`）；`Service` 不读 `process.env`，没有配置就不启动，测试与临时实例不会触网。
 - **维护与授权**：进入维护时先停网关再检查空闲，`stop()` 等待在途提交与转发真正结束；白名单在唯一出站路径（`forwardChat`）上校验，被移出白名单的 chat 不再收到任何主动输出，也不再挂 watch。
 - **触发合并**：conversation watch 的每次视图变化只置脏标记，每个会话最多一个进行中加一个待执行转发，避免流式更新引发大量分页读取。
@@ -346,7 +346,7 @@ Manager（项目管理者）是介于总管与工兵之间的项目级 Agent：�
 **决定**：
 
 - **传输用现成 SDK**：`@wechatbot/wechatbot`（零运行时依赖、Node ≥22、文件存储），与「优先成熟库」的原则一致；SDK 收在 `WechatClient` 注入接口后面（登录、start/stop、send、事件），测试用假客户端驱动真实适配器。凭证、游标、context_token 存在 `<dataDir>/wechat/`。
-- **与 Telegram 同构**：白名单 `WECHAT_ALLOWED_USER_IDS`（为空则适配器完全不启动；首次登录前留空，扫码后从 Settings 拿到自己的 `…@im.wechat` 再加白名单重启）；每用户一条稳定渠道会话、`/scope` `/status` `/help` 本地命令、`wx:<userId>:<messageId>` 稳定 requestId、转发游标 `wechat_forward_cursor`、conversation watch 触发。宿主接口抽成 `ChannelHost`（`worker/channel-host.ts`），assistant 文本提取两个适配器共用一份。
+- **与 Telegram 同构**：白名单 `WECHAT_ALLOWED_USER_IDS`（为空则适配器完全不启动；首次登录前留空，扫码后从 Settings 拿到自己的 `…@im.wechat` 再加白名单重启）；每用户一条稳定渠道会话、`/scope` `/status` `/help` 本地命令、`wx:<userId>:<messageId>` 稳定 requestId、按 (用户, conversation) 的转发游标 `wechat_recipient_cursor`、conversation watch 触发。宿主接口抽成 `ChannelHost`（`worker/channel-host.ts`），assistant 文本提取两个适配器共用一份。
 - **窗口耗尽不丢消息**：转发遇到发送失败即重试三次后**不前移游标**，等用户下次发消息（打开新窗口）时自动补发。Telegram 侧不做这种区分（对端永久失败会一直报错），微信侧必须区分，因为 24 小时过期是常态而非异常。
 - **24 小时保活 = 最小代价探测**：窗口内短信条数有限，频繁保活会先把额度烧光。因此仅在用户静默 ≥11 小时、且距窗口结束仍有 ≥30 分钟时，发一个字符的「.」，每个窗口最多两次（`wechat_windows` 表记录 last_inbound/last_outbound/last_probe/probes）；被拒即认为窗口已关闭，把额度标记用尽、不再试探，等用户主动发消息。入站消息重置计数。
 - **登录入口在 App**：服务启动时若无凭证就发布二维码 URL，Settings → Channels 轮询展示（含配对码与重新生成）；不把二维码打进日志。

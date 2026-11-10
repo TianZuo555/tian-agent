@@ -1,7 +1,11 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import type { EntryId } from '@earendil-works/pi-durable';
 import { GLOBAL_SCOPE } from './scopes.js';
-import { assistantText, type ChannelHost } from './channel-host.js';
+import {
+  ForwardCursors,
+  assistantText,
+  type ChannelHost,
+} from './channel-host.js';
 import type { IssueContext } from './improvements.js';
 import type { ConversationInfo } from '../shared/types.js';
 
@@ -153,7 +157,12 @@ export function splitMessage(text: string, limit = MESSAGE_LIMIT): string[] {
   let rest = text;
   while (rest.length > limit) {
     let cut = rest.lastIndexOf('\n', limit - 1);
-    if (cut < Math.floor(limit / 2)) cut = limit; // no usable line boundary
+    if (cut < Math.floor(limit / 2)) {
+      cut = limit; // no usable line boundary
+      // Never cut between the halves of a surrogate pair (an emoji).
+      const code = rest.charCodeAt(cut - 1);
+      if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+    }
     parts.push(rest.slice(0, cut));
     rest = rest.slice(cut);
   }
@@ -178,19 +187,21 @@ interface WatchEntry {
  * assistant text entries back to the chat exactly once across restarts.
  *
  * Own tables (created here, not in db.ts): telegram_chats (chat -> scope),
- * telegram_state (getUpdates offset), telegram_forward_cursor (per-conversation
- * forwarding cursor). Approvals and goal notices can later join as commands
- * or push channels without changing the polling core.
+ * telegram_state (getUpdates offset), telegram_recipient_cursor (forwarding
+ * cursor per chat and conversation, see ForwardCursors). Approvals and goal
+ * notices can later join as commands or push channels without changing the
+ * polling core.
  */
 export class TelegramAdapter {
   private readonly options: TelegramOptions;
+  private readonly cursors: ForwardCursors;
   private running = false;
   private loop: Promise<void> | null = null;
   private epoch = 0;
   private abort: AbortController | null = null;
   private wakeSleep: (() => void) | null = null;
   private watches = new Map<string, WatchEntry>();
-  /** One forwarding pass per conversation, at most one queued re-run. */
+  /** One forwarding pass per chat and conversation, at most one queued re-run. */
   private forwardRuns = new Map<string, Promise<void>>();
   private forwardDirty = new Set<string>();
 
@@ -201,6 +212,7 @@ export class TelegramAdapter {
     options?: Partial<TelegramOptions>,
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.cursors = new ForwardCursors(host.db, TELEGRAM_CHANNEL);
   }
 
   private allowed(chatId: string): boolean {
@@ -457,19 +469,20 @@ export class TelegramAdapter {
   // ---- outbound forwarding
 
   /**
-   * Forward every completed assistant text entry newer than the persisted
-   * cursor of this conversation, then persist the cursor after each send.
-   * The allow-list is enforced here, on the single outbound path for
-   * conversation output. Passes are coalesced per conversation: at most one
+   * Forward every completed assistant text entry newer than the chat's
+   * persisted cursor in this conversation, then persist the cursor after each
+   * send. The allow-list is enforced here, on the single outbound path for
+   * conversation output. Passes are coalesced per chat and conversation: at most one
    * running and one queued re-run; extra triggers while one is pending only
    * set the dirty flag. Failures leave the cursor behind and retry on the
    * next trigger, so restarts neither drop nor duplicate messages.
    */
   private forwardChat(chatId: string, conversationId: string): Promise<void> {
     if (!this.running || !this.allowed(chatId)) return Promise.resolve();
-    const running = this.forwardRuns.get(conversationId);
+    const key = `${chatId}\n${conversationId}`;
+    const running = this.forwardRuns.get(key);
     if (running) {
-      this.forwardDirty.add(conversationId);
+      this.forwardDirty.add(key);
       return running;
     }
     const run = this.forwardNow(chatId, conversationId)
@@ -481,11 +494,11 @@ export class TelegramAdapter {
         }),
       )
       .then(() => {
-        this.forwardRuns.delete(conversationId);
-        if (this.forwardDirty.delete(conversationId) && this.running)
+        this.forwardRuns.delete(key);
+        if (this.forwardDirty.delete(key) && this.running)
           void this.forwardChat(chatId, conversationId);
       });
-    this.forwardRuns.set(conversationId, run);
+    this.forwardRuns.set(key, run);
     return run;
   }
 
@@ -496,7 +509,11 @@ export class TelegramAdapter {
     const conversation = await this.host.conversation(conversationId);
     for (;;) {
       if (!this.running) return;
-      const cursor = this.loadCursor(conversationId);
+      const cursor = await this.cursors.open(
+        chatId,
+        conversationId,
+        conversation,
+      );
       const page = await conversation.entries(
         { order: 'ascending', minEntryId: (cursor + 1) as EntryId },
         PAGE_SIZE,
@@ -510,7 +527,7 @@ export class TelegramAdapter {
           // parallel sends would reorder the transcript or skip a message.
           // react-doctor-disable-next-line react-doctor/async-await-in-loop
           for (const part of splitMessage(text)) await this.send(chatId, part);
-        this.saveCursor(conversationId, entry.id);
+        this.cursors.save(chatId, conversationId, entry.id);
       }
       if (page.items.length < PAGE_SIZE) return;
     }
@@ -549,6 +566,8 @@ export class TelegramAdapter {
     if (epoch !== this.epoch) return;
     try {
       const conversation = await this.host.conversation(conversationId);
+      // Fix the start before the chat's next submit, so its reply is new.
+      await this.cursors.open(chatId, conversationId, conversation);
       const watch = await conversation.watch(BACKGROUND_CONTEXT);
       if (epoch !== this.epoch) {
         await watch.stop().catch(() => {});
@@ -570,7 +589,7 @@ export class TelegramAdapter {
     }
   }
 
-  // ---- own tables (telegram_chats, telegram_state, telegram_forward_cursor)
+  // ---- own tables (telegram_chats, telegram_state, forwarding cursors)
 
   private ensureSchema(): void {
     this.host.db.sqlite.exec(`
@@ -580,10 +599,8 @@ export class TelegramAdapter {
       CREATE TABLE IF NOT EXISTS telegram_state (
         key TEXT PRIMARY KEY, value TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS telegram_forward_cursor (
-        conversation_id TEXT PRIMARY KEY, entry_id INTEGER NOT NULL
-      );
     `);
+    this.cursors.ensureSchema();
   }
 
   private chatScope(chatId: string): string | undefined {
@@ -643,23 +660,5 @@ export class TelegramAdapter {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       )
       .run(String(offset));
-  }
-
-  private loadCursor(conversationId: string): number {
-    const row = this.host.db.sqlite
-      .prepare(
-        'SELECT entry_id FROM telegram_forward_cursor WHERE conversation_id = ?',
-      )
-      .get(conversationId) as { entry_id: number } | undefined;
-    return row ? Number(row.entry_id) : 0;
-  }
-
-  private saveCursor(conversationId: string, entryId: number): void {
-    this.host.db.sqlite
-      .prepare(
-        `INSERT INTO telegram_forward_cursor (conversation_id, entry_id) VALUES (?, ?)
-         ON CONFLICT(conversation_id) DO UPDATE SET entry_id = excluded.entry_id`,
-      )
-      .run(conversationId, entryId);
   }
 }

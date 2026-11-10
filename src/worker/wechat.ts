@@ -9,7 +9,11 @@ import {
 } from '@wechatbot/wechatbot';
 import type { ConversationInfo, WechatStatus } from '../shared/types.js';
 import { GLOBAL_SCOPE } from './scopes.js';
-import { assistantText, type ChannelHost } from './channel-host.js';
+import {
+  ForwardCursors,
+  assistantText,
+  type ChannelHost,
+} from './channel-host.js';
 import type { IssueContext } from './improvements.js';
 
 export const WECHAT_CHANNEL = 'wechat';
@@ -142,11 +146,12 @@ interface ConversationState {
  *   and records whether the probe reached the user.
  *
  * Own tables (created here, not in db.ts): wechat_users (user -> scope),
- * wechat_forward_cursor (per-conversation forwarding cursor) and
- * wechat_windows (reply-window state per user).
+ * wechat_recipient_cursor (forwarding cursor per user and conversation, see
+ * ForwardCursors) and wechat_windows (reply-window state per user).
  */
 export class WechatAdapter {
   private readonly options: WechatOptions;
+  private readonly cursors: ForwardCursors;
   private client: WechatClient | null = null;
   private running = false;
   private starting = false;
@@ -156,7 +161,6 @@ export class WechatAdapter {
   private forwardDirty = new Set<string>();
   private retryWakes = new Map<string, () => void>();
   private keepaliveTimer: NodeJS.Timeout | null = null;
-  private sleepers = 0;
   private qrCodeUrl: string | null = null;
   private qrCodeAt = 0;
   private scanned = false;
@@ -170,6 +174,7 @@ export class WechatAdapter {
     options?: Partial<WechatOptions>,
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.cursors = new ForwardCursors(host.db, WECHAT_CHANNEL);
   }
 
   // ---- lifecycle
@@ -441,9 +446,10 @@ export class WechatAdapter {
 
   private forwardUser(userId: string, conversationId: string): Promise<void> {
     if (!this.running || !this.allowed(userId)) return Promise.resolve();
-    const running = this.forwardRuns.get(conversationId);
+    const key = `${userId}\n${conversationId}`;
+    const running = this.forwardRuns.get(key);
     if (running) {
-      this.forwardDirty.add(conversationId);
+      this.forwardDirty.add(key);
       return running;
     }
     const run = this.forwardNow(userId, conversationId)
@@ -455,11 +461,11 @@ export class WechatAdapter {
         }),
       )
       .then(() => {
-        this.forwardRuns.delete(conversationId);
-        if (this.forwardDirty.delete(conversationId) && this.running)
+        this.forwardRuns.delete(key);
+        if (this.forwardDirty.delete(key) && this.running)
           void this.forwardUser(userId, conversationId);
       });
-    this.forwardRuns.set(conversationId, run);
+    this.forwardRuns.set(key, run);
     return run;
   }
 
@@ -476,7 +482,11 @@ export class WechatAdapter {
     const conversation = await this.host.conversation(conversationId);
     for (;;) {
       if (!this.running) return;
-      const cursor = this.loadCursor(conversationId);
+      const cursor = await this.cursors.open(
+        userId,
+        conversationId,
+        conversation,
+      );
       const page = await conversation.entries(
         { order: 'ascending', minEntryId: (cursor + 1) as EntryId },
         PAGE_SIZE,
@@ -486,7 +496,7 @@ export class WechatAdapter {
       for (const entry of page.items) {
         const text = assistantText(entry);
         if (text && !(await this.deliver(userId, conversationId, text))) return;
-        this.saveCursor(conversationId, entry.id);
+        this.cursors.save(userId, conversationId, entry.id);
       }
       if (page.items.length < PAGE_SIZE) return;
     }
@@ -516,7 +526,9 @@ export class WechatAdapter {
           });
           return false;
         }
-        await this.sleep(attempt * 1_000);
+        // An inbound message from this user opens a fresh window and ends
+        // the wait early (wakeForward).
+        await this.sleep(attempt * 1_000, userId);
       }
     }
   }
@@ -545,14 +557,20 @@ export class WechatAdapter {
     wake();
   }
 
-  private sleep(ms: number): Promise<void> {
-    const key = `sleep:${++this.sleepers}`;
+  /** A retry wait that stop() and the user's next message (wakeForward) end. */
+  private sleep(ms: number, userId: string): Promise<void> {
     return new Promise((resolve) => {
-      this.retryWakes.set(key, () => {
-        this.retryWakes.delete(key);
+      // A newer wait of the same user replaces the older one; wake it first.
+      this.retryWakes.get(userId)?.();
+      const timer = setTimeout(() => wake(), ms);
+      timer.unref?.();
+      const wake = () => {
+        if (this.retryWakes.get(userId) === wake)
+          this.retryWakes.delete(userId);
+        clearTimeout(timer);
         resolve();
-      });
-      setTimeout(() => this.retryWakes.get(key)?.(), ms).unref?.();
+      };
+      this.retryWakes.set(userId, wake);
     });
   }
 
@@ -690,6 +708,8 @@ export class WechatAdapter {
     if (epoch !== this.epoch) return;
     try {
       const conversation = await this.host.conversation(conversationId);
+      // Fix the start before the user's next submit, so its reply is new.
+      await this.cursors.open(userId, conversationId, conversation);
       const watch = await conversation.watch(BACKGROUND_CONTEXT);
       if (epoch !== this.epoch) {
         await watch.stop().catch(() => {});
@@ -718,9 +738,6 @@ export class WechatAdapter {
       CREATE TABLE IF NOT EXISTS wechat_users (
         user_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, updated_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS wechat_forward_cursor (
-        conversation_id TEXT PRIMARY KEY, entry_id INTEGER NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS wechat_windows (
         user_id TEXT PRIMARY KEY,
         last_inbound_at INTEGER NOT NULL,
@@ -729,6 +746,7 @@ export class WechatAdapter {
         probes INTEGER NOT NULL
       );
     `);
+    this.cursors.ensureSchema();
   }
 
   private userScope(userId: string): string | undefined {
@@ -772,23 +790,5 @@ export class WechatAdapter {
           ]
         : [];
     });
-  }
-
-  private loadCursor(conversationId: string): number {
-    const row = this.host.db.sqlite
-      .prepare(
-        'SELECT entry_id FROM wechat_forward_cursor WHERE conversation_id = ?',
-      )
-      .get(conversationId) as { entry_id: number } | undefined;
-    return row ? Number(row.entry_id) : 0;
-  }
-
-  private saveCursor(conversationId: string, entryId: number): void {
-    this.host.db.sqlite
-      .prepare(
-        `INSERT INTO wechat_forward_cursor (conversation_id, entry_id) VALUES (?, ?)
-         ON CONFLICT(conversation_id) DO UPDATE SET entry_id = excluded.entry_id`,
-      )
-      .run(conversationId, entryId);
   }
 }
