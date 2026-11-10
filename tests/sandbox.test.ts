@@ -130,6 +130,96 @@ test('in-process reads of service data are denied', async () => {
   assert.equal(ok.ok, true);
 });
 
+test('profile denies service data after the write roots that contain it', () => {
+  // The last matching rule wins: a write root ($TMPDIR here) that contains
+  // the data dir must not open it again.
+  const profile = sandboxProfile(spec());
+  assert.ok(
+    profile.indexOf('(deny file-read* file-write*') >
+      profile.indexOf('(allow file-write*'),
+  );
+  // allowRead never re-opens service data.
+  assert.match(
+    sandboxProfile(spec({ allowRead: [data] })),
+    /\(deny file-read\* file-write\* \(subpath "[^"]*data"\)/,
+  );
+});
+
+test('in-process gate enforces the same denies as the profile', async () => {
+  writeFileSync(join(data, 'secret.json'), '{}');
+  const code = (result: { ok: boolean; error?: unknown }) =>
+    result.ok ? 'ok' : (result.error as FileError).code;
+  // Service data stays closed even when the project lists it in allowRead,
+  // and a write root that contains it does not make it writable.
+  const sandbox = env(spec({ allowRead: [data] }));
+  assert.equal(
+    code(
+      await sandbox.readTextFile(join(data, 'secret.json'), BACKGROUND_CONTEXT),
+    ),
+    'permission_denied',
+  );
+  assert.equal(
+    code(
+      await sandbox.writeFile(join(data, 'leak.txt'), 'x', BACKGROUND_CONTEXT),
+    ),
+    'permission_denied',
+  );
+  assert.equal(existsSync(join(data, 'leak.txt')), false);
+  // allowRead removes exact deny entries only, like the profile.
+  const ssh = join(homedir(), '.ssh');
+  const exact = env(spec({ allowRead: [ssh] }));
+  assert.equal(code(await exact.exists(ssh, BACKGROUND_CONTEXT)), 'ok');
+  const nested = env(spec({ allowRead: [join(ssh, 'known_hosts')] }));
+  assert.equal(
+    code(await nested.exists(join(ssh, 'known_hosts'), BACKGROUND_CONTEXT)),
+    'permission_denied',
+  );
+  // Read-only files inside a write root reject in-process edits too.
+  const state = join(root, 'cli-home-in-process');
+  mkdirSync(state, { recursive: true });
+  const config = join(state, 'config.toml');
+  writeFileSync(config, 'model = "safe"\n');
+  const readOnly = env(spec({ extraWrite: [state], readOnly: [config] }));
+  assert.equal(
+    code(await readOnly.writeFile(config, 'evil', BACKGROUND_CONTEXT)),
+    'permission_denied',
+  );
+  assert.equal(
+    code(
+      await readOnly.writeFile(
+        join(state, 'session.jsonl'),
+        '{}',
+        BACKGROUND_CONTEXT,
+      ),
+    ),
+    'ok',
+  );
+  assert.equal(readFileSync(config, 'utf8'), 'model = "safe"\n');
+});
+
+test(
+  'seatbelt: service data stays unwritable under a write root',
+  { skip: !darwin },
+  async () => {
+    const sandbox = env(spec({ runId: 'run-data' }));
+    const result = await sandbox.exec(
+      `echo x > ${join(data, 'shell-leak.txt')}`,
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    assert.equal(result.ok, true);
+    if (result.ok) assert.notEqual(result.value.exitCode, 0);
+    assert.equal(existsSync(join(data, 'shell-leak.txt')), false);
+    // The work root, also under $TMPDIR, stays writable.
+    const inside = await sandbox.exec(
+      'echo ok > still-writable.txt',
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    assert.equal(inside.ok && inside.value.exitCode, 0);
+  },
+);
+
 test('seatbelt: shell writes obey the profile', { skip: !darwin }, async () => {
   const sandbox = env(spec());
   const ok = await sandbox.exec(

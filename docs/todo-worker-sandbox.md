@@ -63,12 +63,12 @@ The child environment starts from `process.env` minus `TELEGRAM_*`, `WECHAT_*`, 
 
 ### 3.6 Project settings
 
-| Setting             | Values                              | Default (Phase 1 → Phase 3) |
-| ------------------- | ----------------------------------- | --------------------------- |
-| `sandboxMode`       | `off` / `workspace-write`           | `off` → `workspace-write`   |
-| `sandboxNetwork`    | `on` / `off` (localhost stays open) | `on`                        |
-| `sandboxExtraWrite` | Absolute paths, one per line        | Empty                       |
-| `sandboxAllowRead`  | Paths removed from the deny list    | Empty                       |
+| Setting             | Values                                                                         | Default (Phase 1 → Phase 3) |
+| ------------------- | ------------------------------------------------------------------------------ | --------------------------- |
+| `sandboxMode`       | `off` / `workspace-write`                                                      | `off` → `workspace-write`   |
+| `sandboxNetwork`    | `on` / `off` (localhost stays open)                                            | `on`                        |
+| `sandboxExtraWrite` | Absolute paths, one per line                                                   | Empty                       |
+| `sandboxAllowRead`  | Exact entries removed from the credential deny list; the data dir stays denied | Empty                       |
 
 These need new `projects` columns (a `DATABASE_VERSION` bump; the database is snapshotted and recreated), the `updateProject` patch schema in `src/shared/contracts.ts`, `ProjectSettings` in `src/shared/types.ts`, `ProjectSettingsDialog.tsx`, and i18n keys in `en.ts` and `zh.ts`.
 
@@ -90,19 +90,6 @@ The pattern follows Bazel: allow by default, then deny, then allow again. Later 
 
 ; Service socket: closed in every mode. It accepts every service command.
 (deny network-outbound (remote unix-socket (path-literal "<socketPath>")))
-
-; Secrets: no reads or writes of service data or credentials.
-(deny file-read* file-write*
-  (subpath "<dataDir>")                 ; service.env, tian.db, pi-session.sqlite, other Runs' worktrees
-  (subpath "<home>/.ssh")
-  (subpath "<home>/.aws")
-  (subpath "<home>/.gnupg")
-  (subpath "<home>/.config/gh")
-  (subpath "<home>/.docker")
-  (subpath "<home>/.kube")
-  (subpath "<home>/Library/Keychains")
-  (literal "<home>/.netrc")
-  (literal "<home>/.npmrc"))
 
 ; Writes: deny everywhere, then allow the Run's roots.
 (deny file-write*)
@@ -126,8 +113,24 @@ The pattern follows Bazel: allow by default, then deny, then allow again. Later 
   (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty")
   (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))
 
-; The work root lives under <dataDir>/worktrees: allow it again after the secrets rule.
-(allow file-read* (subpath "<workRoot>") (subpath "<worktreeGitDir>"))
+; Secrets: no reads or writes of service data or credentials.
+(deny file-read* file-write*
+  (subpath "<dataDir>")                 ; service.env, tian.db, pi-session.sqlite, other Runs' worktrees
+  (subpath "<home>/.ssh")
+  (subpath "<home>/.aws")
+  (subpath "<home>/.gnupg")
+  (subpath "<home>/.config/gh")
+  (subpath "<home>/.docker")
+  (subpath "<home>/.kube")
+  (subpath "<home>/Library/Keychains")
+  (literal "<home>/.netrc")
+  (literal "<home>/.npmrc"))
+
+; The last matching rule wins: the secrets rule follows the write roots, so a
+; write root that contains a secret path (a temp dir, a broad extra root)
+; cannot open it again. The work root lives under <dataDir>/worktrees: allow
+; it again after the secrets rule.
+(allow file-read* file-write* (subpath "<workRoot>") (subpath "<worktreeGitDir>"))
 ```
 
 Result for a worktree Run:

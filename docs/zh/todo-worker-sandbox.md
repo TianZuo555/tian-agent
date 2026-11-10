@@ -63,12 +63,12 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 
 ### 3.6 项目设置
 
-| 设置                | 取值                               | 默认（阶段 1 → 阶段 3）   |
-| ------------------- | ---------------------------------- | ------------------------- |
-| `sandboxMode`       | `off` / `workspace-write`          | `off` → `workspace-write` |
-| `sandboxNetwork`    | `on` / `off`（localhost 始终放行） | `on`                      |
-| `sandboxExtraWrite` | 绝对路径，每行一个                 | 空                        |
-| `sandboxAllowRead`  | 从禁读列表中移除的路径             | 空                        |
+| 设置                | 取值                                               | 默认（阶段 1 → 阶段 3）   |
+| ------------------- | -------------------------------------------------- | ------------------------- |
+| `sandboxMode`       | `off` / `workspace-write`                          | `off` → `workspace-write` |
+| `sandboxNetwork`    | `on` / `off`（localhost 始终放行）                 | `on`                      |
+| `sandboxExtraWrite` | 绝对路径，每行一个                                 | 空                        |
+| `sandboxAllowRead`  | 从凭据禁读列表中按原样移除的条目；数据目录始终禁读 | 空                        |
 
 需要：`projects` 新列（提升 `DATABASE_VERSION`；数据库先快照再重建）、`src/shared/contracts.ts` 的 `updateProject` patch schema、`src/shared/types.ts` 的 `ProjectSettings`、`ProjectSettingsDialog.tsx`，以及 `en.ts` / `zh.ts` 的 i18n key。
 
@@ -90,19 +90,6 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
 
 ; 服务 socket：任何模式下都关闭。它接受全部服务命令。
 (deny network-outbound (remote unix-socket (path-literal "<socketPath>")))
-
-; 密钥：禁止读写服务数据与凭据。
-(deny file-read* file-write*
-  (subpath "<dataDir>")                 ; service.env、tian.db、pi-session.sqlite、其他 Run 的 worktree
-  (subpath "<home>/.ssh")
-  (subpath "<home>/.aws")
-  (subpath "<home>/.gnupg")
-  (subpath "<home>/.config/gh")
-  (subpath "<home>/.docker")
-  (subpath "<home>/.kube")
-  (subpath "<home>/Library/Keychains")
-  (literal "<home>/.netrc")
-  (literal "<home>/.npmrc"))
 
 ; 写入：全部禁止，再放行本 Run 的根目录。
 (deny file-write*)
@@ -126,8 +113,23 @@ Pi 的读、写、编辑工具在服务进程内调用 `ExecutionEnv` 的文件�
   (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty")
   (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))
 
-; 工作根目录位于 <dataDir>/worktrees 下：在密钥规则之后重新放行读取。
-(allow file-read* (subpath "<workRoot>") (subpath "<worktreeGitDir>"))
+; 密钥：禁止读写服务数据与凭据。
+(deny file-read* file-write*
+  (subpath "<dataDir>")                 ; service.env、tian.db、pi-session.sqlite、其他 Run 的 worktree
+  (subpath "<home>/.ssh")
+  (subpath "<home>/.aws")
+  (subpath "<home>/.gnupg")
+  (subpath "<home>/.config/gh")
+  (subpath "<home>/.docker")
+  (subpath "<home>/.kube")
+  (subpath "<home>/Library/Keychains")
+  (literal "<home>/.netrc")
+  (literal "<home>/.npmrc"))
+
+; 最后匹配的规则生效：密钥规则放在写入根目录之后，包含密钥路径的写入根目录
+;（临时目录、宽泛的额外可写路径）不能重新放开它。工作根目录位于
+; <dataDir>/worktrees 下：在密钥规则之后重新放行读写。
+(allow file-read* file-write* (subpath "<workRoot>") (subpath "<worktreeGitDir>"))
 ```
 
 对 worktree Run 的效果：

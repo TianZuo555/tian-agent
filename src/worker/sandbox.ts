@@ -141,6 +141,23 @@ function canon(path: string): string {
   return canonical(path, '/');
 }
 
+/**
+ * Read denies for one Run, shared by the Seatbelt profile and the in-process
+ * gate so both enforce the same set. `allowRead` removes exact entries from
+ * the credential deny list (docs/todo-worker-sandbox.md); the service data
+ * dir is never re-allowed.
+ */
+function readDenies(spec: SandboxSpec): { dirs: string[]; files: string[] } {
+  const allowRead = new Set(spec.allowRead.map(canon));
+  return {
+    dirs: [
+      canon(spec.dataDir),
+      ...DENY_READ_DIRS.map(canon).filter((dir) => !allowRead.has(dir)),
+    ],
+    files: DENY_READ_FILES.map(canon).filter((file) => !allowRead.has(file)),
+  };
+}
+
 /** The Seatbelt program for one Run; `sandbox-exec` reads it verbatim. */
 export function sandboxProfile(spec: SandboxSpec): string {
   const writeRoots = [
@@ -152,9 +169,7 @@ export function sandboxProfile(spec: SandboxSpec): string {
   const readBack = [spec.workRoot, ...(spec.gitDir ? [spec.gitDir] : [])].map(
     canon,
   );
-  const dataDir = canon(spec.dataDir);
   const socket = spec.socketPath ? canon(spec.socketPath) : null;
-  const allowRead = new Set(spec.allowRead.map(canon));
   const lines: string[] = ['(version 1)', '(allow default)', ''];
   if (!spec.network)
     lines.push(
@@ -169,26 +184,23 @@ export function sandboxProfile(spec: SandboxSpec): string {
       `(deny network-outbound (remote unix-socket (path-literal "${escape(socket)}")))`,
       '',
     );
-  const denyReads = [
-    dataDir,
-    ...DENY_READ_DIRS.map(canon).filter((dir) => !allowRead.has(dir)),
-  ];
-  const denyFiles = DENY_READ_FILES.map(canon).filter(
-    (file) => !allowRead.has(file),
-  );
+  const { dirs: denyReads, files: denyFiles } = readDenies(spec);
+  // The last matching rule wins: the data and credential deny comes after the
+  // write roots, so a write root that contains them (a temp dir, a broad
+  // extra root) cannot open them again.
   lines.push(
-    '; Service data and credentials: no reads or writes.',
-    `(deny file-read* file-write* ${denyReads.map(subpath).join(' ')}`,
-    `  ${denyFiles.map((f) => `(literal "${escape(f)}")`).join(' ')})`,
-    '',
     '; Writes denied everywhere, then re-allowed at the run roots.',
     '(deny file-write*)',
     `(allow file-write* ${writeRoots.map(subpath).join(' ')}`,
     '  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty")',
     '  (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))',
     '',
+    '; Service data and credentials: no reads or writes.',
+    `(deny file-read* file-write* ${denyReads.map(subpath).join(' ')}`,
+    `  ${denyFiles.map((f) => `(literal "${escape(f)}")`).join(' ')})`,
+    '',
     '; The work root may live under the denied data dir: allow it back.',
-    `(allow file-read* ${readBack.map(subpath).join(' ')})`,
+    `(allow file-read* file-write* ${readBack.map(subpath).join(' ')})`,
   );
   const readOnly = (spec.readOnly ?? []).map(canon);
   if (readOnly.length)
@@ -238,8 +250,9 @@ export class SandboxedExecutionEnv implements ExecutionEnv {
   readonly id: string;
   readonly cwd: string;
   private writeRoots: string[];
+  /** Files inside a write root that stay read-only, as in the profile. */
+  private readOnly: string[];
   private denyReads: string[];
-  private allowReads: string[];
   /** Work roots stay readable even inside a denied directory. */
   private reallow: string[];
 
@@ -256,29 +269,30 @@ export class SandboxedExecutionEnv implements ExecutionEnv {
       ...CACHE_WRITE_ROOTS,
       ...spec.extraWrite,
     ].map(canon);
+    this.readOnly = (spec.readOnly ?? []).map(canon);
     this.reallow = [spec.workRoot, ...(spec.gitDir ? [spec.gitDir] : [])].map(
       canon,
     );
-    this.denyReads = [
-      canon(spec.dataDir),
-      ...DENY_READ_DIRS,
-      ...DENY_READ_FILES,
-    ].map(canon);
-    this.allowReads = spec.allowRead.map(canon);
+    const { dirs, files } = readDenies(spec);
+    this.denyReads = [...dirs, ...files];
   }
 
   private canWrite(path: string): boolean {
     const abs = canonical(path, this.cwd);
-    return this.writeRoots.some((root) => under(abs, root));
+    // Same precedence as the profile: write roots, then read-only files and
+    // the read denies (`deny file-read* file-write*`), then the work roots.
+    if (this.reallow.some((root) => under(abs, root)))
+      return !this.readOnly.includes(abs);
+    return (
+      this.writeRoots.some((root) => under(abs, root)) &&
+      !this.readOnly.includes(abs) &&
+      !this.denyReads.some((root) => under(abs, root))
+    );
   }
   private deniedRead(path: string): boolean {
     const abs = canonical(path, this.cwd);
-    // Same precedence as the profile: denies first, then explicit re-allows.
-    if (
-      this.allowReads.some((root) => under(abs, root)) ||
-      this.reallow.some((root) => under(abs, root))
-    )
-      return false;
+    // Same precedence as the profile: denies first, then the work roots.
+    if (this.reallow.some((root) => under(abs, root))) return false;
     return this.denyReads.some((root) => under(abs, root));
   }
   /** `never` unifies: every Result<T> accepts this error shape. */
