@@ -457,6 +457,32 @@ export const commandArgs = {
   usageStats: Type.Tuple([nullableId]),
 } satisfies Record<keyof Commands, TSchema>;
 
+/**
+ * Every event channel the service and the desktop push. The Record type makes
+ * the compiler reject a missing or unknown channel, so the socket client and
+ * the preload bridge cannot drift from `AppEvents`.
+ */
+const appEventChannels: Record<keyof AppEvents, true> = {
+  view: true,
+  conversations: true,
+  tasks: true,
+  goals: true,
+  notices: true,
+  improvements: true,
+  runs: true,
+  inbox: true,
+  memory: true,
+  skills: true,
+  scopes: true,
+  settings: true,
+  providers: true,
+  providerLogin: true,
+  runtime: true,
+};
+export const APP_EVENT_CHANNELS = Object.keys(
+  appEventChannels,
+) as readonly (keyof AppEvents)[];
+
 export type CommandName = keyof Commands;
 export type Args<K extends CommandName> = Commands[K]['args'];
 export type Result<K extends CommandName> = Commands[K]['result'];

@@ -9,17 +9,22 @@ export function jsonPeer(
 ) {
   let buffer = '';
   socket.setEncoding('utf8');
+  const tooLarge = (text: string) => {
+    if (Buffer.byteLength(text) <= maxBytes) return false;
+    socket.destroy(new Error('Service frame exceeds the size limit'));
+    return true;
+  };
+  // The limit is per frame: a burst of small messages in one chunk is fine,
+  // one oversized frame (complete or still arriving) is not.
   socket.on('data', (chunk: string) => {
     buffer += chunk;
-    if (Buffer.byteLength(buffer) > maxBytes) {
-      socket.destroy(new Error('Service frame exceeds the size limit'));
-      return;
-    }
+    let start = 0;
     let boundary: number;
-    while ((boundary = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 1);
+    while ((boundary = buffer.indexOf('\n', start)) >= 0) {
+      const line = buffer.slice(start, boundary);
+      start = boundary + 1;
       if (!line) continue;
+      if (tooLarge(line)) return;
       try {
         onMessage(JSON.parse(line));
       } catch {
@@ -27,6 +32,8 @@ export function jsonPeer(
         return;
       }
     }
+    buffer = buffer.slice(start);
+    tooLarge(buffer);
   });
   return {
     send(message: unknown): void {

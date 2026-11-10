@@ -1,5 +1,10 @@
 import { createConnection, type Socket } from 'node:net';
-import type { Args, CommandName, Result } from '../shared/contracts.js';
+import {
+  APP_EVENT_CHANNELS,
+  type Args,
+  type CommandName,
+  type Result,
+} from '../shared/contracts.js';
 import type { AppEvents, Emit, ServiceInfo } from '../shared/types.js';
 import { SERVICE_PROTOCOL } from '../shared/service-paths.js';
 import { isId, isRecord, jsonPeer } from './protocol.js';
@@ -9,22 +14,7 @@ interface Pending {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
-const channels = new Set<keyof AppEvents>([
-  'view',
-  'conversations',
-  'tasks',
-  'goals',
-  'notices',
-  'improvements',
-  'runs',
-  'inbox',
-  'memory',
-  'scopes',
-  'settings',
-  'providers',
-  'providerLogin',
-  'runtime',
-]);
+const channels = new Set<keyof AppEvents>(APP_EVENT_CHANNELS);
 
 /** Connects to a resident service; closing this client never stops the service. */
 export class ServiceClient {

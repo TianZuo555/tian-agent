@@ -640,17 +640,15 @@ export class Service {
   async updateProject(id: string, patch: ProjectPatch): Promise<ScopeInfo[]> {
     const existing = this.db.getProject(id);
     if (!existing) throw new Error(`Unknown project: ${id}`);
-    if (
-      patch.rootPath &&
-      patch.rootPath !== existing.rootPath &&
-      this.db.projectHasRuns(id)
-    )
-      throw new Error(
-        'Finish and clean up project runs before changing its directory',
-      );
+    // Compare canonical paths: the stored root is a realpath, so the same
+    // directory spelled differently (a symlink, a trailing slash) is no move.
     const rootPath = patch.rootPath
       ? this.projectRoot(patch.rootPath)
       : existing.rootPath;
+    if (rootPath !== existing.rootPath && this.db.projectHasRuns(id))
+      throw new Error(
+        'Finish and clean up project runs before changing its directory',
+      );
     const name = patch.name?.trim() ?? existing.name;
     if (
       !name ||

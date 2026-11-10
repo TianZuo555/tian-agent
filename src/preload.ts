@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { commandArgs, type CommandApi, type TianApi } from './shared/contracts';
+import {
+  APP_EVENT_CHANNELS,
+  commandArgs,
+  type CommandApi,
+  type TianApi,
+} from './shared/contracts';
 import type { AppEvents } from './shared/types';
 
 const commands = Object.fromEntries(
@@ -8,21 +13,7 @@ const commands = Object.fromEntries(
     (...args: unknown[]) => ipcRenderer.invoke('tian:invoke', command, args),
   ]),
 ) as CommandApi;
-const events: (keyof AppEvents)[] = [
-  'view',
-  'conversations',
-  'tasks',
-  'goals',
-  'notices',
-  'improvements',
-  'runs',
-  'inbox',
-  'memory',
-  'skills',
-  'scopes',
-  'settings',
-  'runtime',
-];
+const events = APP_EVENT_CHANNELS;
 
 const api: TianApi = {
   ...commands,

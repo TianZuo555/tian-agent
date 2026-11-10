@@ -7,6 +7,9 @@ import type { Conversation } from '@earendil-works/pi-durable';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { ResidentServer } from '../src/service/server';
 import { ServiceClient } from '../src/service/client';
+import { jsonPeer } from '../src/service/protocol';
+import { Duplex } from 'node:stream';
+import type { Socket } from 'node:net';
 import { servicePaths } from '../src/shared/service-paths';
 import type { ConversationInfo } from '../src/shared/types';
 import { launchAgentDefinition } from '../src/service/launchd';
@@ -98,6 +101,105 @@ test('closing every desktop client leaves the service and persistent data runnin
   assert.match(
     (await another.invoke('memoryDump', ['global'])).items[0].content,
     /shared memory/,
+  );
+});
+
+test('every pushed event reaches the client without dropping the connection', async (t) => {
+  const f = await fixture(t);
+  const events: { channel: string; payload: unknown }[] = [];
+  const app = f.client((channel, payload) => events.push({ channel, payload }));
+  await app.start();
+  // A skill change pushes 'skills'; an unlisted channel used to make the
+  // client destroy the socket, so the event never arrived.
+  const skill = f.server.service.skills.recordExtraction({
+    scopeId: 'global',
+    name: 'release-checklist',
+    description: 'Release steps',
+    body: 'Run the checks, then tag.',
+    sourceRefs: ['run:r-1'],
+  });
+  await app.invoke('skillApprove', [skill.id]);
+  await until(
+    () => events.filter(({ channel }) => channel === 'skills').length >= 2,
+  );
+  assert.deepEqual(
+    events
+      .filter(({ channel }) => channel === 'runtime')
+      .map(({ payload }) => (payload as { status: string }).status),
+    ['starting', 'ready'],
+  );
+  assert.equal((await app.invoke('skillList', [null]))[0].status, 'approved');
+});
+
+test('the frame limit applies per frame, not per chunk', () => {
+  const peer = () => {
+    const socket = new Duplex({
+      read() {},
+      write(_chunk, _encoding, done) {
+        done();
+      },
+    });
+    socket.on('error', () => {});
+    const received: unknown[] = [];
+    jsonPeer(
+      socket as unknown as Socket,
+      (message) => received.push(message),
+      64,
+    );
+    return { socket, received };
+  };
+  // Twenty small frames in one chunk: far over 64 bytes together, all fine.
+  const burst = peer();
+  burst.socket.emit(
+    'data',
+    Array.from({ length: 20 }, (_, n) => `{"n":${n}}\n`).join(''),
+  );
+  assert.equal(burst.received.length, 20);
+  assert.equal(burst.socket.destroyed, false);
+  // One oversized frame is refused, complete or still arriving.
+  const big = JSON.stringify({ text: 'x'.repeat(100) });
+  const complete = peer();
+  complete.socket.emit('data', `{"n":0}\n${big}\n`);
+  assert.equal(complete.received.length, 1);
+  assert.equal(complete.socket.destroyed, true);
+  const partial = peer();
+  partial.socket.emit('data', big.slice(0, 50));
+  assert.equal(partial.socket.destroyed, false);
+  partial.socket.emit('data', big.slice(50));
+  assert.equal(partial.socket.destroyed, true);
+  assert.equal(partial.received.length, 0);
+});
+
+test('re-saving a project directory spelled another way is not a move', async (t) => {
+  // /tmp is a symlink on macOS: the stored root is its realpath.
+  const root = mkdtempSync('/tmp/tian-project-root-');
+  const service = new Service(join(root, 'data'), () => {});
+  t.after(async () => {
+    await service.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  await service.init();
+  const directory = join(root, 'project');
+  mkdirSync(directory);
+  const project = (await service.addProject('demo', directory, '阿七')).find(
+    (scope) => scope.kind === 'project',
+  )!;
+  // A run still holds the project (written raw, as a crashed row would be).
+  service.db.sqlite
+    .prepare(
+      'INSERT INTO runs (id, project_id, prompt, started_at) VALUES (?, ?, ?, ?)',
+    )
+    .run('r-held', project.id, 'work', new Date().toISOString());
+  await service.updateProject(project.id, {
+    rootPath: `${directory}/`,
+    name: 'renamed',
+  });
+  assert.equal(service.db.getProject(project.id)!.name, 'renamed');
+  const elsewhere = join(root, 'elsewhere');
+  mkdirSync(elsewhere);
+  await assert.rejects(
+    service.updateProject(project.id, { rootPath: elsewhere }),
+    /Finish and clean up project runs/,
   );
 });
 
