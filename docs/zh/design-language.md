@@ -2,7 +2,7 @@
 
 [English](../design-language.md) | **简体中文**
 
-状态：已通过，见 [D23](decisions.md#d23--native-shell-客户端采用天色视觉语言)，2026-11。适用于 Native Shell（NSH）客户端，先做 macOS 和 iOS。可交互的设计稿是 [`docs/design/client-mockup.html`](../design/client-mockup.html)，用浏览器打开。设计稿有四个标签（macOS、iOS、组件、设计说明），可以切换昼夜，全部是示例数据。
+状态：已通过，见 [D23](decisions.md#d23--native-shell-客户端采用天色视觉语言)，2026-11。适用于 Native Shell（NSH）客户端，先做 macOS 和 iOS。可交互的设计稿是 [`docs/design/client-mockup.html`](../design/client-mockup.html)，用浏览器打开。设计稿有四个标签（macOS、iOS、组件、设计说明），可以切换昼夜，全部是示例数据。在仓库根目录运行 `mise lib`，可打开[设计库](../design/base.html)，其中链接了全部设计稿页面。
 
 Electron 客户端在移除前沿用旧的「墨色单色」语言。旧版本文档在 git 历史 `bb98e08` 中。
 

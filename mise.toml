@@ -26,6 +26,10 @@ pnpm start
 description = "Typecheck and lint"
 run = ["pnpm typecheck", "pnpm lint"]
 
+[tasks.lib]
+description = "Serve and open the design library (all docs/design HTML pages)"
+run = "pnpm tsx scripts/design-lib.mts"
+
 [tasks.doctor]
 description = "Scan React code quality with react-doctor"
 run = "pnpm react:doctor"

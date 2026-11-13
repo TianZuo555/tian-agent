@@ -2,7 +2,7 @@
 
 **English** | [简体中文](zh/design-language.md)
 
-Status: Accepted as [D23](decisions.md#d23--tian-sky-visual-language-for-the-native-shell-clients), 2026-11. Applies to the Native Shell (NSH) clients: macOS and iOS first. The interactive mockup is [`docs/design/client-mockup.html`](design/client-mockup.html); open it in a browser. It has four tabs (macOS, iOS, Components, Design notes), a day/night switch, and sample data only.
+Status: Accepted as [D23](decisions.md#d23--tian-sky-visual-language-for-the-native-shell-clients), 2026-11. Applies to the Native Shell (NSH) clients: macOS and iOS first. The interactive mockup is [`docs/design/client-mockup.html`](design/client-mockup.html); open it in a browser. It has four tabs (macOS, iOS, Components, Design notes), a day/night switch, and sample data only. Run `mise lib` from the repository root to serve the [design library](design/base.html), which links every design page.
 
 The Electron client keeps the previous ink-monochrome language until it is removed. That version of this document is in git history at `bb98e08`.
 
