@@ -2,7 +2,7 @@
 
 ## Status and implementation gate
 
-**Plan only. Implementation is paused.**
+**Plan only. Server-first client implementation is paused.**
 
 The product direction is server-first: **Pi Server + NSH clients over Tailscale**.
 The earlier local resident-service/sidecar topology is superseded. The protocol and UI specifications must land in `main` before client
@@ -17,8 +17,8 @@ implementation starts. The source of truth is [`docs/spec/`](spec/README.md):
 
 These specifications take precedence over this migration plan. The plan records
 migration order and verification work; it does not define another contract.
-Do not start Phase 1 or add client code. Wait for the specifications to land and
-for the user to resume implementation.
+Do not start Phase 1 or add client code for the server-first client. Wait for the
+specifications to land in `main` and for the user to resume that work.
 
 An initial local-client skeleton was committed before this direction changed.
 Its implementation has been reverted from this branch. The remaining changes
@@ -30,6 +30,21 @@ change or build the sibling `tian-agent` checkout or modify either NSH reference
 checkout. Keep Electron available until the new client meets the agreed UI
 specification. Removing Electron requires a separate final phase and explicit
 user confirmation.
+
+### Design fixture (`crates/tian-nsh`)
+
+On 2026-11-06 the user asked for a first NSH build of the "Tian Sky" visual
+language (the design change set on `main`: `docs/design-language.md` and the
+mockup in `docs/design/`). `crates/tian-nsh` is that design fixture. It renders the
+mockup's sample data with no transport, no server connection, and no resident
+service. It is not Phase 1, and it satisfies no acceptance criterion above. It
+exists so the visual language can be judged natively: AppKit text and fonts,
+motion, glass, and the three-pane window.
+
+The user subsequently requested the full iOS frontend from the light-and-shadow mockup, with the latest SVG identities. `crates/tian-nsh/IOS.tsx` is that native frontend preview; [its guide](../crates/tian-nsh/IOS.md) records the screens, local interactions, and verification commands. It uses the same sample data boundary as the desktop fixture.
+
+The gate and the phase order below are unchanged. Connecting a client to Pi
+Server still waits for `docs/spec/` to land in `main`.
 
 ## Planning inputs
 
@@ -255,5 +270,6 @@ head/base pair. Resolve the per-phase PR arrangement before implementation if
 the preceding PR remains open. PRs must state what changed, verification
 results, and unresolved risks.
 
-**Next action: stop and wait for the user to resume work after the protocol and
-UI specifications land in `main`.**
+**Next action: stop and wait for the protocol and UI specifications to land in
+`main` before the server-first client starts. The design fixture does not change
+this gate.**

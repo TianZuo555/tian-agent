@@ -7,6 +7,22 @@ pnpm = "12.5.1"
 # so `mise env --redacted` and the shell prompt never print their values.
 _.file = { path = ".env", redact = true }
 
+[tasks."ios:dev"]
+description = "Run the Tian Sky iOS frontend in a simulator"
+run = "pnpm ios:dev"
+
+[tasks."ios:check"]
+description = "Check the NSH iOS frontend"
+run = "pnpm ios:check"
+
+[tasks."ios:test"]
+description = "Test iOS interactions with sample data"
+run = "pnpm ios:test"
+
+[tasks."ios:package"]
+description = "Package the iOS simulator app"
+run = "pnpm ios:package"
+
 [tasks.setup]
 description = "Install dependencies and the resident service"
 run = ["pnpm install", "pnpm service:install"]

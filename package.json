@@ -13,6 +13,10 @@
   },
   "main": ".vite/build/main.cjs",
   "scripts": {
+    "ios:dev": "nsh run crates/tian-nsh/IOS.tsx --target ios",
+    "ios:check": "nsh check crates/tian-nsh/IOS.tsx",
+    "ios:test": "nsh test crates/tian-nsh/IOS.test.tsx",
+    "ios:package": "nsh package crates/tian-nsh/IOS.tsx --target ios-simulator --out crates/tian-nsh/.nsh/ios",
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
